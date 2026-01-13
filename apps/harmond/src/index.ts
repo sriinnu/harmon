@@ -3,7 +3,7 @@
  */
 
 import express, { Request, Response } from 'express';
-import { createStore, HarmonStore } from '../../packages/harmon-store/dist/index.js';
+import { createStore, HarmonStore } from '@athena/harmon-store';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   SessionPolicy,
@@ -12,7 +12,7 @@ import type {
   DaemonStatus,
   DeviceInfo,
   TrackInfo,
-} from '../../packages/harmon-protocol/dist/index.js';
+} from '@athena/harmon-protocol';
 
 // ============================================================================
 // Configuration
