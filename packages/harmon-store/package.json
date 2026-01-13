@@ -1,0 +1,21 @@
+{
+  "name": "@athena/harmon-store",
+  "version": "0.0.0",
+  "description": "SQLite store + migrations for Harmon",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.6.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/uuid": "^9.0.0",
+    "typescript": "^5.3.0"
+  }
+}

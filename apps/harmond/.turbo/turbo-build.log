@@ -1,0 +1,7 @@
+
+> @athena/harmond@0.0.0 build /mnt/c/sriinnu/personal/harmon/apps/harmond
+> tsc
+
+src/index.ts(6,42): error TS2307: Cannot find module '@athena/harmon-store' or its corresponding type declarations.
+src/index.ts(16,8): error TS2307: Cannot find module '../packages/harmon-protocol/src/index.js' or its corresponding type declarations.
+ ELIFECYCLE  Command failed with exit code 2.

@@ -1,0 +1,5 @@
+.claude
+.claude/*
+
+dist/*
+node_modules/*

@@ -1,0 +1,19 @@
+{
+  "name": "@athena/harmon-spotify",
+  "version": "0.0.0",
+  "description": "Spotify API client + OAuth + device control",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@athena/harmon-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}
