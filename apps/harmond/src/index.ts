@@ -237,16 +237,19 @@ export class Harmond {
 
     switch (command.type) {
       case 'session.start':
-        return this.startSession(command.payload.policy);
+        return this.startSession((command.payload as { policy: SessionPolicy }).policy);
 
       case 'session.stop':
         return this.stopSession();
 
       case 'session.nudge':
-        return this.nudgeSession(command.payload.direction, command.payload.amount);
+        return this.nudgeSession(
+          (command.payload as { direction: 'calmer' | 'sharper' }).direction,
+          (command.payload as { amount?: number }).amount
+        );
 
       case 'skip':
-        return this.skipTrack(command.payload.reason);
+        return this.skipTrack((command.payload as { reason?: string }).reason);
 
       default:
         throw new Error(`Unknown command type: ${command.type}`);
@@ -378,13 +381,13 @@ export class Harmond {
         ? {
             id: this.session.id,
             isActive: this.session.status === 'running',
-            policy: this.session.policy,
             currentTrack: this.session.currentTrack || null,
             queueDepth: this.session.queue.length,
+            policy: this.session.policy,
             elapsedMs: Date.now() - this.session.startedAt.getTime(),
             startedAt: this.session.startedAt.getTime(),
           }
-        : null,
+        : undefined,
     };
   }
 
@@ -454,20 +457,19 @@ export function createDaemon(config?: DaemonConfig): Harmond {
 }
 
 // Run as standalone server
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const daemon = createDaemon();
-  daemon.start().catch(console.error);
+// For ESM, this code runs when the file is executed directly
+const daemon = createDaemon();
+daemon.start().catch(console.error);
 
-  // Handle shutdown
-  process.on('SIGINT', async () => {
-    console.log('\nShutting down...');
-    await daemon.stop();
-    process.exit(0);
-  });
+// Handle shutdown
+process.on('SIGINT', async () => {
+  console.log('\nShutting down...');
+  await daemon.stop();
+  process.exit(0);
+});
 
-  process.on('SIGTERM', async () => {
-    console.log('\nShutting down...');
-    await daemon.stop();
-    process.exit(0);
-  });
-}
+process.on('SIGTERM', async () => {
+  console.log('\nShutting down...');
+  await daemon.stop();
+  process.exit(0);
+});

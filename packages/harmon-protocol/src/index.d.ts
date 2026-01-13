@@ -13,11 +13,11 @@ export declare const SourceInfo: z.ZodObject<{
     kind: z.ZodEnum<["cli", "menubar", "voice"]>;
     device: z.ZodEnum<["macos", "windows", "wsl", "linux"]>;
 }, "strip", z.ZodTypeAny, {
-    kind: "cli" | "menubar" | "voice";
     device: "macos" | "windows" | "wsl" | "linux";
+    kind: "cli" | "menubar" | "voice";
 }, {
-    kind: "cli" | "menubar" | "voice";
     device: "macos" | "windows" | "wsl" | "linux";
+    kind: "cli" | "menubar" | "voice";
 }>;
 export type SourceInfo = z.infer<typeof SourceInfo>;
 /** Hard constraints that must be satisfied */
@@ -1162,11 +1162,11 @@ export declare const Command: z.ZodObject<{
         kind: z.ZodEnum<["cli", "menubar", "voice"]>;
         device: z.ZodEnum<["macos", "windows", "wsl", "linux"]>;
     }, "strip", z.ZodTypeAny, {
-        kind: "cli" | "menubar" | "voice";
         device: "macos" | "windows" | "wsl" | "linux";
+        kind: "cli" | "menubar" | "voice";
     }, {
-        kind: "cli" | "menubar" | "voice";
         device: "macos" | "windows" | "wsl" | "linux";
+        kind: "cli" | "menubar" | "voice";
     }>;
     type: z.ZodEnum<["session.start", "session.stop", "session.nudge", "skip", "device.use", "device.discover", "auth.spotify.login", "auth.spotify.logout"]>;
     payload: z.ZodUnion<[z.ZodObject<{
@@ -1673,13 +1673,12 @@ export declare const Command: z.ZodObject<{
         deviceId: string;
     }>, z.ZodObject<{}, "strip", z.ZodTypeAny, {}, {}>]>;
 }, "strip", z.ZodTypeAny, {
-    type: "session.start" | "session.stop" | "session.nudge" | "skip" | "device.use" | "device.discover" | "auth.spotify.login" | "auth.spotify.logout";
     id: string;
-    ts: number;
     source: {
-        kind: "cli" | "menubar" | "voice";
         device: "macos" | "windows" | "wsl" | "linux";
+        kind: "cli" | "menubar" | "voice";
     };
+    type: "session.start" | "session.stop" | "session.nudge" | "skip" | "device.use" | "device.discover" | "auth.spotify.login" | "auth.spotify.logout";
     payload: {
         policy: {
             version: 1;
@@ -1755,14 +1754,14 @@ export declare const Command: z.ZodObject<{
     } | {
         deviceId: string;
     } | {};
+    ts: number;
 }, {
-    type: "session.start" | "session.stop" | "session.nudge" | "skip" | "device.use" | "device.discover" | "auth.spotify.login" | "auth.spotify.logout";
     id: string;
-    ts: number;
     source: {
-        kind: "cli" | "menubar" | "voice";
         device: "macos" | "windows" | "wsl" | "linux";
+        kind: "cli" | "menubar" | "voice";
     };
+    type: "session.start" | "session.stop" | "session.nudge" | "skip" | "device.use" | "device.discover" | "auth.spotify.login" | "auth.spotify.logout";
     payload: {
         policy: {
             version: 1;
@@ -1838,6 +1837,7 @@ export declare const Command: z.ZodObject<{
     } | {
         deviceId: string;
     } | {};
+    ts: number;
 }>;
 export type Command = z.infer<typeof Command>;
 /** Track information */
@@ -1849,15 +1849,15 @@ export declare const TrackInfo: z.ZodObject<{
     durationMs: z.ZodNumber;
     uri: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    durationMs: number;
     id: string;
+    durationMs: number;
     name: string;
     artist: string;
     album: string;
     uri?: string | undefined;
 }, {
-    durationMs: number;
     id: string;
+    durationMs: number;
     name: string;
     artist: string;
     album: string;
@@ -1872,14 +1872,14 @@ export declare const DeviceInfo: z.ZodObject<{
     isActive: z.ZodBoolean;
     volumePercent: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
-    type: "unknown" | "speaker" | "computer" | "phone" | "tablet" | "tv" | "cast";
     id: string;
+    type: "unknown" | "speaker" | "computer" | "phone" | "tablet" | "tv" | "cast";
     name: string;
     isActive: boolean;
     volumePercent?: number | undefined;
 }, {
-    type: "unknown" | "speaker" | "computer" | "phone" | "tablet" | "tv" | "cast";
     id: string;
+    type: "unknown" | "speaker" | "computer" | "phone" | "tablet" | "tv" | "cast";
     name: string;
     isActive: boolean;
     volumePercent?: number | undefined;
@@ -2242,15 +2242,15 @@ export declare const SessionStatus: z.ZodObject<{
         durationMs: z.ZodNumber;
         uri: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
-        durationMs: number;
         id: string;
+        durationMs: number;
         name: string;
         artist: string;
         album: string;
         uri?: string | undefined;
     }, {
-        durationMs: number;
         id: string;
+        durationMs: number;
         name: string;
         artist: string;
         album: string;
@@ -2263,8 +2263,8 @@ export declare const SessionStatus: z.ZodObject<{
     id: string;
     isActive: boolean;
     currentTrack: {
-        durationMs: number;
         id: string;
+        durationMs: number;
         name: string;
         artist: string;
         album: string;
@@ -2336,14 +2336,14 @@ export declare const SessionStatus: z.ZodObject<{
             volumeCeiling?: number | undefined;
         } | undefined;
     } | undefined;
-    elapsedMs?: number | undefined;
     startedAt?: number | undefined;
+    elapsedMs?: number | undefined;
 }, {
     id: string;
     isActive: boolean;
     currentTrack: {
-        durationMs: number;
         id: string;
+        durationMs: number;
         name: string;
         artist: string;
         album: string;
@@ -2415,8 +2415,8 @@ export declare const SessionStatus: z.ZodObject<{
             volumeCeiling?: number | undefined;
         } | undefined;
     } | undefined;
-    elapsedMs?: number | undefined;
     startedAt?: number | undefined;
+    elapsedMs?: number | undefined;
 }>;
 export type SessionStatus = z.infer<typeof SessionStatus>;
 /** Daemon status */
@@ -2780,15 +2780,15 @@ export declare const DaemonStatus: z.ZodObject<{
             durationMs: z.ZodNumber;
             uri: z.ZodOptional<z.ZodString>;
         }, "strip", z.ZodTypeAny, {
-            durationMs: number;
             id: string;
+            durationMs: number;
             name: string;
             artist: string;
             album: string;
             uri?: string | undefined;
         }, {
-            durationMs: number;
             id: string;
+            durationMs: number;
             name: string;
             artist: string;
             album: string;
@@ -2801,8 +2801,8 @@ export declare const DaemonStatus: z.ZodObject<{
         id: string;
         isActive: boolean;
         currentTrack: {
-            durationMs: number;
             id: string;
+            durationMs: number;
             name: string;
             artist: string;
             album: string;
@@ -2874,14 +2874,14 @@ export declare const DaemonStatus: z.ZodObject<{
                 volumeCeiling?: number | undefined;
             } | undefined;
         } | undefined;
-        elapsedMs?: number | undefined;
         startedAt?: number | undefined;
+        elapsedMs?: number | undefined;
     }, {
         id: string;
         isActive: boolean;
         currentTrack: {
-            durationMs: number;
             id: string;
+            durationMs: number;
             name: string;
             artist: string;
             album: string;
@@ -2953,8 +2953,8 @@ export declare const DaemonStatus: z.ZodObject<{
                 volumeCeiling?: number | undefined;
             } | undefined;
         } | undefined;
-        elapsedMs?: number | undefined;
         startedAt?: number | undefined;
+        elapsedMs?: number | undefined;
     }>>;
 }, "strip", z.ZodTypeAny, {
     version: string;
@@ -2964,8 +2964,8 @@ export declare const DaemonStatus: z.ZodObject<{
         id: string;
         isActive: boolean;
         currentTrack: {
-            durationMs: number;
             id: string;
+            durationMs: number;
             name: string;
             artist: string;
             album: string;
@@ -3037,8 +3037,8 @@ export declare const DaemonStatus: z.ZodObject<{
                 volumeCeiling?: number | undefined;
             } | undefined;
         } | undefined;
-        elapsedMs?: number | undefined;
         startedAt?: number | undefined;
+        elapsedMs?: number | undefined;
     } | undefined;
 }, {
     version: string;
@@ -3048,8 +3048,8 @@ export declare const DaemonStatus: z.ZodObject<{
         id: string;
         isActive: boolean;
         currentTrack: {
-            durationMs: number;
             id: string;
+            durationMs: number;
             name: string;
             artist: string;
             album: string;
@@ -3121,8 +3121,8 @@ export declare const DaemonStatus: z.ZodObject<{
                 volumeCeiling?: number | undefined;
             } | undefined;
         } | undefined;
-        elapsedMs?: number | undefined;
         startedAt?: number | undefined;
+        elapsedMs?: number | undefined;
     } | undefined;
 }>;
 export type DaemonStatus = z.infer<typeof DaemonStatus>;
@@ -3133,13 +3133,13 @@ export declare const Event: z.ZodObject<{
     type: z.ZodEnum<["session.started", "session.stopped", "session.nudged", "track.started", "track.ended", "queue.refilled", "user.nudged", "device.discovered", "spotify.connected", "spotify.disconnected", "error"]>;
     payload: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
 }, "strip", z.ZodTypeAny, {
-    type: "session.started" | "session.stopped" | "session.nudged" | "track.started" | "track.ended" | "queue.refilled" | "user.nudged" | "device.discovered" | "spotify.connected" | "spotify.disconnected" | "error";
     id: string;
+    type: "session.started" | "session.stopped" | "session.nudged" | "track.started" | "track.ended" | "queue.refilled" | "user.nudged" | "device.discovered" | "spotify.connected" | "spotify.disconnected" | "error";
     ts: number;
     payload?: Record<string, unknown> | undefined;
 }, {
-    type: "session.started" | "session.stopped" | "session.nudged" | "track.started" | "track.ended" | "queue.refilled" | "user.nudged" | "device.discovered" | "spotify.connected" | "spotify.disconnected" | "error";
     id: string;
+    type: "session.started" | "session.stopped" | "session.nudged" | "track.started" | "track.ended" | "queue.refilled" | "user.nudged" | "device.discovered" | "spotify.connected" | "spotify.disconnected" | "error";
     ts: number;
     payload?: Record<string, unknown> | undefined;
 }>;
