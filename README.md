@@ -55,9 +55,9 @@ Harmon is a daemon-first music session manager that runs as a background service
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         Harmon System                            │
+│                         Harmon System                           │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
+│                                                                 │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │
 │  │   Client    │───▶│   harmond   │───▶│  harmon-store       │  │
 │  │  (CLI/UI)   │    │  (daemon)   │    │  (SQLite)           │  │
@@ -69,7 +69,7 @@ Harmon is a daemon-first music session manager that runs as a background service
 │                  │  harmon-flow    │                            │
 │                  │  (MCP Server)   │                            │
 │                  └─────────────────┘                            │
-│                                                                  │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -340,5 +340,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 ---
 
 <p align="center">
-  Made with ⚡ by Athena
+  Made with ⚡ by Sriinnu
 </p>
