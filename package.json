@@ -15,10 +15,10 @@
     "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml}\""
   },
   "devDependencies": {
-    "@types/node": "^25.0.8",
-    "prettier": "^3.7.4",
-    "turbo": "^2.7.4",
+    "@types/node": "^25.0.9",
+    "prettier": "^3.8.0",
+    "turbo": "^2.7.5",
     "typescript": "^5.9.3"
   },
-  "packageManager": "pnpm@10.28.0"
+  "packageManager": "pnpm@10.28.1"
 }

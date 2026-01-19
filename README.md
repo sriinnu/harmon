@@ -144,6 +144,12 @@ curl -X POST http://localhost:17373/v1/command \
 
 # Subscribe to events (SSE)
 curl http://localhost:17373/v1/events
+
+# Get Spotify login URL
+curl -X POST http://localhost:17373/v1/auth/spotify/login
+
+# Logout Spotify
+curl -X POST http://localhost:17373/v1/auth/spotify/logout
 ```
 
 ## API Reference
@@ -157,6 +163,23 @@ curl http://localhost:17373/v1/events
 | GET | `/v1/devices` | List Spotify devices |
 | POST | `/v1/command` | Send a command |
 | POST | `/v1/device/use` | Switch audio device |
+| GET | `/v1/auth/spotify/callback` | OAuth callback |
+| POST | `/v1/auth/spotify/login` | Get Spotify login URL |
+| POST | `/v1/auth/spotify/logout` | Clear Spotify tokens |
+| GET | `/v1/spotify/search` | Search tracks/albums/artists/playlists |
+| GET | `/v1/spotify/playlists` | List Spotify playlists |
+| GET | `/v1/spotify/playlists/:id/tracks` | List playlist tracks |
+| GET | `/v1/spotify/history` | Recently played history |
+| GET | `/v1/spotify/library/tracks` | Saved tracks |
+| GET | `/v1/spotify/library/albums` | Saved albums |
+| GET | `/v1/apple/search` | Apple Music search |
+| GET | `/v1/apple/songs/:id` | Apple Music song details |
+| GET | `/v1/apple/albums/:id` | Apple Music album details |
+| GET | `/v1/apple/artists/:id` | Apple Music artist details |
+| GET | `/v1/apple/playlists/:id` | Apple Music playlist details |
+| GET | `/v1/apple/library/songs` | Apple Music library songs |
+| GET | `/v1/apple/library/albums` | Apple Music library albums |
+| GET | `/v1/apple/library/playlists` | Apple Music library playlists |
 | GET | `/v1/events` | SSE event stream |
 | GET | `/v1/journal` | List journal entries |
 | POST | `/v1/journal` | Add journal entry |
@@ -323,8 +346,44 @@ SPOTIFY_REDIRECT_URI=http://localhost:17373/v1/auth/spotify/callback
 
 # Daemon configuration
 HARMON_PORT=17373
+HARMON_BIND_ADDRESS=127.0.0.1
 HARMON_DB_PATH=.harmon.db
+HARMON_API_TOKEN=your_api_token
+HARMON_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
+# Apple Music
+APPLE_MUSIC_DEVELOPER_TOKEN=your_developer_token
+APPLE_MUSIC_USER_TOKEN=your_user_token
+APPLE_MUSIC_STOREFRONT=us
 ```
+
+## Spotify Authentication
+
+1) Create a Spotify Developer app and add the redirect URI from `SPOTIFY_REDIRECT_URI`.
+2) Start `harmond` with `SPOTIFY_CLIENT_ID` (and `SPOTIFY_CLIENT_SECRET` if using a confidential app).
+3) Request a login URL: `POST /v1/auth/spotify/login`.
+4) Open the URL in a browser and approve access.
+5) The callback will confirm success and `GET /v1/status` will show `spotifyConnected: true`.
+
+For a full setup and usage guide, see `docs/spotify.md`.
+
+## Apple Music
+
+Apple Music endpoints are available when `APPLE_MUSIC_DEVELOPER_TOKEN` is set.
+Library endpoints also require `APPLE_MUSIC_USER_TOKEN`.
+See `docs/apple-music.md` for setup details.
+
+### Spotify Scopes
+
+Harmon requests these scopes for playback + browsing:
+
+- `user-read-playback-state`
+- `user-modify-playback-state`
+- `user-read-currently-playing`
+- `playlist-read-private`
+- `playlist-read-collaborative`
+- `user-read-recently-played`
+- `user-library-read`
 
 ## Performance
 

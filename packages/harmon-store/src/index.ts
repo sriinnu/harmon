@@ -98,6 +98,13 @@ const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(type);
     CREATE INDEX IF NOT EXISTS idx_event_log_createdAt ON event_log(createdAt);
   `,
+  `
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updatedAt TEXT DEFAULT (datetime('now'))
+    );
+  `,
 ];
 
 // ============================================================================
@@ -384,6 +391,40 @@ export class HarmonStore {
       payload: row.payload as string,
       createdAt: row.createdAt as string,
     };
+  }
+
+  // ============================================================================
+  // Settings
+  // ============================================================================
+
+  async getSetting(key: string): Promise<string | null> {
+    const result = await this.client.execute({
+      sql: 'SELECT value FROM settings WHERE key = ?',
+      args: [key],
+    });
+
+    if (result.rows.length === 0) return null;
+    return result.rows[0]?.value as string;
+  }
+
+  async setSetting(key: string, value: string): Promise<void> {
+    await this.client.execute({
+      sql: `
+        INSERT INTO settings (key, value, updatedAt)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updatedAt = datetime('now')
+      `,
+      args: [key, value],
+    });
+  }
+
+  async deleteSetting(key: string): Promise<void> {
+    await this.client.execute({
+      sql: 'DELETE FROM settings WHERE key = ?',
+      args: [key],
+    });
   }
 
   // ============================================================================

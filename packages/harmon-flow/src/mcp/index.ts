@@ -542,6 +542,25 @@ export class HarmonFlowMCPServer {
     this.refreshEntries();
 
     const recent = this.entries.filter((e) => e.timestamp >= cutoff);
+    if (recent.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                period: `${days} days`,
+                totalEntries: 0,
+                topMoods: [],
+                energyDistribution: [],
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
 
     // Calculate mood frequency
     const moodCounts = new Map<string, number>();

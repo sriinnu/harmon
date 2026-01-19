@@ -7,7 +7,8 @@ import { createCLI, getDefaultEndpoint } from '../dist/index.js';
 
 async function main() {
   const endpoint = getDefaultEndpoint();
-  const cli = createCLI({ endpoint });
+  const token = process.env.HARMON_API_TOKEN;
+  const cli = createCLI({ endpoint, token });
 
   const args = process.argv.slice(2);
   const command = args[0];

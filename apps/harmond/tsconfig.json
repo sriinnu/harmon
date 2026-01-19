@@ -1,10 +1,21 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": "../..",
     "rootDir": ".",
     "tsBuildInfoFile": "./tsconfig.tsbuildinfo",
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "composite": true,
+    "paths": {
+      "@athena/*": ["packages/*/src/index.ts"]
+    }
   },
+  "references": [
+    { "path": "../../packages/harmon-protocol" },
+    { "path": "../../packages/harmon-store" },
+    { "path": "../../packages/harmon-spotify" },
+    { "path": "../../packages/harmon-apple" }
+  ],
   "include": ["src/**/*", "bin/**/*"],
   "exclude": ["node_modules", "dist"]
 }

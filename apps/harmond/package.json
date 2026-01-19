@@ -7,7 +7,7 @@
     "harmond": "./bin/harmond.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -b",
     "dev": "tsc --watch",
     "start": "node ./dist/index.js",
     "lint": "tsc --noEmit"
@@ -17,6 +17,7 @@
     "@athena/harmon-store": "workspace:*",
     "@athena/harmon-core": "workspace:*",
     "@athena/harmon-spotify": "workspace:*",
+    "@athena/harmon-apple": "workspace:*",
     "express": "^5.2.1",
     "uuid": "^13.0.0"
   },

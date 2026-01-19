@@ -1,7 +1,7 @@
 {
-  "name": "@athena/harmon-spotify",
+  "name": "@athena/harmon-apple",
   "version": "0.0.0",
-  "description": "Spotify API client + OAuth + device control",
+  "description": "Apple Music API client",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,9 +9,6 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@athena/harmon-protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.0.8",

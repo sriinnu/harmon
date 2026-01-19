@@ -264,7 +264,7 @@ export const Event = z.object({
     'spotify.disconnected',
     'error',
   ]),
-  payload: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 export type Event = z.infer<typeof Event>;
 
