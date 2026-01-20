@@ -5,7 +5,9 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { createStore, HarmonStore } from '@athena/harmon-store';
 import { v4 as uuidv4 } from 'uuid';
+import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import {
   parseCommandSafe,
   type SessionPolicy,
@@ -22,6 +24,8 @@ import {
   type SpotifyClient,
   type SpotifyTokens,
   type TokenStore,
+  type CookieStore,
+  type SpotifyCookieRecord,
 } from '@athena/harmon-spotify';
 import { createAppleMusicClient, type AppleMusicClient } from '@athena/harmon-apple';
 
@@ -33,6 +37,7 @@ const DEFAULT_PORT = 17373;
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_DB_PATH = '.harmon.db';
 const SSE_HEARTBEAT_MS = 30000;
+const execFileAsync = promisify(execFile);
 
 interface DaemonConfig {
   port?: number;
@@ -108,11 +113,14 @@ export class Harmond {
     const redirectUri =
       process.env.SPOTIFY_REDIRECT_URI ||
       `http://${this.host}:${this.port}/v1/auth/spotify/callback`;
+    const tokenStore = this.createSpotifyTokenStore();
+    const cookieStore = this.createSpotifyCookieStore();
     this.spotifyAuth = createSpotifyAuth({
       clientId: process.env.SPOTIFY_CLIENT_ID || '',
       clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
       redirectUri,
-      tokenStore: this.createSpotifyTokenStore(),
+      tokenStore,
+      cookieStore,
     });
     this.spotifyClient = createSpotifyClient({ auth: this.spotifyAuth });
 
@@ -269,6 +277,24 @@ export class Harmond {
       }
     });
 
+    this.app.post('/v1/auth/spotify/import', async (req: Request, res: Response) => {
+      try {
+        const cookies = req.body?.cookies;
+        if (!Array.isArray(cookies) || cookies.length === 0) {
+          res.status(400).json({ success: false, error: 'Missing cookies' });
+          return;
+        }
+        await this.spotifyAuth.logout();
+        await this.spotifyAuth.setCookies(cookies as SpotifyCookieRecord[]);
+        res.json({ success: true, cookiesImported: cookies.length });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
     // Journal endpoints
     this.app.get('/v1/journal', async (req: Request, res: Response) => {
       const limit = parseInt(req.query.limit as string) || 50;
@@ -331,6 +357,158 @@ export class Harmond {
         const offset = this.parseNumberParam(req.query.offset);
         const result = await this.spotifyClient.search(query, types, { limit, offset });
         res.json(result);
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    // Spotify playback
+    this.app.get('/v1/spotify/now-playing', async (_req: Request, res: Response) => {
+      try {
+        const track = await this.spotifyClient.getNowPlaying();
+        res.json(track);
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/play', async (req: Request, res: Response) => {
+      try {
+        const uri = this.parseBodyString(req.body?.uri);
+        const contextUri = this.parseBodyString(req.body?.contextUri);
+        if (uri && contextUri) {
+          res.status(400).json({ success: false, error: 'Provide uri or contextUri, not both.' });
+          return;
+        }
+        await this.spotifyClient.play({ uri, contextUri });
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/pause', async (_req: Request, res: Response) => {
+      try {
+        await this.spotifyClient.pause();
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/next', async (_req: Request, res: Response) => {
+      try {
+        await this.spotifyClient.next();
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/prev', async (_req: Request, res: Response) => {
+      try {
+        await this.spotifyClient.previous();
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/seek', async (req: Request, res: Response) => {
+      try {
+        const positionMs = this.parseBodyNumber(req.body?.positionMs);
+        if (positionMs === undefined || positionMs < 0) {
+          res.status(400).json({ success: false, error: 'Invalid positionMs' });
+          return;
+        }
+        await this.spotifyClient.seek(positionMs);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/volume', async (req: Request, res: Response) => {
+      try {
+        const volumePercent = this.parseBodyNumber(req.body?.volumePercent);
+        if (volumePercent === undefined || volumePercent < 0 || volumePercent > 100) {
+          res.status(400).json({ success: false, error: 'Invalid volumePercent' });
+          return;
+        }
+        await this.spotifyClient.setVolume(volumePercent);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/shuffle', async (req: Request, res: Response) => {
+      try {
+        const state = this.parseBodyBoolean(req.body?.state);
+        if (state === undefined) {
+          res.status(400).json({ success: false, error: 'Invalid state' });
+          return;
+        }
+        await this.spotifyClient.setShuffle(state);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/repeat', async (req: Request, res: Response) => {
+      try {
+        const state = this.parseBodyString(req.body?.state);
+        if (state !== 'off' && state !== 'track' && state !== 'context') {
+          res.status(400).json({ success: false, error: 'Invalid state' });
+          return;
+        }
+        await this.spotifyClient.setRepeat(state);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/spotify/queue', async (req: Request, res: Response) => {
+      try {
+        const uri = this.parseBodyString(req.body?.uri);
+        if (!uri) {
+          res.status(400).json({ success: false, error: 'Missing uri' });
+          return;
+        }
+        await this.spotifyClient.addToQueue(uri);
+        res.json({ success: true });
       } catch (error) {
         res.status(400).json({
           success: false,
@@ -563,6 +741,56 @@ export class Harmond {
         });
       }
     });
+
+    // Apple Music playback via AppleScript (macOS only)
+    this.app.post('/v1/apple/play', async (req: Request, res: Response) => {
+      try {
+        const url = this.parseBodyString(req.body?.url);
+        await this.playAppleMusic(url);
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/apple/pause', async (_req: Request, res: Response) => {
+      try {
+        await this.runAppleScriptCommand('pause');
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/apple/next', async (_req: Request, res: Response) => {
+      try {
+        await this.runAppleScriptCommand('next track');
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+
+    this.app.post('/v1/apple/prev', async (_req: Request, res: Response) => {
+      try {
+        await this.runAppleScriptCommand('previous track');
+        res.json({ success: true });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
   }
 
   private setupSSE(): void {
@@ -762,6 +990,43 @@ export class Harmond {
   }
 
   // ============================================================================
+  // Apple Music (AppleScript)
+  // ============================================================================
+
+  private ensureAppleScriptAvailable(): void {
+    if (process.platform !== 'darwin') {
+      throw new Error('AppleScript playback is only supported on macOS.');
+    }
+  }
+
+  private escapeAppleScriptString(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
+  private async runAppleScript(script: string): Promise<void> {
+    this.ensureAppleScriptAvailable();
+    await execFileAsync('osascript', ['-e', script]);
+  }
+
+  private async runAppleScriptCommand(command: string): Promise<void> {
+    const script = `tell application "Music" to ${command}`;
+    await this.runAppleScript(script);
+  }
+
+  private async playAppleMusic(url?: string): Promise<void> {
+    if (url) {
+      const escaped = this.escapeAppleScriptString(url);
+      const script = `tell application "Music"
+  activate
+  open location "${escaped}"
+end tell`;
+      await this.runAppleScript(script);
+      return;
+    }
+    await this.runAppleScriptCommand('play');
+  }
+
+  // ============================================================================
   // Status
   // ============================================================================
 
@@ -804,10 +1069,12 @@ export class Harmond {
         console.log('  GET  /v1/devices          - Spotify devices');
         console.log('  POST /v1/command          - Send command');
         console.log('  POST /v1/device/use       - Switch device');
+        console.log('  POST /v1/auth/spotify/import - Import Spotify cookies');
         console.log('  GET  /v1/events           - SSE stream');
         console.log('  GET  /v1/journal          - List journal entries');
         console.log('  POST /v1/journal          - Add journal entry');
         console.log('  GET  /v1/stats            - Statistics');
+        console.log('  POST /v1/apple/play       - Apple Music playback (AppleScript)');
         resolve();
       });
     });
@@ -867,10 +1134,54 @@ export class Harmond {
     };
   }
 
+  private createSpotifyCookieStore(): CookieStore {
+    return {
+      get: async () => {
+        const raw = await this.store.getSetting('spotify.cookies');
+        if (!raw) return null;
+        try {
+          return JSON.parse(raw) as SpotifyCookieRecord[];
+        } catch {
+          return null;
+        }
+      },
+      set: async (cookies) => {
+        if (!cookies || cookies.length === 0) {
+          await this.store.deleteSetting('spotify.cookies');
+          return;
+        }
+        await this.store.setSetting('spotify.cookies', JSON.stringify(cookies));
+      },
+    };
+  }
+
   private parseNumberParam(value: unknown): number | undefined {
     if (typeof value !== 'string') return undefined;
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private parseBodyString(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private parseBodyNumber(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.trunc(value);
+    }
+    if (typeof value !== 'string') return undefined;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private parseBodyBoolean(value: unknown): boolean | undefined {
+    if (typeof value === 'boolean') return value;
+    if (typeof value !== 'string') return undefined;
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return undefined;
   }
 
   private parseSearchTypes(value: string): Array<'track' | 'album' | 'artist' | 'playlist'> {

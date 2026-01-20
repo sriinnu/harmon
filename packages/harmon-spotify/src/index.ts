@@ -7,6 +7,7 @@ import type { DeviceInfo, TrackInfo } from '@athena/harmon-protocol';
 
 const SPOTIFY_ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
+const SPOTIFY_WEB_BASE = 'https://open.spotify.com';
 const DEFAULT_SCOPES = [
   'user-read-playback-state',
   'user-modify-playback-state',
@@ -34,12 +35,28 @@ export interface TokenStore {
   set(tokens: SpotifyTokens | null): Promise<void>;
 }
 
+export interface SpotifyCookieRecord {
+  domain: string;
+  name: string;
+  path: string;
+  value: string;
+  expires?: string | null;
+  isSecure: boolean;
+  isHTTPOnly: boolean;
+}
+
+export interface CookieStore {
+  get(): Promise<SpotifyCookieRecord[] | null>;
+  set(cookies: SpotifyCookieRecord[] | null): Promise<void>;
+}
+
 export interface SpotifyAuthConfig {
   clientId: string;
   clientSecret?: string;
   redirectUri: string;
   scopes?: string[];
   tokenStore?: TokenStore;
+  cookieStore?: CookieStore;
 }
 
 export interface SpotifyAuth {
@@ -48,6 +65,7 @@ export interface SpotifyAuth {
   refresh(): Promise<void>;
   logout(): Promise<void>;
   getAccessToken(): Promise<string | null>;
+  setCookies(cookies: SpotifyCookieRecord[] | null): Promise<void>;
   isConnected(): boolean;
   loadTokens(): Promise<void>;
 }
@@ -58,8 +76,11 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private redirectUri: string;
   private scopes: string[];
   private tokenStore?: TokenStore;
+  private cookieStore?: CookieStore;
   private tokens: SpotifyTokens | null = null;
   private tokensLoaded = false;
+  private cookies: SpotifyCookieRecord[] | null = null;
+  private cookiesLoaded = false;
   private codeVerifier: string | null = null;
   private state: string | null = null;
 
@@ -69,14 +90,24 @@ class SpotifyAuthImpl implements SpotifyAuth {
     this.redirectUri = config.redirectUri;
     this.scopes = config.scopes && config.scopes.length > 0 ? config.scopes : DEFAULT_SCOPES;
     this.tokenStore = config.tokenStore;
+    this.cookieStore = config.cookieStore;
   }
 
   async loadTokens(): Promise<void> {
     await this.ensureTokensLoaded();
+    await this.ensureCookiesLoaded();
+  }
+
+  async setCookies(cookies: SpotifyCookieRecord[] | null): Promise<void> {
+    this.cookies = cookies;
+    this.cookiesLoaded = true;
+    await this.cookieStore?.set(cookies);
   }
 
   isConnected(): boolean {
-    return this.tokens !== null;
+    if (this.tokens !== null) return true;
+    if (!this.cookiesLoaded) return false;
+    return Array.isArray(this.cookies) && this.cookies.length > 0;
   }
 
   getLoginUrl(): string {
@@ -118,8 +149,18 @@ class SpotifyAuthImpl implements SpotifyAuth {
   }
 
   async refresh(): Promise<void> {
-    this.ensureConfigured();
     await this.ensureTokensLoaded();
+
+    if (!this.tokens?.refreshToken) {
+      const cookieTokens = await this.fetchCookieAccessToken();
+      if (!cookieTokens) {
+        throw new Error('No refresh token available');
+      }
+      await this.saveTokens(cookieTokens);
+      return;
+    }
+
+    this.ensureConfigured();
 
     if (!this.tokens?.refreshToken) {
       throw new Error('No refresh token available');
@@ -159,14 +200,21 @@ class SpotifyAuthImpl implements SpotifyAuth {
   async logout(): Promise<void> {
     this.tokens = null;
     this.tokensLoaded = true;
+    this.cookies = null;
+    this.cookiesLoaded = true;
     await this.tokenStore?.set(null);
+    await this.cookieStore?.set(null);
   }
 
   async getAccessToken(): Promise<string | null> {
     await this.ensureTokensLoaded();
 
     if (!this.tokens) {
-      return null;
+      const cookieTokens = await this.fetchCookieAccessToken();
+      if (!cookieTokens) {
+        return null;
+      }
+      await this.saveTokens(cookieTokens);
     }
 
     const now = Date.now();
@@ -222,6 +270,67 @@ class SpotifyAuthImpl implements SpotifyAuth {
     return headers;
   }
 
+  private async fetchCookieAccessToken(): Promise<SpotifyTokens | null> {
+    await this.ensureCookiesLoaded(true);
+    if (!this.cookies || this.cookies.length === 0) {
+      return null;
+    }
+
+    const cookieHeader = this.buildCookieHeader(this.cookies);
+    if (!cookieHeader) {
+      return null;
+    }
+
+    const url = new URL(`${SPOTIFY_WEB_BASE}/get_access_token`);
+    url.searchParams.set('reason', 'transport');
+    url.searchParams.set('productType', 'web_player');
+
+    const response = await fetch(url, {
+      headers: {
+        Cookie: cookieHeader,
+        'User-Agent': 'Mozilla/5.0',
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Spotify cookie token failed: ${response.status} ${detail}`);
+    }
+
+    const data = (await response.json()) as SpotifyWebTokenResponse;
+    if (!data.accessToken) {
+      return null;
+    }
+
+    return {
+      accessToken: data.accessToken,
+      expiresAt: data.accessTokenExpirationTimestampMs || Date.now() + 3600 * 1000,
+      tokenType: data.tokenType || 'Bearer',
+      scope: data.scope,
+    };
+  }
+
+  private buildCookieHeader(records: SpotifyCookieRecord[]): string {
+    const now = Date.now();
+    const values = new Map<string, string>();
+
+    for (const record of records) {
+      if (!record.name) continue;
+      if (record.expires) {
+        const expiresAt = Date.parse(record.expires);
+        if (Number.isFinite(expiresAt) && expiresAt <= now) {
+          continue;
+        }
+      }
+      values.set(record.name, record.value);
+    }
+
+    return Array.from(values.entries())
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; ');
+  }
+
   private ensureConfigured(): void {
     if (!this.clientId || !this.redirectUri) {
       throw new Error('Spotify configuration missing (client ID or redirect URI).');
@@ -232,6 +341,12 @@ class SpotifyAuthImpl implements SpotifyAuth {
     if (this.tokensLoaded) return;
     this.tokens = (await this.tokenStore?.get()) || null;
     this.tokensLoaded = true;
+  }
+
+  private async ensureCookiesLoaded(force = false): Promise<void> {
+    if (this.cookiesLoaded && !force) return;
+    this.cookiesLoaded = true;
+    this.cookies = this.cookieStore ? await this.cookieStore.get() : null;
   }
 
   private async saveTokens(tokens: SpotifyTokens): Promise<void> {
@@ -246,6 +361,13 @@ interface SpotifyTokenResponse {
   token_type: string;
   expires_in: number;
   refresh_token?: string;
+  scope?: string;
+}
+
+interface SpotifyWebTokenResponse {
+  accessToken?: string;
+  accessTokenExpirationTimestampMs?: number;
+  tokenType?: string;
   scope?: string;
 }
 
@@ -278,9 +400,14 @@ export interface SpotifyClient {
   isConnected(): boolean;
   getDevices(): Promise<DeviceInfo[]>;
   transferTo(deviceId: string): Promise<void>;
-  play(trackUri: string): Promise<void>;
+  play(options?: { uri?: string; contextUri?: string }): Promise<void>;
   pause(): Promise<void>;
   next(): Promise<void>;
+  previous(): Promise<void>;
+  seek(positionMs: number): Promise<void>;
+  setVolume(volumePercent: number): Promise<void>;
+  setShuffle(state: boolean): Promise<void>;
+  setRepeat(state: 'off' | 'track' | 'context'): Promise<void>;
   getNowPlaying(): Promise<TrackInfo | null>;
   addToQueue(trackUri: string): Promise<void>;
   search(query: string, types: SpotifySearchType[], options?: SpotifyListOptions): Promise<SpotifySearchResult>;
@@ -320,10 +447,15 @@ class SpotifyClientImpl implements SpotifyClient {
     });
   }
 
-  async play(trackUri: string): Promise<void> {
-    await this.request('PUT', '/me/player/play', {
-      uris: [trackUri],
-    });
+  async play(options: { uri?: string; contextUri?: string } = {}): Promise<void> {
+    const { uri, contextUri } = options;
+    const body =
+      typeof uri === 'string'
+        ? { uris: [uri] }
+        : typeof contextUri === 'string'
+          ? { context_uri: contextUri }
+          : undefined;
+    await this.request('PUT', '/me/player/play', body);
   }
 
   async pause(): Promise<void> {
@@ -332,6 +464,34 @@ class SpotifyClientImpl implements SpotifyClient {
 
   async next(): Promise<void> {
     await this.request('POST', '/me/player/next');
+  }
+
+  async previous(): Promise<void> {
+    await this.request('POST', '/me/player/previous');
+  }
+
+  async seek(positionMs: number): Promise<void> {
+    await this.request('PUT', '/me/player/seek', undefined, {
+      position_ms: `${positionMs}`,
+    });
+  }
+
+  async setVolume(volumePercent: number): Promise<void> {
+    await this.request('PUT', '/me/player/volume', undefined, {
+      volume_percent: `${volumePercent}`,
+    });
+  }
+
+  async setShuffle(state: boolean): Promise<void> {
+    await this.request('PUT', '/me/player/shuffle', undefined, {
+      state: state ? 'true' : 'false',
+    });
+  }
+
+  async setRepeat(state: 'off' | 'track' | 'context'): Promise<void> {
+    await this.request('PUT', '/me/player/repeat', undefined, {
+      state,
+    });
   }
 
   async getNowPlaying(): Promise<TrackInfo | null> {

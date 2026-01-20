@@ -62,6 +62,19 @@ If `HARMON_API_TOKEN` is set, add:
 Authorization: Bearer $HARMON_API_TOKEN
 ```
 
+### Cookie Import (Silo)
+
+If you are already logged into Spotify in a browser, you can import cookies instead of OAuth:
+
+```
+harmon auth import --browser chrome
+```
+
+Notes:
+- Uses the helper at `tools/harmon-silo` to read browser cookies via Silo.
+- You can set `HARMON_SILO_HELPER` to a prebuilt helper binary to skip `swift run`.
+- If you already have a cookie export JSON file, use `--cookie-path /path/to/cookies.json`.
+
 ### Endpoints
 
 Search (tracks, albums, artists, playlists):
@@ -113,6 +126,11 @@ If you add or change scopes, log out and re-authenticate:
 curl -X POST http://127.0.0.1:17373/v1/auth/spotify/logout
 curl -X POST http://127.0.0.1:17373/v1/auth/spotify/login
 ```
+
+### Next Steps / TODOs
+
+- Verify cookie import on macOS with Silo (ensure cookie extraction is implemented).
+- Add tests around cookie-based auth and token refresh.
 
 ### Troubleshooting
 

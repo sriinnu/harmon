@@ -1,5 +1,29 @@
-.claude
-.claude/*
+.claude/
 
-dist/*
-node_modules/*
+dist/
+**/dist/
+node_modules/
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+*.xcuserstate
+*.xcscmblueprint
+
+# OS
+.DS_Store
+
+# Runtime data
+.harmon.db
+*.sqlite
+*.sqlite3

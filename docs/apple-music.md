@@ -53,6 +53,26 @@ curl "http://127.0.0.1:17373/v1/apple/library/albums?limit=20"
 curl "http://127.0.0.1:17373/v1/apple/library/playlists?limit=20"
 ```
 
+### AppleScript Playback (macOS)
+
+AppleScript playback targets the Music app and works on macOS only:
+
+```
+curl -X POST http://127.0.0.1:17373/v1/apple/play \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://music.apple.com/us/album/1132331970"}'
+
+curl -X POST http://127.0.0.1:17373/v1/apple/pause
+curl -X POST http://127.0.0.1:17373/v1/apple/next
+curl -X POST http://127.0.0.1:17373/v1/apple/prev
+```
+
+CLI example:
+
+```
+harmon play applemusic:album:1132331970 --engine applescript
+```
+
 If `HARMON_API_TOKEN` is set, include:
 
 ```

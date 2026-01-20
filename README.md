@@ -166,7 +166,18 @@ curl -X POST http://localhost:17373/v1/auth/spotify/logout
 | GET | `/v1/auth/spotify/callback` | OAuth callback |
 | POST | `/v1/auth/spotify/login` | Get Spotify login URL |
 | POST | `/v1/auth/spotify/logout` | Clear Spotify tokens |
+| POST | `/v1/auth/spotify/import` | Import Spotify cookies |
 | GET | `/v1/spotify/search` | Search tracks/albums/artists/playlists |
+| GET | `/v1/spotify/now-playing` | Currently playing track |
+| POST | `/v1/spotify/play` | Start/resume playback |
+| POST | `/v1/spotify/pause` | Pause playback |
+| POST | `/v1/spotify/next` | Skip to next track |
+| POST | `/v1/spotify/prev` | Skip to previous track |
+| POST | `/v1/spotify/seek` | Seek to position (ms) |
+| POST | `/v1/spotify/volume` | Set volume (0-100) |
+| POST | `/v1/spotify/shuffle` | Toggle shuffle |
+| POST | `/v1/spotify/repeat` | Set repeat mode |
+| POST | `/v1/spotify/queue` | Add track to queue |
 | GET | `/v1/spotify/playlists` | List Spotify playlists |
 | GET | `/v1/spotify/playlists/:id/tracks` | List playlist tracks |
 | GET | `/v1/spotify/history` | Recently played history |
@@ -180,6 +191,10 @@ curl -X POST http://localhost:17373/v1/auth/spotify/logout
 | GET | `/v1/apple/library/songs` | Apple Music library songs |
 | GET | `/v1/apple/library/albums` | Apple Music library albums |
 | GET | `/v1/apple/library/playlists` | Apple Music library playlists |
+| POST | `/v1/apple/play` | Apple Music play (AppleScript) |
+| POST | `/v1/apple/pause` | Apple Music pause (AppleScript) |
+| POST | `/v1/apple/next` | Apple Music next (AppleScript) |
+| POST | `/v1/apple/prev` | Apple Music previous (AppleScript) |
 | GET | `/v1/events` | SSE event stream |
 | GET | `/v1/journal` | List journal entries |
 | POST | `/v1/journal` | Add journal entry |
@@ -372,6 +387,12 @@ For a full setup and usage guide, see `docs/spotify.md`.
 Apple Music endpoints are available when `APPLE_MUSIC_DEVELOPER_TOKEN` is set.
 Library endpoints also require `APPLE_MUSIC_USER_TOKEN`.
 See `docs/apple-music.md` for setup details.
+
+## Next Steps / TODOs
+
+- Validate `harmon auth import` and AppleScript playback on macOS.
+- Ensure Silo cookie extraction is implemented and returning records (the helper depends on it).
+- Expand AppleScript playback controls if needed (seek/shuffle/repeat).
 
 ### Spotify Scopes
 
