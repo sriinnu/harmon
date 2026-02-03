@@ -18,7 +18,10 @@
     "@athena/harmon-core": "workspace:*",
     "@athena/harmon-spotify": "workspace:*",
     "@athena/harmon-apple": "workspace:*",
+    "@athena/harmon-logger": "workspace:*",
+    "@athena/harmon-crypto": "workspace:*",
     "express": "^5.2.1",
+    "express-rate-limit": "^7.5.1",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

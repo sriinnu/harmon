@@ -27,3 +27,9 @@ DerivedData/
 .harmon.db
 *.sqlite
 *.sqlite3
+/.turbo
+/apps/harmon-cli/.turbo
+dist/
+node_modules/*
+/apps/harmon-cli/.turbo
+*.log

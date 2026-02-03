@@ -1,2 +1,4 @@
 dist/
 node_modules/*
+apps/harmon-cli/.turbo/*
+*.log

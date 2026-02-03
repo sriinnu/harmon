@@ -416,6 +416,9 @@ export interface SpotifyClient {
   getRecentlyPlayed(options?: SpotifyHistoryOptions): Promise<SpotifyRecentlyPlayedResponse>;
   getSavedTracks(options?: SpotifyListOptions): Promise<SpotifyPagedResponse<SpotifyPlaylistTrack>>;
   getSavedAlbums(options?: SpotifyListOptions): Promise<SpotifyPagedResponse<SpotifySavedAlbum>>;
+  getAudioFeatures(trackIds: string[]): Promise<AudioFeatures[]>;
+  getRecommendations(options: RecommendationSeed): Promise<TrackInfo[]>;
+  getTopTracks(options?: { timeRange?: TimeRange; limit?: number; offset?: number }): Promise<SpotifyPagedResponse<TrackInfo>>;
 }
 
 class SpotifyClientImpl implements SpotifyClient {
@@ -628,6 +631,142 @@ class SpotifyClientImpl implements SpotifyClient {
     };
   }
 
+  async getAudioFeatures(trackIds: string[]): Promise<AudioFeatures[]> {
+    if (trackIds.length === 0) {
+      return [];
+    }
+
+    // Spotify API allows max 100 IDs per request
+    const BATCH_SIZE = 100;
+    const results: AudioFeatures[] = [];
+
+    for (let i = 0; i < trackIds.length; i += BATCH_SIZE) {
+      const batch = trackIds.slice(i, i + BATCH_SIZE);
+      const data = await this.request<{ audio_features: (SpotifyAudioFeaturesRaw | null)[] }>(
+        'GET',
+        '/audio-features',
+        undefined,
+        { ids: batch.join(',') }
+      );
+
+      // Filter out nulls (tracks without features)
+      const batchFeatures = (data.audio_features || [])
+        .filter((f): f is SpotifyAudioFeaturesRaw => f !== null)
+        .map(mapAudioFeatures);
+
+      results.push(...batchFeatures);
+    }
+
+    return results;
+  }
+
+  async getRecommendations(options: RecommendationSeed): Promise<TrackInfo[]> {
+    const query: Record<string, string> = {};
+
+    // Validate total seeds <= 5
+    const totalSeeds =
+      (options.seedArtists?.length || 0) +
+      (options.seedTracks?.length || 0) +
+      (options.seedGenres?.length || 0);
+
+    if (totalSeeds === 0) {
+      throw new Error('At least one seed (artist, track, or genre) is required');
+    }
+    if (totalSeeds > 5) {
+      throw new Error('Maximum 5 total seeds allowed');
+    }
+
+    // Build query parameters
+    if (options.seedArtists && options.seedArtists.length > 0) {
+      query.seed_artists = options.seedArtists.join(',');
+    }
+    if (options.seedTracks && options.seedTracks.length > 0) {
+      query.seed_tracks = options.seedTracks.join(',');
+    }
+    if (options.seedGenres && options.seedGenres.length > 0) {
+      query.seed_genres = options.seedGenres.join(',');
+    }
+
+    // Target parameters
+    if (typeof options.targetEnergy === 'number') {
+      query.target_energy = options.targetEnergy.toString();
+    }
+    if (typeof options.targetInstrumentalness === 'number') {
+      query.target_instrumentalness = options.targetInstrumentalness.toString();
+    }
+    if (typeof options.targetTempo === 'number') {
+      query.target_tempo = options.targetTempo.toString();
+    }
+
+    // Min/max parameters
+    if (typeof options.minEnergy === 'number') {
+      query.min_energy = options.minEnergy.toString();
+    }
+    if (typeof options.maxEnergy === 'number') {
+      query.max_energy = options.maxEnergy.toString();
+    }
+    if (typeof options.minInstrumentalness === 'number') {
+      query.min_instrumentalness = options.minInstrumentalness.toString();
+    }
+    if (typeof options.maxInstrumentalness === 'number') {
+      query.max_instrumentalness = options.maxInstrumentalness.toString();
+    }
+    if (typeof options.minTempo === 'number') {
+      query.min_tempo = options.minTempo.toString();
+    }
+    if (typeof options.maxTempo === 'number') {
+      query.max_tempo = options.maxTempo.toString();
+    }
+
+    // Limit
+    if (typeof options.limit === 'number') {
+      query.limit = Math.min(100, Math.max(1, options.limit)).toString();
+    }
+
+    const data = await this.request<SpotifyRecommendationsResponse>(
+      'GET',
+      '/recommendations',
+      undefined,
+      query
+    );
+
+    return (data.tracks || []).map(mapTrack);
+  }
+
+  async getTopTracks(
+    options: { timeRange?: TimeRange; limit?: number; offset?: number } = {}
+  ): Promise<SpotifyPagedResponse<TrackInfo>> {
+    const query: Record<string, string> = {};
+
+    if (options.timeRange) {
+      query.time_range = options.timeRange;
+    }
+    if (typeof options.limit === 'number') {
+      query.limit = options.limit.toString();
+    }
+    if (typeof options.offset === 'number') {
+      query.offset = options.offset.toString();
+    }
+
+    const data = await this.request<SpotifyTopTracksResponse>(
+      'GET',
+      '/me/top/tracks',
+      undefined,
+      query
+    );
+
+    const tracks = (data.items || []).map(mapTrack);
+
+    return {
+      items: tracks,
+      total: data.total ?? tracks.length,
+      limit: data.limit ?? options.limit ?? tracks.length,
+      offset: data.offset ?? options.offset ?? 0,
+      next: data.next ?? undefined,
+      previous: data.previous ?? undefined,
+    };
+  }
+
   private async request<T = unknown>(
     method: string,
     path: string,
@@ -756,6 +895,39 @@ export interface SpotifyRecentlyPlayedResponse {
   limit?: number;
 }
 
+export interface AudioFeatures {
+  energy: number;
+  instrumentalness: number;
+  speechiness: number;
+  valence: number;
+  acousticness: number;
+  tempo: number;
+  danceability: number;
+  liveness: number;
+  loudness: number;
+  key: number;
+  mode: number;
+  timeSignature: number;
+}
+
+export interface RecommendationSeed {
+  seedArtists?: string[];
+  seedTracks?: string[];
+  seedGenres?: string[];
+  targetEnergy?: number;
+  targetInstrumentalness?: number;
+  targetTempo?: number;
+  minEnergy?: number;
+  maxEnergy?: number;
+  minInstrumentalness?: number;
+  maxInstrumentalness?: number;
+  minTempo?: number;
+  maxTempo?: number;
+  limit?: number;
+}
+
+export type TimeRange = 'short_term' | 'medium_term' | 'long_term';
+
 interface SpotifyDevicesResponse {
   devices: Array<{
     id: string;
@@ -858,6 +1030,42 @@ interface SpotifySavedAlbumsResponse {
   previous?: string | null;
 }
 
+interface SpotifyAudioFeaturesRaw {
+  energy: number;
+  instrumentalness: number;
+  speechiness: number;
+  valence: number;
+  acousticness: number;
+  tempo: number;
+  danceability: number;
+  liveness: number;
+  loudness: number;
+  key: number;
+  mode: number;
+  time_signature: number;
+}
+
+interface SpotifyRecommendationsResponse {
+  tracks: SpotifyTrack[];
+  seeds?: Array<{
+    initialPoolSize: number;
+    afterFilteringSize: number;
+    afterRelinkingSize: number;
+    id: string;
+    type: string;
+    href: string;
+  }>;
+}
+
+interface SpotifyTopTracksResponse {
+  items: SpotifyTrack[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  next?: string | null;
+  previous?: string | null;
+}
+
 function mapDeviceType(rawType: string): DeviceInfo['type'] {
   const normalized = rawType.toLowerCase();
   const allowed: DeviceInfo['type'][] = [
@@ -909,6 +1117,23 @@ function mapPlaylist(playlist: SpotifyPlaylistRaw): SpotifyPlaylist {
     totalTracks: playlist.tracks?.total ?? 0,
     public: playlist.public ?? null,
     uri: playlist.uri,
+  };
+}
+
+function mapAudioFeatures(raw: SpotifyAudioFeaturesRaw): AudioFeatures {
+  return {
+    energy: raw.energy,
+    instrumentalness: raw.instrumentalness,
+    speechiness: raw.speechiness,
+    valence: raw.valence,
+    acousticness: raw.acousticness,
+    tempo: raw.tempo,
+    danceability: raw.danceability,
+    liveness: raw.liveness,
+    loudness: raw.loudness,
+    key: raw.key,
+    mode: raw.mode,
+    timeSignature: raw.time_signature,
   };
 }
 

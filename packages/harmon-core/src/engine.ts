@@ -1,0 +1,321 @@
+/**
+ * Session engine - Core orchestrator for session lifecycle and queue management
+ */
+
+import type { SessionPolicy, TrackInfo } from '@athena/harmon-protocol';
+import type { SpotifyClient } from '@athena/harmon-spotify';
+import type { HarmonStore } from '@athena/harmon-store';
+import type {
+  SessionState,
+  EventCallback,
+  EngineEvent,
+  PlayRecord,
+} from './types.js';
+import { fetchCandidates } from './sources.js';
+import { rankTracks } from './ranking.js';
+
+export interface SessionEngine {
+  start(policy: SessionPolicy): Promise<void>;
+  stop(): Promise<void>;
+  pause(): Promise<void>;
+  resume(): Promise<void>;
+  nudge(direction: 'calmer' | 'sharper', amount?: number): Promise<void>;
+  getQueue(): TrackInfo[];
+  getState(): SessionState | null;
+  refillQueue(): Promise<void>;
+  recordPlay(track: TrackInfo): Promise<void>;
+}
+
+interface EngineConfig {
+  spotifyClient: SpotifyClient;
+  store: HarmonStore;
+  onEvent?: EventCallback;
+}
+
+class SessionEngineImpl implements SessionEngine {
+  private spotifyClient: SpotifyClient;
+  private store: HarmonStore;
+  private onEvent: EventCallback;
+  private state: SessionState | null = null;
+  private refillInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Constants
+  private readonly REFILL_CHECK_INTERVAL_MS = 10000;  // Check every 10s
+
+  constructor(config: EngineConfig) {
+    this.spotifyClient = config.spotifyClient;
+    this.store = config.store;
+    this.onEvent = config.onEvent || (() => {});
+  }
+
+  async start(policy: SessionPolicy): Promise<void> {
+    if (this.state !== null) {
+      throw new Error('Session already active. Stop current session first.');
+    }
+
+    // Create session in store
+    const sessionId = await this.store.createSession(JSON.stringify(policy));
+
+    // Initialize state
+    this.state = {
+      id: sessionId,
+      policy,
+      startedAt: Date.now(),
+      status: 'running',
+      history: [],
+      currentTrack: null,
+      queuedTracks: [],
+    };
+
+    // Initial queue fill
+    await this.refillQueue();
+
+    // Start auto-refill monitoring
+    this.startRefillMonitoring();
+
+    // Emit event
+    this.emit({
+      type: 'session.started',
+      payload: {
+        sessionId,
+        policy,
+        startedAt: this.state.startedAt,
+      },
+    });
+
+    await this.store.logEvent('session.started', { sessionId, policy }, sessionId);
+  }
+
+  async stop(): Promise<void> {
+    if (!this.state) {
+      throw new Error('No active session');
+    }
+
+    // Stop monitoring
+    this.stopRefillMonitoring();
+
+    // End session in store
+    await this.store.endSession(this.state.id);
+    await this.store.logEvent('session.stopped', { sessionId: this.state.id }, this.state.id);
+
+    // Emit event
+    this.emit({
+      type: 'session.stopped',
+      payload: {
+        sessionId: this.state.id,
+        elapsedMs: Date.now() - this.state.startedAt,
+      },
+    });
+
+    this.state = null;
+  }
+
+  async pause(): Promise<void> {
+    if (!this.state) {
+      throw new Error('No active session');
+    }
+
+    this.state.status = 'paused';
+    this.stopRefillMonitoring();
+  }
+
+  async resume(): Promise<void> {
+    if (!this.state) {
+      throw new Error('No active session');
+    }
+
+    this.state.status = 'running';
+    this.startRefillMonitoring();
+  }
+
+  async nudge(direction: 'calmer' | 'sharper', amount = 0.1): Promise<void> {
+    if (!this.state) {
+      throw new Error('No active session');
+    }
+
+    const sign = direction === 'calmer' ? -1 : 1;
+    const policy = this.state.policy;
+
+    // Update soft weights
+    const currentWeights = policy.soft?.weights || {};
+    const newWeights = { ...currentWeights };
+
+    // Adjust energy and valence
+    if (typeof newWeights.energy === 'number') {
+      newWeights.energy = clamp(newWeights.energy + sign * amount, 0, 1);
+    } else {
+      newWeights.energy = 0.5 + sign * amount;
+    }
+
+    if (typeof newWeights.valence === 'number') {
+      newWeights.valence = clamp(newWeights.valence + sign * amount * 0.5, 0, 1);
+    } else {
+      newWeights.valence = 0.5 + sign * amount * 0.5;
+    }
+
+    // Update policy
+    this.state.policy = {
+      ...policy,
+      soft: {
+        ...policy.soft,
+        weights: newWeights,
+      },
+    };
+
+    // Clear queue and refill with new weights
+    this.state.queuedTracks = [];
+    await this.refillQueue();
+
+    await this.store.logEvent(
+      'session.nudged',
+      { direction, amount, newWeights },
+      this.state.id
+    );
+  }
+
+  getQueue(): TrackInfo[] {
+    return this.state?.queuedTracks || [];
+  }
+
+  getState(): SessionState | null {
+    return this.state;
+  }
+
+  async refillQueue(): Promise<void> {
+    if (!this.state) {
+      return;
+    }
+
+    const policy = this.state.policy;
+    const queuePrefs = policy.queue || {};
+    const targetDepth = queuePrefs.target || 12;
+    const refillThreshold = queuePrefs.refillWhenBelow || 5;
+
+    const currentDepth = this.state.queuedTracks.length;
+
+    if (currentDepth >= refillThreshold) {
+      return;  // Queue still healthy
+    }
+
+    const needed = targetDepth - currentDepth;
+
+    try {
+      // Fetch candidates
+      const candidates = await fetchCandidates(
+        this.spotifyClient,
+        policy.sources || {},
+        needed * 3  // Fetch 3x needed for filtering
+      );
+
+      if (candidates.length === 0) {
+        this.emit({
+          type: 'error',
+          payload: { message: 'No candidates found for queue refill' },
+        });
+        return;
+      }
+
+      // Rank tracks
+      const ranked = await rankTracks(
+        candidates,
+        policy,
+        this.state.history,
+        this.getElapsedMs()
+      );
+
+      // Take top N
+      const topTracks = ranked.slice(0, needed);
+
+      // Add to Spotify queue
+      for (const { track } of topTracks) {
+        if (track.uri) {
+          await this.spotifyClient.addToQueue(track.uri);
+        }
+      }
+
+      // Update local queue state
+      this.state.queuedTracks.push(...topTracks.map(r => r.track));
+
+      // Emit event
+      this.emit({
+        type: 'queue.refilled',
+        payload: {
+          sessionId: this.state.id,
+          added: topTracks.length,
+          queueDepth: this.state.queuedTracks.length,
+        },
+      });
+
+      await this.store.logEvent(
+        'queue.refilled',
+        { added: topTracks.length, queueDepth: this.state.queuedTracks.length },
+        this.state.id
+      );
+    } catch (error) {
+      this.emit({
+        type: 'error',
+        payload: {
+          message: error instanceof Error ? error.message : 'Queue refill failed',
+        },
+      });
+    }
+  }
+
+  // Track when a track finishes (called by daemon monitoring)
+  async recordPlay(track: TrackInfo): Promise<void> {
+    if (!this.state) {
+      return;
+    }
+
+    const record: PlayRecord = {
+      trackId: track.id,
+      artistIds: [track.artist],  // Simplified: would parse from artist string
+      playedAt: Date.now(),
+    };
+
+    this.state.history.push(record);
+    this.state.currentTrack = track;
+
+    // Remove from queue
+    this.state.queuedTracks = this.state.queuedTracks.filter(t => t.id !== track.id);
+  }
+
+  private startRefillMonitoring(): void {
+    if (this.refillInterval !== null) {
+      return;
+    }
+
+    this.refillInterval = setInterval(() => {
+      this.refillQueue().catch(err => {
+        console.error('Auto-refill failed:', err);
+      });
+    }, this.REFILL_CHECK_INTERVAL_MS);
+  }
+
+  private stopRefillMonitoring(): void {
+    if (this.refillInterval !== null) {
+      clearInterval(this.refillInterval);
+      this.refillInterval = null;
+    }
+  }
+
+  private emit(event: EngineEvent): void {
+    try {
+      this.onEvent(event);
+    } catch (error) {
+      console.error('Event callback error:', error);
+    }
+  }
+
+  private getElapsedMs(): number {
+    return this.state ? Date.now() - this.state.startedAt : 0;
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+export function createEngine(config: EngineConfig): SessionEngine {
+  return new SessionEngineImpl(config);
+}

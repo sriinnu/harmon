@@ -3,7 +3,12 @@
  */
 
 import express, { Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
+import { timingSafeEqual } from 'node:crypto';
 import { createStore, HarmonStore } from '@athena/harmon-store';
+import { createEngine, type SessionEngine, type EngineEvent } from '@athena/harmon-core';
+import { createLogger, type Logger } from '@athena/harmon-logger';
+import { createEncryptor, type Encryptor } from '@athena/harmon-crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -28,6 +33,7 @@ import {
   type SpotifyCookieRecord,
 } from '@athena/harmon-spotify';
 import { createAppleMusicClient, type AppleMusicClient } from '@athena/harmon-apple';
+import { errorHandler } from './errors.js';
 
 // ============================================================================
 // Configuration
@@ -81,10 +87,14 @@ interface SessionState {
 
 export class Harmond {
   private app: express.Application;
+  private logger: Logger;
+  private requestLogger: Logger;
   private store: HarmonStore;
   private spotifyAuth: SpotifyAuth;
   private spotifyClient: SpotifyClient;
   private appleMusicClient?: AppleMusicClient;
+  private engine: SessionEngine;
+  private encryptor?: Encryptor;
   private port: number;
   private host: string;
   private apiToken?: string;
@@ -108,8 +118,22 @@ export class Harmond {
     this.allowAllOrigins = corsOrigins.includes('*');
     this.corsOrigins = new Set(corsOrigins.filter((origin) => origin !== '*'));
 
+    // Initialize logging
+    this.logger = createLogger({ name: 'harmond' });
+    this.requestLogger = this.logger.child({ module: 'http' });
+
     this.app = express();
     this.store = createStore({ dbPath: config.dbPath || envDbPath || DEFAULT_DB_PATH });
+
+    // Initialize encryption if secret provided
+    const encryptionSecret = process.env.HARMON_ENCRYPTION_SECRET;
+    if (encryptionSecret) {
+      this.encryptor = createEncryptor({ secret: encryptionSecret });
+      this.logger.info('Token encryption enabled');
+    } else {
+      this.logger.warn('Token encryption disabled (HARMON_ENCRYPTION_SECRET not set)');
+    }
+
     const redirectUri =
       process.env.SPOTIFY_REDIRECT_URI ||
       `http://${this.host}:${this.port}/v1/auth/spotify/callback`;
@@ -133,40 +157,127 @@ export class Harmond {
       });
     }
 
+    // Create engine
+    this.engine = createEngine({
+      spotifyClient: this.spotifyClient,
+      store: this.store,
+      onEvent: this.handleEngineEvent.bind(this),
+    });
+
+    this.logger.info({ port: this.port, host: this.host }, 'Daemon initializing');
+
     this.setupMiddleware();
     this.setupRoutes();
     this.setupSSE();
   }
 
+  private handleEngineEvent(event: EngineEvent): void {
+    // Broadcast engine events via SSE
+    this.broadcastEvent(event.type, event.payload);
+
+    // Log to store
+    if (this.session) {
+      this.store.logEvent(event.type, event.payload, this.session.id)
+        .catch(err => this.logger.error({ err }, 'Failed to log event'));
+    }
+  }
+
   private setupMiddleware(): void {
     this.app.use(express.json());
 
-    // CORS for browser clients
+    // Request logging middleware
     this.app.use((req, res, next) => {
-      const origin = req.header('origin');
-      const originAllowed = this.isOriginAllowed(origin);
+      const start = Date.now();
+      const requestId = uuidv4();
 
-      if (originAllowed) {
-        res.header('Access-Control-Allow-Origin', this.allowAllOrigins ? '*' : origin!);
-        if (!this.allowAllOrigins) {
-          res.header('Vary', 'Origin');
-        }
-        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      }
+      res.on('finish', () => {
+        this.requestLogger.info({
+          requestId,
+          method: req.method,
+          path: req.path,
+          status: res.statusCode,
+          duration: Date.now() - start,
+        }, 'HTTP request');
+      });
 
-      if (req.method === 'OPTIONS') {
-        if (origin && !originAllowed) {
-          res.sendStatus(403);
-          return;
-        }
-        if (originAllowed) {
-          res.sendStatus(204);
-          return;
-        }
-      }
       next();
     });
+
+    // Rate limiting
+    const globalLimiter = rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 100,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { success: false, error: 'Too many requests' },
+      skip: (req) => req.path === '/health',
+    });
+
+    const authLimiter = rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 5,
+      message: { success: false, error: 'Too many authentication attempts' },
+    });
+
+    const commandLimiter = rateLimit({
+      windowMs: 60 * 1000,
+      max: 20,
+      message: { success: false, error: 'Command rate limit exceeded' },
+    });
+
+    this.app.use(globalLimiter);
+    this.app.use('/v1/auth', authLimiter);
+    this.app.use('/v1/command', commandLimiter);
+
+    // CORS for browser clients with strict validation
+    this.app.use((req, res, next) => {
+      const origin = req.header('origin');
+
+      // No origin header = same-origin or non-browser client
+      if (!origin) {
+        next();
+        return;
+      }
+
+      // Validate origin against whitelist
+      const originAllowed = this.isOriginAllowed(origin);
+
+      if (!originAllowed) {
+        this.logger.warn({ origin, path: req.path }, 'CORS blocked');
+        res.status(403).json({ success: false, error: 'Origin not allowed' });
+        return;
+      }
+
+      // Set CORS headers for allowed origins
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Vary', 'Origin');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.header('Access-Control-Max-Age', '86400');
+
+      // Handle preflight
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(204);
+        return;
+      }
+
+      next();
+    });
+  }
+
+  private isOriginAllowed(origin: string | undefined): boolean {
+    if (!origin) return false;
+
+    // Reject wildcard in production
+    if (this.allowAllOrigins) {
+      if (process.env.NODE_ENV === 'production') {
+        this.logger.error('Wildcard CORS not allowed in production');
+        return false;
+      }
+      return true;
+    }
+
+    return this.corsOrigins.has(origin);
   }
 
   private setupRoutes(): void {
@@ -791,6 +902,9 @@ export class Harmond {
         });
       }
     });
+
+    // Error handler (must be last)
+    this.app.use(errorHandler(this.logger));
   }
 
   private setupSSE(): void {
@@ -799,12 +913,32 @@ export class Harmond {
       const event = this.createEvent('heartbeat', { timestamp: new Date().toISOString() });
       const message = `data: ${JSON.stringify(event)}\n\n`;
 
+      const deadClients: Response[] = [];
+
       for (const client of this.sseClients) {
         try {
-          client.write(message);
-        } catch {
-          this.sseClients.delete(client);
+          const success = client.write(message);
+          if (!success) {
+            this.logger.debug('SSE client write buffer full');
+          }
+        } catch (error) {
+          this.logger.warn({ error }, 'SSE heartbeat failed, removing client');
+          deadClients.push(client);
         }
+      }
+
+      // Clean up dead clients
+      for (const client of deadClients) {
+        this.sseClients.delete(client);
+        try {
+          client.end();
+        } catch {
+          // Ignore close errors
+        }
+      }
+
+      if (deadClients.length > 0) {
+        this.logger.info({ removed: deadClients.length, active: this.sseClients.size }, 'SSE clients cleaned up');
       }
     }, SSE_HEARTBEAT_MS);
   }
@@ -832,12 +966,22 @@ export class Harmond {
     const event = this.createEvent(type, payload);
     const message = `data: ${JSON.stringify(event)}\n\n`;
 
+    this.logger.debug({ type, clients: this.sseClients.size }, 'Broadcasting SSE event');
+
+    const deadClients: Response[] = [];
+
     for (const client of this.sseClients) {
       try {
         client.write(message);
-      } catch {
-        this.sseClients.delete(client);
+      } catch (error) {
+        this.logger.warn({ error, eventType: type }, 'Failed to send SSE event');
+        deadClients.push(client);
       }
+    }
+
+    // Clean up dead clients
+    for (const client of deadClients) {
+      this.sseClients.delete(client);
     }
   }
 
@@ -1118,9 +1262,12 @@ end tell`;
       get: async () => {
         const raw = await this.store.getSetting('spotify.tokens');
         if (!raw) return null;
+
         try {
-          return JSON.parse(raw) as SpotifyTokens;
-        } catch {
+          const decrypted = this.encryptor ? this.encryptor.decrypt(raw) : raw;
+          return JSON.parse(decrypted) as SpotifyTokens;
+        } catch (error) {
+          this.logger.error({ error }, 'Failed to decrypt tokens');
           return null;
         }
       },
@@ -1129,7 +1276,10 @@ end tell`;
           await this.store.deleteSetting('spotify.tokens');
           return;
         }
-        await this.store.setSetting('spotify.tokens', JSON.stringify(tokens));
+
+        const json = JSON.stringify(tokens);
+        const encrypted = this.encryptor ? this.encryptor.encrypt(json) : json;
+        await this.store.setSetting('spotify.tokens', encrypted);
       },
     };
   }
@@ -1139,9 +1289,12 @@ end tell`;
       get: async () => {
         const raw = await this.store.getSetting('spotify.cookies');
         if (!raw) return null;
+
         try {
-          return JSON.parse(raw) as SpotifyCookieRecord[];
-        } catch {
+          const decrypted = this.encryptor ? this.encryptor.decrypt(raw) : raw;
+          return JSON.parse(decrypted) as SpotifyCookieRecord[];
+        } catch (error) {
+          this.logger.error({ error }, 'Failed to decrypt cookies');
           return null;
         }
       },
@@ -1150,7 +1303,10 @@ end tell`;
           await this.store.deleteSetting('spotify.cookies');
           return;
         }
-        await this.store.setSetting('spotify.cookies', JSON.stringify(cookies));
+
+        const json = JSON.stringify(cookies);
+        const encrypted = this.encryptor ? this.encryptor.encrypt(json) : json;
+        await this.store.setSetting('spotify.cookies', encrypted);
       },
     };
   }
@@ -1211,19 +1367,45 @@ end tell`;
   }
 
   private requireAuth(req: Request, res: Response, next: NextFunction): void {
+    // Exempt callback endpoint
     if (req.path === '/auth/spotify/callback') {
       next();
       return;
     }
 
+    // Production requires API token
+    if (process.env.NODE_ENV === 'production' && !this.apiToken) {
+      this.logger.error('API token required in production');
+      res.status(500).json({ success: false, error: 'Server misconfigured' });
+      return;
+    }
+
+    // Skip auth if no token configured in development
     if (!this.apiToken) {
+      this.logger.debug('Authentication skipped (no token configured)');
       next();
       return;
     }
 
     const authHeader = req.header('authorization') || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
-    if (token !== this.apiToken) {
+    const token = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : authHeader;
+
+    // Constant-time comparison to prevent timing attacks
+    const expectedBuffer = Buffer.from(this.apiToken);
+    const providedBuffer = Buffer.from(token);
+
+    if (expectedBuffer.length !== providedBuffer.length) {
+      this.logger.warn({ path: req.path }, 'Invalid token length');
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    const matches = timingSafeEqual(expectedBuffer, providedBuffer);
+
+    if (!matches) {
+      this.logger.warn({ path: req.path }, 'Invalid token');
       res.status(401).json({ success: false, error: 'Unauthorized' });
       return;
     }
