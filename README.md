@@ -1,23 +1,11 @@
 # Harmon
 
 <p align="center">
-  <svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <!-- Outer circle -->
-    <circle cx="100" cy="100" r="90" stroke="#6366f1" stroke-width="4" fill="none"/>
-    <!-- Inner harmonious waves -->
-    <path d="M40 100 Q60 60 100 60 T160 100" stroke="#8b5cf6" stroke-width="3" fill="none" stroke-linecap="round"/>
-    <path d="M40 100 Q60 140 100 140 T160 100" stroke="#a78bfa" stroke-width="3" fill="none" stroke-linecap="round"/>
-    <!-- Center pulse -->
-    <circle cx="100" cy="100" r="15" fill="#6366f1"/>
-    <circle cx="100" cy="100" r="25" stroke="#8b5cf6" stroke-width="2" fill="none" opacity="0.6"/>
-    <!-- Sound waves -->
-    <path d="M25 100 Q35 85 25 70" stroke="#6366f1" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.5"/>
-    <path d="M175 100 Q165 85 175 70" stroke="#6366f1" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.5"/>
-  </svg>
+  <img src="logo.svg" alt="Harmon Logo" width="200" height="200"/>
 </p>
 
 <p align="center">
-  <strong>Policy-driven music session manager with daemon-first architecture</strong>
+  <strong>Production-grade, policy-driven music session manager with daemon-first architecture</strong>
 </p>
 
 <p align="center">
@@ -25,6 +13,7 @@
   <a href="#architecture">Architecture</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#api">API</a> •
+  <a href="#security">Security</a> •
   <a href="#configuration">Configuration</a>
 </p>
 
@@ -32,57 +21,88 @@
 
 ## Overview
 
-Harmon is a daemon-first music session manager that runs as a background service, exposing a **HTTP+SSE API** for controlling music playback sessions. It's designed to work with Spotify (and other music providers via plugins), running on macOS, Windows WSL, or Linux.
+Harmon is a **production-grade daemon-first music session manager** that runs as a background service, exposing a **HTTP+SSE API** for controlling music playback sessions. It intelligently manages your music queue using **AI-compiled policies** and provides real-time session feedback through Server-Sent Events.
 
 ### Core Philosophy
 
-- **Daemon-First**: Runs as a background service, always ready to respond
-- **Policy-Driven**: Define session constraints (energy, tempo, vocals) as policies
-- **Event-Streaming**: Real-time updates via Server-Sent Events (SSE)
-- **Privacy-First**: All data stays local, journal entries in Markdown
+- **🎯 Policy-Driven**: AI preferences compile to deterministic JSON policies
+- **🔒 Daemon-First**: Runs as a background service, always ready to respond
+- **⚡ Event-Streaming**: Real-time updates via Server-Sent Events (SSE)
+- **🛡️ Production-Ready**: Rate limiting, encryption, structured logging, comprehensive error handling
+- **🔐 Privacy-First**: All data stays local, journal entries in Markdown
+- **🎵 Intelligent Queue**: Two-phase ranking (hard constraints + soft scoring) with energy arc modulation
 
 ## Features
 
-- **Session Management**: Start/stop music sessions with configurable policies
-- **Policy Constraints**: Hard constraints (no vocals, tempo range) and soft weights (energy, valence)
-- **Energy Arcs**: Ramp-up, ramp-down, flat, or wave-shaped energy progression
-- **Mood Journaling**: Track sessions with Markdown journal entries
-- **Pattern Detection**: AI-assisted pattern recognition for mood/energy trends
-- **Real-time Events**: SSE streaming for session updates, track changes, nudges
-- **MCP Integration**: Model Context Protocol server for AI assistant integration
+### Session Management
+- ✅ **Start/stop music sessions** with configurable policies
+- ✅ **Policy constraints**: Hard constraints (no vocals, tempo range) and soft weights (energy, valence)
+- ✅ **Energy arcs**: Ramp-up, ramp-down, flat, or wave-shaped energy progression
+- ✅ **Queue auto-refill**: Intelligent queue management with policy-driven track ranking
+- ✅ **Adaptive nudging**: Adjust session energy on-the-fly (calmer/sharper)
+
+### Track Intelligence
+- ✅ **Two-phase ranking algorithm**: Binary filtering + weighted scoring
+- ✅ **Audio feature analysis**: Energy, instrumentalness, tempo, valence, acousticness
+- ✅ **Recency penalties**: Prevent track/artist repetition
+- ✅ **Multi-source candidates**: Liked tracks, top tracks, playlists, recommendations, discovery
+
+### Security & Production Features
+- 🔒 **Rate limiting**: Global (100/15min), Auth (5/15min), Commands (20/min)
+- 🔐 **AES-256-GCM encryption**: Secure token/cookie storage
+- 🛡️ **Timing-safe authentication**: Prevents timing attacks
+- 🚫 **Strict CORS validation**: No wildcards in production
+- 📊 **Structured logging**: Production-ready Pino logging with context
+- ⚠️ **Centralized error handling**: Proper error responses and cleanup
+
+### Data & Insights
+- 📝 **Mood journaling**: Track sessions with Markdown journal entries
+- 🔍 **Pattern detection**: AI-assisted pattern recognition for mood/energy trends
+- 📈 **Session statistics**: Comprehensive analytics on playback history
+- 🤖 **MCP integration**: Model Context Protocol server for AI assistant integration
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Harmon System                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │
-│  │   Client    │───▶│   harmond   │───▶│  harmon-store       │  │
-│  │  (CLI/UI)   │    │  (daemon)   │    │  (SQLite)           │  │
-│  └─────────────┘    └──────┬──────┘    └─────────────────────┘  │
-│                            │                                    │
-│                   HTTP+SSE │                                    │
-│                            ▼                                    │
-│                  ┌─────────────────┐                            │
-│                  │  harmon-flow    │                            │
-│                  │  (MCP Server)   │                            │
-│                  └─────────────────┘                            │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                           Harmon System                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌──────────┐    HTTP+SSE    ┌──────────┐                          │
+│  │  Client  │───────────────▶│ harmond  │                          │
+│  │ (CLI/UI) │◀───────────────│ (daemon) │                          │
+│  └──────────┘                └─────┬────┘                          │
+│                                    │                                │
+│                          ┌─────────┼─────────┐                      │
+│                          │         │         │                      │
+│                          ▼         ▼         ▼                      │
+│                   ┌──────────┬─────────┬──────────┐                │
+│                   │  Core    │  Store  │ Spotify  │                │
+│                   │  Engine  │ (SQLite)│   API    │                │
+│                   └──────────┴─────────┴──────────┘                │
+│                          │                                          │
+│                          ▼                                          │
+│                   ┌─────────────────┐                              │
+│                   │   harmon-flow   │                              │
+│                   │   (MCP Server)  │                              │
+│                   └─────────────────┘                              │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Packages
 
-| Package | Description |
-|---------|-------------|
-| `@athena/harmon-protocol` | Zod schemas for Command, Event, and Policy types |
-| `@athena/harmon-store` | SQLite persistence layer with migrations |
-| `@athena/harmon-core` | Core session engine and policy evaluation |
-| `@athena/harmon-spotify` | Spotify Web API integration |
-| `@athena/harmon-flow` | MCP server for journal analysis |
-| `@athena/harmond` | Daemon with HTTP+SSE API |
+| Package | Description | Status |
+|---------|-------------|--------|
+| `@athena/harmon-protocol` | Zod schemas for Command, Event, and Policy types | ✅ Production |
+| `@athena/harmon-store` | SQLite persistence layer with migrations | ✅ Production |
+| `@athena/harmon-core` | Core session engine with track ranking & queue management | ✅ Production |
+| `@athena/harmon-spotify` | Spotify Web API integration (OAuth, playback, recommendations) | ✅ Production |
+| `@athena/harmon-apple` | Apple Music API integration | ✅ Production |
+| `@athena/harmon-logger` | Structured logging with Pino | ✅ Production |
+| `@athena/harmon-crypto` | AES-256-GCM encryption utilities | ✅ Production |
+| `@athena/harmon-flow` | MCP server for journal analysis | ✅ Production |
+| `@athena/harmond` | Daemon with HTTP+SSE API, rate limiting, auth | ✅ Production |
 
 ## Quick Start
 
@@ -112,62 +132,210 @@ pnpm --filter @athena/harmond start
 ### Running harmond
 
 ```bash
-# Default port (17373)
+# Default configuration (port 17373)
 harmond
 
-# Custom port
-harmond --port 8080
+# Custom configuration
+harmond --port 8080 --db-path /path/to/harmon.db
 
-# Custom database path
-harmond --db-path /path/to/harmon.db
+# With environment variables
+export HARMON_API_TOKEN=$(openssl rand -base64 32)
+export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
+export SPOTIFY_CLIENT_ID="your_client_id"
+harmond
 ```
 
-### Daemon Endpoints
+### Quick Test
 
 ```bash
 # Health check
 curl http://localhost:17373/health
 
-# Get daemon status
-curl http://localhost:17373/v1/status
+# Get daemon status (requires auth token if set)
+curl -H "Authorization: Bearer $HARMON_API_TOKEN" \
+  http://localhost:17373/v1/status
 
-# Start a session
+# Start a focus session
 curl -X POST http://localhost:17373/v1/command \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $HARMON_API_TOKEN" \
   -d '{
     "id": "c_001",
     "ts": 1704067200000,
     "source": {"kind": "cli", "device": "macos"},
     "type": "session.start",
-    "payload": {"policy": {"version": 1, "mode": "focus"}}
+    "payload": {
+      "policy": {
+        "version": 1,
+        "mode": "focus",
+        "hard": {"noVocals": true, "tempo": {"min": 90, "max": 130}},
+        "soft": {
+          "weights": {"energy": 0.7, "instrumentalness": 0.8},
+          "arc": {"shape": "ramp-up", "warmupMs": 300000}
+        }
+      }
+    }
   }'
 
-# Subscribe to events (SSE)
-curl http://localhost:17373/v1/events
+# Subscribe to real-time events
+curl -H "Authorization: Bearer $HARMON_API_TOKEN" \
+  http://localhost:17373/v1/events
+```
 
-# Get Spotify login URL
-curl -X POST http://localhost:17373/v1/auth/spotify/login
+## Security
 
-# Logout Spotify
-curl -X POST http://localhost:17373/v1/auth/spotify/logout
+### Production Requirements
+
+Harmon enforces strict security in production environments:
+
+- ✅ **API Token Required**: Set `HARMON_API_TOKEN` (required in production)
+- ✅ **Encryption Required**: Set `HARMON_ENCRYPTION_SECRET` for token/cookie encryption
+- ✅ **CORS Whitelist**: No wildcard origins allowed in production
+- ✅ **Rate Limiting**: Automatic protection against abuse
+- ✅ **Timing-Safe Auth**: Constant-time token comparison prevents timing attacks
+
+### Generating Secrets
+
+```bash
+# Generate API token
+export HARMON_API_TOKEN=$(openssl rand -base64 32)
+
+# Generate encryption secret (min 32 characters)
+export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
+```
+
+### Rate Limits
+
+| Endpoint Type | Limit | Window |
+|---------------|-------|--------|
+| Global | 100 requests | 15 minutes |
+| Auth endpoints (`/v1/auth/*`) | 5 requests | 15 minutes |
+| Commands (`/v1/command`) | 20 requests | 1 minute |
+| Health check | Unlimited | - |
+
+## Configuration
+
+### Environment Variables
+
+#### Required in Production
+```bash
+HARMON_API_TOKEN=your_api_token              # API authentication
+HARMON_ENCRYPTION_SECRET=your_secret         # Token/cookie encryption (min 32 chars)
+HARMON_CORS_ORIGINS=https://app.example.com  # Comma-separated, no wildcards
+SPOTIFY_CLIENT_ID=your_client_id             # Spotify OAuth
+```
+
+#### Optional
+```bash
+# Daemon Configuration
+HARMON_PORT=17373                            # Server port (default: 17373)
+HARMON_BIND_ADDRESS=127.0.0.1                # Bind address (default: 127.0.0.1)
+HARMON_DB_PATH=.harmon.db                    # Database path (default: .harmon.db)
+LOG_LEVEL=debug                              # trace|debug|info|warn|error|fatal (default: info)
+NODE_ENV=production                          # Affects logging, CORS, auth enforcement
+
+# Spotify Configuration
+SPOTIFY_CLIENT_SECRET=your_secret            # Optional for server-side OAuth
+SPOTIFY_REDIRECT_URI=http://localhost:17373/v1/auth/spotify/callback
+
+# Apple Music Configuration
+APPLE_MUSIC_DEVELOPER_TOKEN=your_token       # Apple Music developer token
+APPLE_MUSIC_USER_TOKEN=your_token            # Apple Music user token
+APPLE_MUSIC_STOREFRONT=us                    # Storefront (default: us)
+```
+
+### Session Policy Schema
+
+```typescript
+interface SessionPolicy {
+  version: 1;
+  mode?: 'focus' | 'relax' | 'energize' | 'meditate' | 'workout' | 'custom';
+  durationMs?: number;
+
+  // Device selection
+  device?: {
+    preferActive?: boolean;
+    deviceId?: string;
+  };
+
+  // Queue management
+  queue?: {
+    target?: number;           // Target queue size (default: 12)
+    refillWhenBelow?: number;  // Refill threshold (default: 5)
+  };
+
+  // Hard constraints (binary pass/fail)
+  hard?: {
+    noVocals?: boolean;                    // Require instrumentalness > 0.5
+    explicit?: 'allow' | 'avoid' | 'require';
+    tempo?: { min?: number; max?: number };      // BPM range
+    energy?: { min?: number; max?: number };     // 0-1 range
+    instrumentalnessMin?: number;                // Minimum instrumentalness
+  };
+
+  // Soft preferences (weighted scoring)
+  soft?: {
+    weights?: {
+      energy?: number;              // Weight for energy matching
+      instrumentalness?: number;    // Weight for instrumental tracks
+      speechiness?: number;         // Weight for speech content (usually negative)
+      valence?: number;             // Weight for positive mood
+      acousticness?: number;        // Weight for acoustic sound
+      tempo?: number;               // Weight for tempo matching
+      recencyPenalty?: number;      // Penalty strength for recently played
+    };
+    arc?: {
+      shape?: 'flat' | 'ramp-up' | 'ramp-down' | 'wave';
+      warmupMs?: number;   // Warmup period (ms)
+      cooldownMs?: number; // Cooldown period (ms)
+    };
+  };
+
+  // Track sources
+  sources?: {
+    likedTracks?: boolean;        // User's saved tracks
+    topTracks?: boolean;          // User's top tracks
+    recentPlays?: boolean;        // Recently played tracks
+    seedPlaylists?: string[];     // Playlist URIs
+    seedArtists?: string[];       // Artist URIs
+    discovery?: {
+      enabled: boolean;
+      ratio: number;              // 0-1, percentage of discovery tracks
+    };
+  };
+
+  // Repetition limits
+  limits?: {
+    repeatTrackWithinDays?: number;    // Don't repeat track within N days
+    repeatArtistWithinHours?: number;  // Don't repeat artist within N hours
+  };
+}
 ```
 
 ## API Reference
 
 ### REST Endpoints
 
+#### Session Management
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/v1/status` | Daemon status |
-| GET | `/v1/devices` | List Spotify devices |
-| POST | `/v1/command` | Send a command |
-| POST | `/v1/device/use` | Switch audio device |
-| GET | `/v1/auth/spotify/callback` | OAuth callback |
-| POST | `/v1/auth/spotify/login` | Get Spotify login URL |
-| POST | `/v1/auth/spotify/logout` | Clear Spotify tokens |
+| GET | `/health` | Health check (no auth required) |
+| GET | `/v1/status` | Daemon status with session info |
+| POST | `/v1/command` | Send command (session.start, session.stop, session.nudge, skip) |
+| GET | `/v1/devices` | List available Spotify devices |
+| POST | `/v1/device/use` | Switch active device |
+
+#### Spotify Authentication
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/auth/spotify/login` | Get OAuth login URL |
+| GET | `/v1/auth/spotify/callback` | OAuth callback (no auth required) |
+| POST | `/v1/auth/spotify/logout` | Clear tokens and cookies |
 | POST | `/v1/auth/spotify/import` | Import Spotify cookies |
-| GET | `/v1/spotify/search` | Search tracks/albums/artists/playlists |
+
+#### Spotify Playback & Library
+| Method | Endpoint | Description |
+|--------|----------|-------------|
 | GET | `/v1/spotify/now-playing` | Currently playing track |
 | POST | `/v1/spotify/play` | Start/resume playback |
 | POST | `/v1/spotify/pause` | Pause playback |
@@ -176,138 +344,101 @@ curl -X POST http://localhost:17373/v1/auth/spotify/logout
 | POST | `/v1/spotify/seek` | Seek to position (ms) |
 | POST | `/v1/spotify/volume` | Set volume (0-100) |
 | POST | `/v1/spotify/shuffle` | Toggle shuffle |
-| POST | `/v1/spotify/repeat` | Set repeat mode |
+| POST | `/v1/spotify/repeat` | Set repeat mode (off/track/context) |
 | POST | `/v1/spotify/queue` | Add track to queue |
-| GET | `/v1/spotify/playlists` | List Spotify playlists |
-| GET | `/v1/spotify/playlists/:id/tracks` | List playlist tracks |
+| GET | `/v1/spotify/search` | Search tracks/albums/artists/playlists |
+| GET | `/v1/spotify/playlists` | List user playlists |
+| GET | `/v1/spotify/playlists/:id/tracks` | Get playlist tracks |
 | GET | `/v1/spotify/history` | Recently played history |
-| GET | `/v1/spotify/library/tracks` | Saved tracks |
-| GET | `/v1/spotify/library/albums` | Saved albums |
-| GET | `/v1/apple/search` | Apple Music search |
-| GET | `/v1/apple/songs/:id` | Apple Music song details |
-| GET | `/v1/apple/albums/:id` | Apple Music album details |
-| GET | `/v1/apple/artists/:id` | Apple Music artist details |
-| GET | `/v1/apple/playlists/:id` | Apple Music playlist details |
-| GET | `/v1/apple/library/songs` | Apple Music library songs |
-| GET | `/v1/apple/library/albums` | Apple Music library albums |
-| GET | `/v1/apple/library/playlists` | Apple Music library playlists |
-| POST | `/v1/apple/play` | Apple Music play (AppleScript) |
-| POST | `/v1/apple/pause` | Apple Music pause (AppleScript) |
-| POST | `/v1/apple/next` | Apple Music next (AppleScript) |
-| POST | `/v1/apple/prev` | Apple Music previous (AppleScript) |
-| GET | `/v1/events` | SSE event stream |
+| GET | `/v1/spotify/library/tracks` | User's saved tracks |
+| GET | `/v1/spotify/library/albums` | User's saved albums |
+
+#### Apple Music
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/apple/search` | Search Apple Music |
+| GET | `/v1/apple/songs/:id` | Song details |
+| GET | `/v1/apple/albums/:id` | Album details |
+| GET | `/v1/apple/artists/:id` | Artist details |
+| GET | `/v1/apple/playlists/:id` | Playlist details |
+| GET | `/v1/apple/library/*` | Library access (songs/albums/playlists) |
+| POST | `/v1/apple/play` | Play (AppleScript on macOS) |
+| POST | `/v1/apple/pause` | Pause (AppleScript on macOS) |
+| POST | `/v1/apple/next` | Next track (AppleScript on macOS) |
+| POST | `/v1/apple/prev` | Previous track (AppleScript on macOS) |
+
+#### Events & Analytics
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/events` | SSE event stream (real-time updates) |
 | GET | `/v1/journal` | List journal entries |
-| POST | `/v1/journal` | Add journal entry |
+| POST | `/v1/journal` | Create journal entry |
 | GET | `/v1/stats` | Session statistics |
 
 ### SSE Events
 
+Events are streamed in real-time via Server-Sent Events:
+
 ```typescript
 interface Event {
   id: string;      // e_abc12345
-  ts: number;      // Unix timestamp
+  ts: number;      // Unix timestamp (ms)
   type: EventType;
   payload: Record<string, unknown>;
 }
 
 type EventType =
-  | 'session.started'
-  | 'session.stopped'
-  | 'session.nudged'
-  | 'track.started'
-  | 'track.ended'
-  | 'heartbeat';
+  | 'heartbeat'           // Keepalive ping every 30s
+  | 'session.started'     // Session began
+  | 'session.stopped'     // Session ended
+  | 'session.nudged'      // Energy adjusted
+  | 'queue.refilled'      // Queue replenished
+  | 'track.started'       // Track began playing
+  | 'track.ended'         // Track finished
+  | 'spotify.connected'   // Spotify auth successful
+  | 'spotify.disconnected'// Spotify auth cleared
+  | 'error';              // Error occurred
 ```
 
-### Commands
+## Development
 
-```typescript
-// Start a session
-{
-  id: "c_001",
-  ts: 1704067200000,
-  source: { kind: "cli", device: "macos" },
-  type: "session.start",
-  payload: { policy: SessionPolicy }
-}
+```bash
+# Install dependencies
+pnpm install
 
-// Nudge session energy
-{
-  id: "c_002",
-  ts: 1704067200000,
-  source: { kind: "cli", device: "macos" },
-  type: "session.nudge",
-  payload: { direction: "calmer" | "sharper", amount?: number }
-}
+# Build all packages
+pnpm build
 
-// Skip current track
-{
-  id: "c_003",
-  ts: 1704067200000,
-  source: { kind: "cli", device: "macos" },
-  type: "skip",
-  payload: { reason?: string }
-}
+# Development mode (watch)
+pnpm dev
 
-// Stop session
-{
-  id: "c_004",
-  ts: 1704067200000,
-  source: { kind: "cli", device: "macos" },
-  type: "session.stop",
-  payload: {}
-}
+# Type checking
+pnpm lint
+
+# Run tests (Phase 6 - coming soon)
+pnpm test
+
+# Code formatting
+pnpm format
 ```
 
-## Configuration
+### Project Structure
 
-### Session Policy
-
-```typescript
-interface SessionPolicy {
-  version: 1;
-  mode?: 'focus' | 'relax' | 'energize' | 'meditate' | 'workout' | 'custom';
-  durationMs?: number;
-
-  device?: {
-    preferActive?: boolean;
-    deviceId?: string;
-  };
-
-  queue?: {
-    target?: number;
-    refillWhenBelow?: number;
-  };
-
-  hard?: {
-    noVocals?: boolean;
-    explicit?: 'allow' | 'avoid' | 'require';
-    tempo?: { min?: number; max?: number };
-    energy?: { min?: number; max?: number };
-  };
-
-  soft?: {
-    weights?: {
-      energy?: number;
-      instrumentalness?: number;
-      valence?: number;
-      // ...
-    };
-    arc?: {
-      shape?: 'flat' | 'ramp-up' | 'ramp-down' | 'wave';
-      warmupMs?: number;
-      cooldownMs?: number;
-    };
-  };
-
-  sources?: {
-    likedTracks?: boolean;
-    topTracks?: boolean;
-    recentPlays?: boolean;
-    seedPlaylists?: string[];
-    seedArtists?: string[];
-  };
-}
+```
+harmon/
+├── apps/
+│   └── harmond/              # Main daemon application
+├── packages/
+│   ├── harmon-protocol/      # Zod schemas (309 LOC)
+│   ├── harmon-store/         # SQLite persistence (508 LOC)
+│   ├── harmon-core/          # Session engine (complete implementation)
+│   ├── harmon-spotify/       # Spotify API client (972 LOC)
+│   ├── harmon-apple/         # Apple Music client
+│   ├── harmon-logger/        # Structured logging (NEW)
+│   ├── harmon-crypto/        # Encryption utilities (NEW)
+│   └── harmon-flow/          # MCP server
+└── tools/
+    └── Silo/                 # Cookie extraction utility
 ```
 
 ## MCP Server
@@ -332,93 +463,108 @@ pnpm --filter @athena/harmon-flow start
 | `analyze_mood_trends` | Analyze mood trends over time |
 | `get_graph` | Get pattern detection graph |
 
-## Development
+## Spotify Setup
 
-```bash
-# Install dependencies
-pnpm install
+1. **Create Spotify App**: Visit [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+2. **Add Redirect URI**: `http://localhost:17373/v1/auth/spotify/callback`
+3. **Set Environment Variables**:
+   ```bash
+   export SPOTIFY_CLIENT_ID="your_client_id"
+   export SPOTIFY_CLIENT_SECRET="your_client_secret"  # Optional
+   ```
+4. **Start Daemon**: `harmond`
+5. **Get Login URL**: `POST /v1/auth/spotify/login`
+6. **Open in Browser**: Approve access
+7. **Verify**: `GET /v1/status` shows `spotifyConnected: true`
 
-# Build all packages
-pnpm build
+### Required Spotify Scopes
 
-# Run tests
-pnpm test
-
-# Lint
-pnpm lint
-
-# Watch mode
-pnpm dev
-```
-
-## Environment Variables
-
-```bash
-# Spotify credentials
-SPOTIFY_CLIENT_ID=your_client_id
-SPOTIFY_CLIENT_SECRET=your_client_secret
-SPOTIFY_REDIRECT_URI=http://localhost:17373/v1/auth/spotify/callback
-
-# Daemon configuration
-HARMON_PORT=17373
-HARMON_BIND_ADDRESS=127.0.0.1
-HARMON_DB_PATH=.harmon.db
-HARMON_API_TOKEN=your_api_token
-HARMON_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-
-# Apple Music
-APPLE_MUSIC_DEVELOPER_TOKEN=your_developer_token
-APPLE_MUSIC_USER_TOKEN=your_user_token
-APPLE_MUSIC_STOREFRONT=us
-```
-
-## Spotify Authentication
-
-1) Create a Spotify Developer app and add the redirect URI from `SPOTIFY_REDIRECT_URI`.
-2) Start `harmond` with `SPOTIFY_CLIENT_ID` (and `SPOTIFY_CLIENT_SECRET` if using a confidential app).
-3) Request a login URL: `POST /v1/auth/spotify/login`.
-4) Open the URL in a browser and approve access.
-5) The callback will confirm success and `GET /v1/status` will show `spotifyConnected: true`.
-
-For a full setup and usage guide, see `docs/spotify.md`.
-
-## Apple Music
-
-Apple Music endpoints are available when `APPLE_MUSIC_DEVELOPER_TOKEN` is set.
-Library endpoints also require `APPLE_MUSIC_USER_TOKEN`.
-See `docs/apple-music.md` for setup details.
-
-## Next Steps / TODOs
-
-- Validate `harmon auth import` and AppleScript playback on macOS.
-- Ensure Silo cookie extraction is implemented and returning records (the helper depends on it).
-- Expand AppleScript playback controls if needed (seek/shuffle/repeat).
-
-### Spotify Scopes
-
-Harmon requests these scopes for playback + browsing:
-
-- `user-read-playback-state`
-- `user-modify-playback-state`
-- `user-read-currently-playing`
-- `playlist-read-private`
-- `playlist-read-collaborative`
-- `user-read-recently-played`
-- `user-library-read`
+- `user-read-playback-state` - Read current playback state
+- `user-modify-playback-state` - Control playback
+- `user-read-currently-playing` - Read currently playing track
+- `playlist-read-private` - Access private playlists
+- `playlist-read-collaborative` - Access collaborative playlists
+- `user-read-recently-played` - Read recent playback history
+- `user-library-read` - Access saved tracks/albums
+- `user-top-read` - Access top tracks/artists (NEW)
 
 ## Performance
 
-- **Zero memory leaks**: Careful resource management with proper cleanup
-- **Efficient SQLite**: Uses libsql for fast, embedded storage
-- **Streaming**: SSE for real-time updates without polling
-- **Lightweight**: Minimal dependencies, focused on performance
+- ⚡ **Zero memory leaks**: Careful resource management with proper cleanup
+- 🚀 **Efficient SQLite**: Uses libsql for fast, embedded storage
+- 📡 **Streaming**: SSE for real-time updates without polling
+- 🪶 **Lightweight**: Minimal dependencies, focused on performance
+- 🔄 **Smart caching**: Audio features cached to reduce API calls
+- 📊 **Batched requests**: Spotify API calls batched up to 100 items
+
+## Production Checklist
+
+Before deploying to production:
+
+- [ ] Set `NODE_ENV=production`
+- [ ] Generate and set `HARMON_API_TOKEN`
+- [ ] Generate and set `HARMON_ENCRYPTION_SECRET` (min 32 chars)
+- [ ] Configure `HARMON_CORS_ORIGINS` (no wildcards)
+- [ ] Set up Spotify OAuth credentials
+- [ ] Configure logging level (`LOG_LEVEL=info`)
+- [ ] Set up process manager (PM2, systemd)
+- [ ] Configure reverse proxy (nginx, caddy)
+- [ ] Set up SSL/TLS certificates
+- [ ] Monitor logs and error rates
+- [ ] Set up database backups
+
+## Roadmap
+
+### Phase 6: Testing (In Progress)
+- [ ] Vitest workspace configuration
+- [ ] Unit tests for all packages (target: 80%+ coverage)
+- [ ] Integration tests for daemon API
+- [ ] E2E tests for session flows
+- [ ] CI/CD pipeline with GitHub Actions
+
+### Future Enhancements
+- [ ] Adaptive learning from skip behavior
+- [ ] Multi-source playlist blending
+- [ ] Context awareness (time of day, weather)
+- [ ] Genre diversity enforcement
+- [ ] Voice integration
+- [ ] macOS menubar app
+- [ ] Web UI dashboard
+
+## Troubleshooting
+
+### Build Issues on WSL
+
+If you encounter permission errors on WSL:
+```bash
+# Try running on native macOS/Linux instead, or
+# Use sudo (not recommended for development)
+sudo pnpm install
+```
+
+### Spotify Authentication Failed
+
+- Verify `SPOTIFY_CLIENT_ID` is correct
+- Check redirect URI matches exactly
+- Ensure app is not in development mode restrictions
+
+### Queue Not Refilling
+
+- Check Spotify is connected: `GET /v1/status`
+- Verify session has valid policy with sources
+- Check logs for error messages (`LOG_LEVEL=debug`)
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
 
+## Contributing
+
+Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
 ---
 
 <p align="center">
-  Made with ⚡ by Sriinnu
+  <strong>Built with TypeScript, Express, SQLite, and ⚡</strong><br/>
+  Made with ❤️ by <a href="https://github.com/sriinnu">Sriinnu</a>
 </p>
