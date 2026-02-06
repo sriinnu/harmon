@@ -189,10 +189,12 @@ curl -H "Authorization: Bearer $HARMON_API_TOKEN" \
 Harmon enforces strict security in production environments:
 
 - ✅ **API Token Required**: Set `HARMON_API_TOKEN` (required in production)
-- ✅ **Encryption Required**: Set `HARMON_ENCRYPTION_SECRET` for token/cookie encryption
+- 🔐 **Encryption REQUIRED**: Set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - **daemon will not start without it**
 - ✅ **CORS Whitelist**: No wildcard origins allowed in production
 - ✅ **Rate Limiting**: Automatic protection against abuse
 - ✅ **Timing-Safe Auth**: Constant-time token comparison prevents timing attacks
+
+**⚠️ Critical**: The daemon will **refuse to start** in production (`NODE_ENV=production`) if `HARMON_ENCRYPTION_SECRET` is not set. This prevents accidental plaintext storage of Spotify OAuth tokens and cookies.
 
 ### Generating Secrets
 
@@ -220,9 +222,14 @@ export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 #### Required in Production
 ```bash
 HARMON_API_TOKEN=your_api_token              # API authentication
-HARMON_ENCRYPTION_SECRET=your_secret         # Token/cookie encryption (min 32 chars)
+HARMON_ENCRYPTION_SECRET=your_secret         # Token/cookie encryption (min 32 chars) - REQUIRED
 HARMON_CORS_ORIGINS=https://app.example.com  # Comma-separated, no wildcards
 SPOTIFY_CLIENT_ID=your_client_id             # Spotify OAuth
+```
+
+**Note**: `HARMON_ENCRYPTION_SECRET` is **mandatory** in production. The daemon will exit with code 1 if this is not set when `NODE_ENV=production`. Generate a secure secret using:
+```bash
+export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 ```
 
 #### Optional
@@ -503,7 +510,7 @@ Before deploying to production:
 
 - [ ] Set `NODE_ENV=production`
 - [ ] Generate and set `HARMON_API_TOKEN`
-- [ ] Generate and set `HARMON_ENCRYPTION_SECRET` (min 32 chars)
+- [ ] **Generate and set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - MANDATORY**
 - [ ] Configure `HARMON_CORS_ORIGINS` (no wildcards)
 - [ ] Set up Spotify OAuth credentials
 - [ ] Configure logging level (`LOG_LEVEL=info`)
@@ -512,6 +519,8 @@ Before deploying to production:
 - [ ] Set up SSL/TLS certificates
 - [ ] Monitor logs and error rates
 - [ ] Set up database backups
+
+**⚠️ Important**: The daemon will not start if `HARMON_ENCRYPTION_SECRET` is missing in production. This is a safety mechanism to prevent accidental plaintext token storage.
 
 ## Roadmap
 

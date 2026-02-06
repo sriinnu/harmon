@@ -495,6 +495,25 @@ export class HarmonStore {
   getDbPath(): string {
     return this.dbPath;
   }
+
+  /**
+   * Validate encryption is enabled in production
+   * This should be called after the store is initialized
+   */
+  static validateEncryptionInProduction(encryptionEnabled: boolean): void {
+    if (process.env.NODE_ENV === 'production' && !encryptionEnabled) {
+      throw new Error(
+        'Encryption is required in production. Set HARMON_ENCRYPTION_SECRET environment variable.'
+      );
+    }
+  }
+
+  /**
+   * Check if encryption should be required based on environment
+   */
+  static isEncryptionRequired(): boolean {
+    return process.env.NODE_ENV === 'production';
+  }
 }
 
 /**

@@ -5,6 +5,10 @@ dist/
 node_modules/
 *.tsbuildinfo
 
+# Test coverage
+coverage/
+**/coverage/
+
 # Logs
 npm-debug.log*
 pnpm-debug.log*

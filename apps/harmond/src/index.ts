@@ -127,11 +127,29 @@ export class Harmond {
 
     // Initialize encryption if secret provided
     const encryptionSecret = process.env.HARMON_ENCRYPTION_SECRET;
+
+    // Enforce encryption in production
+    if (process.env.NODE_ENV === 'production' && !encryptionSecret) {
+      this.logger.error({
+        message: 'Encryption is required in production',
+        hint: 'Set HARMON_ENCRYPTION_SECRET environment variable (min 32 characters)',
+        example: 'export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)',
+      }, 'FATAL: Missing required encryption configuration');
+      console.error('\n❌ FATAL ERROR: Encryption is required in production\n');
+      console.error('Harmon stores sensitive tokens (Spotify OAuth tokens, cookies) and requires');
+      console.error('encryption to be enabled when running in production mode.\n');
+      console.error('Please set HARMON_ENCRYPTION_SECRET environment variable:');
+      console.error('  export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)\n');
+      console.error('The encryption secret must be at least 32 characters long.\n');
+      process.exit(1);
+    }
+
     if (encryptionSecret) {
       this.encryptor = createEncryptor({ secret: encryptionSecret });
       this.logger.info('Token encryption enabled');
     } else {
       this.logger.warn('Token encryption disabled (HARMON_ENCRYPTION_SECRET not set)');
+      this.logger.warn('This is only acceptable in development. DO NOT run in production without encryption.');
     }
 
     const redirectUri =
@@ -1359,11 +1377,6 @@ end tell`;
   private parseRouteParam(value: string | string[] | undefined): string | null {
     if (!value) return null;
     return Array.isArray(value) ? value[0] : value;
-  }
-
-  private isOriginAllowed(origin?: string): boolean {
-    if (!origin) return false;
-    return this.allowAllOrigins || this.corsOrigins.has(origin);
   }
 
   private requireAuth(req: Request, res: Response, next: NextFunction): void {
