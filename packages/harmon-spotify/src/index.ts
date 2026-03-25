@@ -4,6 +4,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import type { DeviceInfo, TrackInfo } from '@athena/harmon-protocol';
+import type { MusicProvider, PlaybackController, AudioFeatures as CoreAudioFeatures } from '@athena/harmon-core';
 
 const SPOTIFY_ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
@@ -81,6 +82,7 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private tokensLoaded = false;
   private cookies: SpotifyCookieRecord[] | null = null;
   private cookiesLoaded = false;
+  private refreshPromise: Promise<void> | null = null;
   private codeVerifier: string | null = null;
   private state: string | null = null;
 
@@ -138,8 +140,13 @@ class SpotifyAuthImpl implements SpotifyAuth {
     if (!this.codeVerifier) {
       throw new Error('Login flow expired. Request a new login URL.');
     }
-    if (this.state && state && state !== this.state) {
-      throw new Error('Invalid OAuth state');
+    if (this.state) {
+      if (!state) {
+        throw new Error('Missing OAuth state parameter');
+      }
+      if (state !== this.state) {
+        throw new Error('Invalid OAuth state');
+      }
     }
 
     const tokens = await this.exchangeCodeForToken(code, this.codeVerifier);
@@ -149,6 +156,19 @@ class SpotifyAuthImpl implements SpotifyAuth {
   }
 
   async refresh(): Promise<void> {
+    // Prevent concurrent refreshes
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+    this.refreshPromise = this._doRefresh();
+    try {
+      await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  private async _doRefresh(): Promise<void> {
     await this.ensureTokensLoaded();
 
     if (!this.tokens?.refreshToken) {
@@ -416,7 +436,7 @@ export interface SpotifyClient {
   getRecentlyPlayed(options?: SpotifyHistoryOptions): Promise<SpotifyRecentlyPlayedResponse>;
   getSavedTracks(options?: SpotifyListOptions): Promise<SpotifyPagedResponse<SpotifyPlaylistTrack>>;
   getSavedAlbums(options?: SpotifyListOptions): Promise<SpotifyPagedResponse<SpotifySavedAlbum>>;
-  getAudioFeatures(trackIds: string[]): Promise<AudioFeatures[]>;
+  getAudioFeatures(trackIds: string[]): Promise<(AudioFeatures | null)[]>;
   getRecommendations(options: RecommendationSeed): Promise<TrackInfo[]>;
   getTopTracks(options?: { timeRange?: TimeRange; limit?: number; offset?: number }): Promise<SpotifyPagedResponse<TrackInfo>>;
 }
@@ -631,14 +651,14 @@ class SpotifyClientImpl implements SpotifyClient {
     };
   }
 
-  async getAudioFeatures(trackIds: string[]): Promise<AudioFeatures[]> {
+  async getAudioFeatures(trackIds: string[]): Promise<(AudioFeatures | null)[]> {
     if (trackIds.length === 0) {
       return [];
     }
 
     // Spotify API allows max 100 IDs per request
     const BATCH_SIZE = 100;
-    const results: AudioFeatures[] = [];
+    const results: (AudioFeatures | null)[] = [];
 
     for (let i = 0; i < trackIds.length; i += BATCH_SIZE) {
       const batch = trackIds.slice(i, i + BATCH_SIZE);
@@ -649,10 +669,9 @@ class SpotifyClientImpl implements SpotifyClient {
         { ids: batch.join(',') }
       );
 
-      // Filter out nulls (tracks without features)
+      // Preserve null positions for index-based matching
       const batchFeatures = (data.audio_features || [])
-        .filter((f): f is SpotifyAudioFeaturesRaw => f !== null)
-        .map(mapAudioFeatures);
+        .map((f): AudioFeatures | null => f ? mapAudioFeatures(f) : null);
 
       results.push(...batchFeatures);
     }
@@ -806,6 +825,16 @@ class SpotifyClientImpl implements SpotifyClient {
       response = await execute(token);
     }
 
+    // Handle 429 - rate limited (retry up to 2 times)
+    let retries = 0;
+    while (response.status === 429 && retries < 2) {
+      const retryAfter = parseInt(response.headers.get('Retry-After') || '1', 10);
+      const delayMs = Math.min(retryAfter * 1000, 10000); // Cap at 10s
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      response = await execute(token!);
+      retries++;
+    }
+
     if (response.status === 204) {
       return null as T;
     }
@@ -948,7 +977,7 @@ interface SpotifyTrack {
   duration_ms: number;
   uri: string;
   type: string;
-  artists: Array<{ name: string }>;
+  artists: Array<{ id?: string; name: string }>;
   album: { name: string };
 }
 
@@ -1084,9 +1113,11 @@ function mapTrack(track: SpotifyTrack): TrackInfo {
     id: track.id,
     name: track.name,
     artist: track.artists.map((artist) => artist.name).join(', '),
+    artistIds: track.artists.map(a => a.id).filter((id): id is string => !!id),
     album: track.album?.name || '',
     durationMs: track.duration_ms,
     uri: track.uri,
+    provider: 'spotify',
   };
 }
 
@@ -1194,4 +1225,125 @@ export function createSpotifyAuth(config: SpotifyAuthConfig): SpotifyAuth {
 
 export function createSpotifyClient(config: { auth: SpotifyAuth }): SpotifyClient {
   return new SpotifyClientImpl(config.auth);
+}
+
+// ============================================================================
+// MusicProvider / PlaybackController Adapters
+// ============================================================================
+
+/**
+ * Adapts SpotifyClient to the MusicProvider interface.
+ * This is the bridge that lets harmon-core work with Spotify.
+ */
+export class SpotifyMusicProvider implements MusicProvider {
+  readonly name = 'spotify' as const;
+  private client: SpotifyClient;
+
+  constructor(client: SpotifyClient) {
+    this.client = client;
+  }
+
+  isConnected(): boolean {
+    return this.client.isConnected();
+  }
+
+  async search(query: string, limit?: number): Promise<TrackInfo[]> {
+    const result = await this.client.search(query, ['track'], { limit });
+    return result.tracks;
+  }
+
+  async getLibraryTracks(options?: { limit?: number; offset?: number }): Promise<TrackInfo[]> {
+    const result = await this.client.getSavedTracks(options);
+    return result.items.map(item => item.track);
+  }
+
+  async getTopTracks(options?: { limit?: number; timeRange?: string }): Promise<TrackInfo[]> {
+    const result = await this.client.getTopTracks({
+      limit: options?.limit,
+      timeRange: (options?.timeRange as TimeRange) || 'medium_term',
+    });
+    return result.items;
+  }
+
+  async getRecentlyPlayed(options?: { limit?: number }): Promise<TrackInfo[]> {
+    const result = await this.client.getRecentlyPlayed(options);
+    return result.items.map(item => item.track);
+  }
+
+  async getPlaylistTracks(playlistId: string, options?: { limit?: number }): Promise<TrackInfo[]> {
+    const result = await this.client.getPlaylistTracks(playlistId, options);
+    return result.items.map(item => item.track);
+  }
+
+  async getRecommendations(options: { seedTrackIds?: string[]; limit?: number }): Promise<TrackInfo[]> {
+    return this.client.getRecommendations({
+      seedTracks: options.seedTrackIds,
+      limit: options.limit,
+    });
+  }
+
+  async getTrackFeatures(trackIds: string[]): Promise<(CoreAudioFeatures | null)[]> {
+    return this.client.getAudioFeatures(trackIds);
+  }
+}
+
+/**
+ * Adapts SpotifyClient to the PlaybackController interface.
+ */
+export class SpotifyPlaybackController implements PlaybackController {
+  readonly name = 'spotify' as const;
+  private client: SpotifyClient;
+
+  constructor(client: SpotifyClient) {
+    this.client = client;
+  }
+
+  async play(options?: { uri?: string; trackId?: string }): Promise<void> {
+    const uri = options?.trackId ? `spotify:track:${options.trackId}` : options?.uri;
+    await this.client.play(uri ? { uri } : undefined);
+  }
+
+  async pause(): Promise<void> {
+    await this.client.pause();
+  }
+
+  async next(): Promise<void> {
+    await this.client.next();
+  }
+
+  async previous(): Promise<void> {
+    await this.client.previous();
+  }
+
+  async seek(positionMs: number): Promise<void> {
+    await this.client.seek(positionMs);
+  }
+
+  async setVolume(volumePercent: number): Promise<void> {
+    await this.client.setVolume(volumePercent);
+  }
+
+  async setShuffle(state: boolean): Promise<void> {
+    await this.client.setShuffle(state);
+  }
+
+  async setRepeat(state: 'off' | 'track' | 'context'): Promise<void> {
+    await this.client.setRepeat(state);
+  }
+
+  async getNowPlaying(): Promise<TrackInfo | null> {
+    return this.client.getNowPlaying();
+  }
+
+  async addToQueue(trackUri: string): Promise<void> {
+    await this.client.addToQueue(trackUri);
+  }
+}
+
+export function createSpotifyProvider(client: SpotifyClient): MusicProvider {
+  return new SpotifyMusicProvider(client);
+}
+
+export function createSpotifyPlayback(client: SpotifyClient): PlaybackController {
+  return new SpotifyPlaybackController(client);
 }

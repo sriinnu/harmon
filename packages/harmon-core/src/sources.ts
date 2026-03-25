@@ -1,20 +1,27 @@
 /**
- * Candidate fetching from Spotify sources
+ * Candidate fetching from music providers (provider-agnostic)
  */
 
-import type { SpotifyClient } from '@athena/harmon-spotify';
-import type { SourcesConfig, TrackWithFeatures } from './types.js';
+import type { TrackInfo } from '@athena/harmon-protocol';
+import type { MusicProvider, SourcesConfig, TrackWithFeatures, AudioFeatures } from './types.js';
+
+/** Default features for tracks from providers without audio analysis (Apple Music, YouTube Music) */
+const DEFAULT_FEATURES: AudioFeatures = {
+  energy: 0.5, instrumentalness: 0.1, speechiness: 0.1, valence: 0.5,
+  acousticness: 0.3, tempo: 120, danceability: 0.5, liveness: 0.2,
+  loudness: -8, key: 5, mode: 1, timeSignature: 4,
+};
 
 /**
  * Fetch candidate tracks from configured sources
  *
- * @param client Spotify client
+ * @param provider Music provider (Spotify, Apple Music, YouTube Music, etc.)
  * @param sources Sources configuration
  * @param targetCount Target number of candidates
  * @returns Array of tracks with audio features
  */
 export async function fetchCandidates(
-  client: SpotifyClient,
+  provider: MusicProvider,
   sources: SourcesConfig,
   targetCount: number
 ): Promise<TrackWithFeatures[]> {
@@ -22,41 +29,35 @@ export async function fetchCandidates(
   const perSource = Math.ceil(targetCount / countActiveSources(sources));
 
   try {
-    // Liked tracks
+    // Liked/library tracks
     if (sources.likedTracks) {
-      const liked = await client.getSavedTracks({ limit: perSource });
-      const tracks = liked.items.map(item => item.track);
-      const withFeatures = await enrichWithFeatures(client, tracks);
+      const tracks = await provider.getLibraryTracks({ limit: perSource });
+      const withFeatures = await enrichWithFeatures(provider, tracks);
       candidates.push(...withFeatures);
     }
 
     // Top tracks
     if (sources.topTracks) {
-      const top = await client.getTopTracks({
-        timeRange: 'medium_term',
-        limit: perSource
-      });
-      const withFeatures = await enrichWithFeatures(client, top.items);
+      const tracks = await provider.getTopTracks({ limit: perSource });
+      const withFeatures = await enrichWithFeatures(provider, tracks);
       candidates.push(...withFeatures);
     }
 
     // Recent plays
     if (sources.recentPlays) {
-      const recent = await client.getRecentlyPlayed({ limit: perSource });
-      const tracks = recent.items.map(item => item.track);
-      const withFeatures = await enrichWithFeatures(client, tracks);
+      const tracks = await provider.getRecentlyPlayed({ limit: perSource });
+      const withFeatures = await enrichWithFeatures(provider, tracks);
       candidates.push(...withFeatures);
     }
 
     // Seed playlists
     if (sources.seedPlaylists && sources.seedPlaylists.length > 0) {
       for (const playlistId of sources.seedPlaylists.slice(0, 3)) {
-        const playlist = await client.getPlaylistTracks(
+        const tracks = await provider.getPlaylistTracks(
           extractId(playlistId),
           { limit: Math.ceil(perSource / sources.seedPlaylists.length) }
         );
-        const tracks = playlist.items.map(item => item.track);
-        const withFeatures = await enrichWithFeatures(client, tracks);
+        const withFeatures = await enrichWithFeatures(provider, tracks);
         candidates.push(...withFeatures);
       }
     }
@@ -67,23 +68,20 @@ export async function fetchCandidates(
         targetCount * (sources.discovery.ratio || 0.15)
       );
 
-      // Use seed artists or top tracks as seeds
       const seedTracks = candidates.slice(0, 5).map(t => t.id);
 
       if (seedTracks.length > 0) {
-        const recommendations = await client.getRecommendations({
-          seedTracks,
+        const recommendations = await provider.getRecommendations({
+          seedTrackIds: seedTracks,
           limit: discoveryCount,
         });
-        const withFeatures = await enrichWithFeatures(client, recommendations);
+        const withFeatures = await enrichWithFeatures(provider, recommendations);
         candidates.push(...withFeatures);
       }
     }
 
     // Deduplicate by track ID
-    const unique = deduplicateTracks(candidates);
-
-    return unique;
+    return deduplicateTracks(candidates);
   } catch (error) {
     console.error('Error fetching candidates:', error);
     return candidates;  // Return what we have
@@ -91,32 +89,30 @@ export async function fetchCandidates(
 }
 
 /**
- * Enrich tracks with audio features
+ * Enrich tracks with audio features.
+ * Uses positional correspondence — provider.getTrackFeatures returns
+ * (AudioFeatures | null)[] with nulls preserved at correct indices.
  */
 async function enrichWithFeatures(
-  client: SpotifyClient,
-  tracks: Array<{ id: string; name: string; artist: string; album: string; durationMs: number; uri?: string }>
+  provider: MusicProvider,
+  tracks: TrackInfo[]
 ): Promise<TrackWithFeatures[]> {
   if (tracks.length === 0) {
     return [];
   }
 
   const trackIds = tracks.map(t => t.id);
-  const features = await client.getAudioFeatures(trackIds);
+  const featureResults = await provider.getTrackFeatures(trackIds);
 
-  // Match features to tracks
+  // Match features to tracks by position (nulls preserved).
+  // Tracks without features get DEFAULT_FEATURES so non-Spotify providers still work.
   const enriched: TrackWithFeatures[] = [];
-
   for (let i = 0; i < tracks.length; i++) {
-    const track = tracks[i];
-    const feature = features[i];
-
-    if (feature) {
-      enriched.push({
-        ...track,
-        features: feature,
-      });
-    }
+    const feature = featureResults[i];
+    enriched.push({
+      ...tracks[i],
+      features: feature || DEFAULT_FEATURES,
+    });
   }
 
   return enriched;
@@ -155,13 +151,15 @@ function countActiveSources(sources: SourcesConfig): number {
 }
 
 /**
- * Extract Spotify ID from URI or URL
+ * Extract provider ID from URI or URL
  */
 function extractId(uri: string): string {
+  // Spotify URIs
   if (uri.startsWith('spotify:')) {
     return uri.split(':').pop() || uri;
   }
-  if (uri.includes('spotify.com/')) {
+  // Spotify/YouTube URLs
+  if (uri.includes('spotify.com/') || uri.includes('youtube.com/') || uri.includes('music.apple.com/')) {
     const parts = uri.split('/');
     return parts[parts.length - 1].split('?')[0];
   }

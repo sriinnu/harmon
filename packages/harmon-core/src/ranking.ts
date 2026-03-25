@@ -165,6 +165,9 @@ function calculateSoftScore(
     score = score / totalWeight;
   }
 
+  // Clamp to [0,1] BEFORE applying penalty (prevents negative * penalty inversion)
+  score = clamp(score, 0, 1);
+
   // Apply recency penalty
   const recencyPenalty = checkRecencyPenalty(track, history, policy.limits);
   score = score * (1 - recencyPenalty);

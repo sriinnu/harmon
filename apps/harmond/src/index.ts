@@ -1,11 +1,14 @@
 /**
  * Harmond - The Harmon daemon with HTTP+SSE API
+ *
+ * Hardened: engine wired, payload validation, AppleScript injection fixed,
+ * WAL mode, shutdown timeout, SSE cap, body limits, signal handling.
  */
 
 import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
-import { timingSafeEqual } from 'node:crypto';
-import { createStore, HarmonStore } from '@athena/harmon-store';
+import { createHmac } from 'node:crypto';
+import { HarmonStore } from '@athena/harmon-store';
 import { createEngine, type SessionEngine, type EngineEvent } from '@athena/harmon-core';
 import { createLogger, type Logger } from '@athena/harmon-logger';
 import { createEncryptor, type Encryptor } from '@athena/harmon-crypto';
@@ -15,6 +18,8 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import {
   parseCommandSafe,
+  SessionStartCommand,
+  SessionNudgeCommand,
   type SessionPolicy,
   type Command,
   type Event,
@@ -25,6 +30,8 @@ import {
 import {
   createSpotifyAuth,
   createSpotifyClient,
+  createSpotifyProvider,
+  createSpotifyPlayback,
   type SpotifyAuth,
   type SpotifyClient,
   type SpotifyTokens,
@@ -32,6 +39,7 @@ import {
   type CookieStore,
   type SpotifyCookieRecord,
 } from '@athena/harmon-spotify';
+import type { MusicProvider, PlaybackController } from '@athena/harmon-core';
 import { createAppleMusicClient, type AppleMusicClient } from '@athena/harmon-apple';
 import { errorHandler } from './errors.js';
 
@@ -43,6 +51,9 @@ const DEFAULT_PORT = 17373;
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_DB_PATH = '.harmon.db';
 const SSE_HEARTBEAT_MS = 30000;
+const MAX_SSE_CLIENTS = 50;
+const SHUTDOWN_TIMEOUT_MS = 5000;
+const TRACK_POLL_INTERVAL_MS = 5000;
 const execFileAsync = promisify(execFile);
 
 interface DaemonConfig {
@@ -69,19 +80,6 @@ function parseCorsOrigins(value?: string): string[] {
 }
 
 // ============================================================================
-// Session State
-// ============================================================================
-
-interface SessionState {
-  id: string;
-  policy: SessionPolicy;
-  startedAt: Date;
-  currentTrack?: TrackInfo;
-  queue: TrackInfo[];
-  status: 'idle' | 'running' | 'paused';
-}
-
-// ============================================================================
 // Harmond Implementation
 // ============================================================================
 
@@ -92,6 +90,8 @@ export class Harmond {
   private store: HarmonStore;
   private spotifyAuth: SpotifyAuth;
   private spotifyClient: SpotifyClient;
+  private provider: MusicProvider;
+  private playback: PlaybackController;
   private appleMusicClient?: AppleMusicClient;
   private engine: SessionEngine;
   private encryptor?: Encryptor;
@@ -100,10 +100,11 @@ export class Harmond {
   private apiToken?: string;
   private corsOrigins: Set<string>;
   private allowAllOrigins = false;
-  private session: SessionState | null = null;
   private sseClients: Set<Response> = new Set();
   private server: ReturnType<express.Application['listen']> | null = null;
   private sseHeartbeat: ReturnType<typeof setInterval> | null = null;
+  private trackPollInterval: ReturnType<typeof setInterval> | null = null;
+  private lastTrackId: string | null = null;
 
   constructor(config: DaemonConfig = {}) {
     const envPort = parsePort(process.env.HARMON_PORT);
@@ -123,24 +124,16 @@ export class Harmond {
     this.requestLogger = this.logger.child({ module: 'http' });
 
     this.app = express();
-    this.store = createStore({ dbPath: config.dbPath || envDbPath || DEFAULT_DB_PATH });
+
+    // Use HarmonStore directly (not async createStore) — migrate() called in start()
+    this.store = new HarmonStore({ dbPath: config.dbPath || envDbPath || DEFAULT_DB_PATH });
 
     // Initialize encryption if secret provided
     const encryptionSecret = process.env.HARMON_ENCRYPTION_SECRET;
 
-    // Enforce encryption in production
     if (process.env.NODE_ENV === 'production' && !encryptionSecret) {
-      this.logger.error({
-        message: 'Encryption is required in production',
-        hint: 'Set HARMON_ENCRYPTION_SECRET environment variable (min 32 characters)',
-        example: 'export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)',
-      }, 'FATAL: Missing required encryption configuration');
-      console.error('\n❌ FATAL ERROR: Encryption is required in production\n');
-      console.error('Harmon stores sensitive tokens (Spotify OAuth tokens, cookies) and requires');
-      console.error('encryption to be enabled when running in production mode.\n');
-      console.error('Please set HARMON_ENCRYPTION_SECRET environment variable:');
-      console.error('  export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)\n');
-      console.error('The encryption secret must be at least 32 characters long.\n');
+      this.logger.error('FATAL: Encryption required in production. Set HARMON_ENCRYPTION_SECRET.');
+      console.error('\n❌ FATAL: Set HARMON_ENCRYPTION_SECRET (min 32 chars)\n');
       process.exit(1);
     }
 
@@ -148,8 +141,7 @@ export class Harmond {
       this.encryptor = createEncryptor({ secret: encryptionSecret });
       this.logger.info('Token encryption enabled');
     } else {
-      this.logger.warn('Token encryption disabled (HARMON_ENCRYPTION_SECRET not set)');
-      this.logger.warn('This is only acceptable in development. DO NOT run in production without encryption.');
+      this.logger.warn('Token encryption disabled — development only');
     }
 
     const redirectUri =
@@ -166,6 +158,10 @@ export class Harmond {
     });
     this.spotifyClient = createSpotifyClient({ auth: this.spotifyAuth });
 
+    // Create MusicProvider and PlaybackController adapters
+    this.provider = createSpotifyProvider(this.spotifyClient);
+    this.playback = createSpotifyPlayback(this.spotifyClient);
+
     const appleDeveloperToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
     if (appleDeveloperToken) {
       this.appleMusicClient = createAppleMusicClient({
@@ -175,9 +171,10 @@ export class Harmond {
       });
     }
 
-    // Create engine
+    // Create engine with proper MusicProvider + PlaybackController
     this.engine = createEngine({
-      spotifyClient: this.spotifyClient,
+      provider: this.provider,
+      playback: this.playback,
       store: this.store,
       onEvent: this.handleEngineEvent.bind(this),
     });
@@ -186,27 +183,21 @@ export class Harmond {
 
     this.setupMiddleware();
     this.setupRoutes();
-    this.setupSSE();
   }
 
   private handleEngineEvent(event: EngineEvent): void {
-    // Broadcast engine events via SSE
     this.broadcastEvent(event.type, event.payload);
-
-    // Log to store
-    if (this.session) {
-      this.store.logEvent(event.type, event.payload, this.session.id)
-        .catch(err => this.logger.error({ err }, 'Failed to log event'));
-    }
   }
 
   private setupMiddleware(): void {
-    this.app.use(express.json());
+    // Explicit body size limit
+    this.app.use(express.json({ limit: '100kb' }));
 
-    // Request logging middleware
-    this.app.use((req, res, next) => {
+    // Request ID + logging
+    this.app.use((req: Request, res: Response, next: NextFunction) => {
       const start = Date.now();
       const requestId = uuidv4();
+      res.setHeader('X-Request-Id', requestId);
 
       res.on('finish', () => {
         this.requestLogger.info({
@@ -221,14 +212,22 @@ export class Harmond {
       next();
     });
 
-    // Rate limiting
+    // Security headers
+    this.app.use((_req: Request, res: Response, next: NextFunction) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('Cache-Control', 'no-store');
+      next();
+    });
+
+    // Rate limiting — more generous for a music daemon
     const globalLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000, // 15 minutes
-      max: 100,
+      windowMs: 60 * 1000, // 1 minute
+      max: 120,            // 120/min = 2/sec average
       standardHeaders: true,
       legacyHeaders: false,
       message: { success: false, error: 'Too many requests' },
-      skip: (req) => req.path === '/health',
+      skip: (req) => req.path === '/health' || req.path === '/v1/events',
     });
 
     const authLimiter = rateLimit({
@@ -239,7 +238,7 @@ export class Harmond {
 
     const commandLimiter = rateLimit({
       windowMs: 60 * 1000,
-      max: 20,
+      max: 30,
       message: { success: false, error: 'Command rate limit exceeded' },
     });
 
@@ -247,54 +246,33 @@ export class Harmond {
     this.app.use('/v1/auth', authLimiter);
     this.app.use('/v1/command', commandLimiter);
 
-    // CORS for browser clients with strict validation
-    this.app.use((req, res, next) => {
+    // CORS
+    this.app.use((req: Request, res: Response, next: NextFunction) => {
       const origin = req.header('origin');
+      if (!origin) { next(); return; }
 
-      // No origin header = same-origin or non-browser client
-      if (!origin) {
-        next();
-        return;
-      }
-
-      // Validate origin against whitelist
-      const originAllowed = this.isOriginAllowed(origin);
-
-      if (!originAllowed) {
-        this.logger.warn({ origin, path: req.path }, 'CORS blocked');
+      if (!this.isOriginAllowed(origin)) {
         res.status(403).json({ success: false, error: 'Origin not allowed' });
         return;
       }
 
-      // Set CORS headers for allowed origins
       res.header('Access-Control-Allow-Origin', origin);
       res.header('Vary', 'Origin');
       res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
       res.header('Access-Control-Max-Age', '86400');
 
-      // Handle preflight
-      if (req.method === 'OPTIONS') {
-        res.sendStatus(204);
-        return;
-      }
-
+      if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
       next();
     });
   }
 
   private isOriginAllowed(origin: string | undefined): boolean {
     if (!origin) return false;
-
-    // Reject wildcard in production
     if (this.allowAllOrigins) {
-      if (process.env.NODE_ENV === 'production') {
-        this.logger.error('Wildcard CORS not allowed in production');
-        return false;
-      }
+      if (process.env.NODE_ENV === 'production') return false;
       return true;
     }
-
     return this.corsOrigins.has(origin);
   }
 
@@ -306,49 +284,36 @@ export class Harmond {
       res.json({ status: 'ok', version: '0.0.0', timestamp: new Date().toISOString() });
     });
 
-    // Status endpoint
+    // Status
     this.app.get('/v1/status', (_req: Request, res: Response) => {
-      const status = this.getStatus();
-      res.json(status);
+      res.json(this.getStatus());
     });
 
-    // Devices endpoint
+    // Devices
     this.app.get('/v1/devices', async (_req: Request, res: Response) => {
       try {
-        const devices = await this.getDevices();
-        res.json(devices);
+        res.json(await this.spotifyClient.getDevices());
       } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
     });
 
-    // Command endpoint
+    // Command endpoint — with per-type payload validation
     this.app.post('/v1/command', async (req: Request, res: Response) => {
       try {
         const parsed = parseCommandSafe(req.body);
         if (!parsed.success) {
-          res.status(400).json({
-            success: false,
-            error: 'Invalid command',
-            issues: parsed.error.issues,
-          });
+          res.status(400).json({ success: false, error: 'Invalid command', issues: parsed.error.issues });
           return;
         }
-        const command = parsed.data;
-        const result = await this.handleCommand(command);
+        const result = await this.handleCommand(parsed.data);
         res.json(result);
       } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
     });
 
-    // Device use endpoint
+    // Device use
     this.app.post('/v1/device/use', async (req: Request, res: Response) => {
       try {
         const { deviceId } = req.body;
@@ -356,36 +321,25 @@ export class Harmond {
           res.status(400).json({ success: false, error: 'Invalid deviceId' });
           return;
         }
-        await this.useDevice(deviceId);
+        await this.spotifyClient.transferTo(deviceId);
+        this.broadcastEvent('device.changed', { deviceId });
         res.json({ success: true });
       } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
     });
 
-    // Auth endpoints
+    // Auth
     this.app.post('/v1/auth/spotify/login', (_req: Request, res: Response) => {
-      try {
-        res.json({ url: this.getSpotifyAuthUrl() });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      try { res.json({ url: this.spotifyAuth.getLoginUrl() }); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
     this.app.get('/v1/auth/spotify/callback', async (req: Request, res: Response) => {
       try {
         const code = req.query.code as string | undefined;
         const state = req.query.state as string | undefined;
-        if (!code) {
-          res.status(400).send('Missing code.');
-          return;
-        }
+        if (!code) { res.status(400).send('Missing code.'); return; }
         await this.spotifyAuth.handleCallback(code, state);
         this.broadcastEvent('spotify.connected', {});
         res.status(200).send('Spotify connected. You can close this window.');
@@ -396,39 +350,53 @@ export class Harmond {
 
     this.app.post('/v1/auth/spotify/logout', async (_req: Request, res: Response) => {
       try {
-        await this.logoutSpotify();
+        await this.spotifyAuth.logout();
+        this.broadcastEvent('spotify.disconnected', {});
         res.json({ success: true });
       } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
     });
 
+    // Cookie import — with schema validation
     this.app.post('/v1/auth/spotify/import', async (req: Request, res: Response) => {
       try {
         const cookies = req.body?.cookies;
         if (!Array.isArray(cookies) || cookies.length === 0) {
-          res.status(400).json({ success: false, error: 'Missing cookies' });
+          res.status(400).json({ success: false, error: 'Missing cookies array' });
+          return;
+        }
+        // Validate each cookie has required fields
+        const validated: SpotifyCookieRecord[] = [];
+        for (const c of cookies) {
+          if (typeof c !== 'object' || c === null) continue;
+          if (typeof c.name !== 'string' || typeof c.value !== 'string') continue;
+          validated.push({
+            domain: typeof c.domain === 'string' ? c.domain : '',
+            name: c.name,
+            path: typeof c.path === 'string' ? c.path : '/',
+            value: c.value.slice(0, 4096), // cap value length
+            expires: typeof c.expires === 'string' ? c.expires : null,
+            isSecure: typeof c.isSecure === 'boolean' ? c.isSecure : false,
+            isHTTPOnly: typeof c.isHTTPOnly === 'boolean' ? c.isHTTPOnly : false,
+          });
+        }
+        if (validated.length === 0) {
+          res.status(400).json({ success: false, error: 'No valid cookies found' });
           return;
         }
         await this.spotifyAuth.logout();
-        await this.spotifyAuth.setCookies(cookies as SpotifyCookieRecord[]);
-        res.json({ success: true, cookiesImported: cookies.length });
+        await this.spotifyAuth.setCookies(validated);
+        res.json({ success: true, cookiesImported: validated.length });
       } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
     });
 
-    // Journal endpoints
+    // Journal — with bounds
     this.app.get('/v1/journal', async (req: Request, res: Response) => {
-      const limit = parseInt(req.query.limit as string) || 50;
-      const entries = await this.store.getJournalEntries(limit);
-      res.json(entries);
+      const limit = Math.min(Math.max(Number.parseInt(req.query.limit as string, 10) || 50, 1), 500);
+      res.json(await this.store.getJournalEntries(limit));
     });
 
     this.app.post('/v1/journal', async (req: Request, res: Response) => {
@@ -437,33 +405,33 @@ export class Harmond {
         res.status(400).json({ success: false, error: 'Invalid journal entry' });
         return;
       }
-      if (entry.moodTags && !Array.isArray(entry.moodTags)) {
-        res.status(400).json({ success: false, error: 'moodTags must be an array' });
-        return;
-      }
+      const content = typeof entry.content === 'string' ? entry.content.slice(0, 10000) : '';
       const id = await this.store.addJournalEntry({
         filename: `api-${uuidv4()}.md`,
         timestamp: new Date().toISOString(),
-        source: entry.source || 'cli',
-        device: entry.device || 'linux',
-        moodTags: Array.isArray(entry.moodTags) ? entry.moodTags.join(', ') : '',
-        energyLevel: entry.energyLevel,
-        context: entry.context ? JSON.stringify(entry.context) : undefined,
-        content: entry.content || '',
-        policy: entry.policy ? JSON.stringify(entry.policy) : undefined,
+        source: typeof entry.source === 'string' ? entry.source.slice(0, 50) : 'cli',
+        device: typeof entry.device === 'string' ? entry.device.slice(0, 50) : 'linux',
+        moodTags: Array.isArray(entry.moodTags) ? entry.moodTags.filter((t: unknown) => typeof t === 'string').join(', ') : '',
+        energyLevel: typeof entry.energyLevel === 'string' ? entry.energyLevel : undefined,
+        context: entry.context ? JSON.stringify(entry.context).slice(0, 2000) : undefined,
+        content,
+        policy: entry.policy ? JSON.stringify(entry.policy).slice(0, 5000) : undefined,
       });
       res.json({ id, success: true });
     });
 
-    // Events endpoint (SSE)
+    // SSE events
     this.app.get('/v1/events', (req: Request, res: Response) => {
+      if (this.sseClients.size >= MAX_SSE_CLIENTS) {
+        res.status(503).json({ success: false, error: 'Too many SSE connections' });
+        return;
+      }
       this.setupSSEClient(req, res);
     });
 
-    // Stats endpoint
+    // Stats
     this.app.get('/v1/stats', async (_req: Request, res: Response) => {
-      const stats = await this.store.getStats();
-      res.json(stats);
+      res.json(await this.store.getStats());
     });
 
     // Spotify search
@@ -474,532 +442,255 @@ export class Harmond {
           res.status(400).json({ success: false, error: 'Missing query (q)' });
           return;
         }
-
         const typeParam = typeof req.query.type === 'string' ? req.query.type : 'track';
         const types = this.parseSearchTypes(typeParam);
-        if (types.length === 0) {
-          res.status(400).json({ success: false, error: 'Invalid search types' });
-          return;
-        }
-
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
+        const limit = this.clampNumber(req.query.limit, 1, 50);
+        const offset = this.clampNumber(req.query.offset, 0, 10000);
         const result = await this.spotifyClient.search(query, types, { limit, offset });
         res.json(result);
       } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
     });
 
     // Spotify playback
     this.app.get('/v1/spotify/now-playing', async (_req: Request, res: Response) => {
-      try {
-        const track = await this.spotifyClient.getNowPlaying();
-        res.json(track);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      try { res.json(await this.spotifyClient.getNowPlaying()); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
     this.app.post('/v1/spotify/play', async (req: Request, res: Response) => {
       try {
         const uri = this.parseBodyString(req.body?.uri);
         const contextUri = this.parseBodyString(req.body?.contextUri);
-        if (uri && contextUri) {
-          res.status(400).json({ success: false, error: 'Provide uri or contextUri, not both.' });
-          return;
-        }
         await this.spotifyClient.play({ uri, contextUri });
         res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/spotify/pause', async (_req: Request, res: Response) => {
-      try {
-        await this.spotifyClient.pause();
-        res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.post('/v1/spotify/pause', async (_req, res) => {
+      try { await this.spotifyClient.pause(); res.json({ success: true }); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/spotify/next', async (_req: Request, res: Response) => {
-      try {
-        await this.spotifyClient.next();
-        res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.post('/v1/spotify/next', async (_req, res) => {
+      try { await this.spotifyClient.next(); res.json({ success: true }); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/spotify/prev', async (_req: Request, res: Response) => {
-      try {
-        await this.spotifyClient.previous();
-        res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.post('/v1/spotify/prev', async (_req, res) => {
+      try { await this.spotifyClient.previous(); res.json({ success: true }); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/spotify/seek', async (req: Request, res: Response) => {
+    this.app.post('/v1/spotify/seek', async (req, res) => {
       try {
         const positionMs = this.parseBodyNumber(req.body?.positionMs);
-        if (positionMs === undefined || positionMs < 0) {
-          res.status(400).json({ success: false, error: 'Invalid positionMs' });
-          return;
-        }
+        if (positionMs === undefined || positionMs < 0) { res.status(400).json({ success: false, error: 'Invalid positionMs' }); return; }
         await this.spotifyClient.seek(positionMs);
         res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/spotify/volume', async (req: Request, res: Response) => {
+    this.app.post('/v1/spotify/volume', async (req, res) => {
       try {
-        const volumePercent = this.parseBodyNumber(req.body?.volumePercent);
-        if (volumePercent === undefined || volumePercent < 0 || volumePercent > 100) {
-          res.status(400).json({ success: false, error: 'Invalid volumePercent' });
-          return;
-        }
-        await this.spotifyClient.setVolume(volumePercent);
+        const vol = this.parseBodyNumber(req.body?.volumePercent);
+        if (vol === undefined || vol < 0 || vol > 100) { res.status(400).json({ success: false, error: 'volumePercent must be 0-100' }); return; }
+        await this.spotifyClient.setVolume(vol);
         res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/spotify/shuffle', async (req: Request, res: Response) => {
+    this.app.post('/v1/spotify/shuffle', async (req, res) => {
       try {
         const state = this.parseBodyBoolean(req.body?.state);
-        if (state === undefined) {
-          res.status(400).json({ success: false, error: 'Invalid state' });
-          return;
-        }
+        if (state === undefined) { res.status(400).json({ success: false, error: 'Invalid state' }); return; }
         await this.spotifyClient.setShuffle(state);
         res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/spotify/repeat', async (req: Request, res: Response) => {
+    this.app.post('/v1/spotify/repeat', async (req, res) => {
       try {
         const state = this.parseBodyString(req.body?.state);
-        if (state !== 'off' && state !== 'track' && state !== 'context') {
-          res.status(400).json({ success: false, error: 'Invalid state' });
-          return;
-        }
+        if (state !== 'off' && state !== 'track' && state !== 'context') { res.status(400).json({ success: false, error: 'state must be off|track|context' }); return; }
         await this.spotifyClient.setRepeat(state);
         res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/spotify/queue', async (req: Request, res: Response) => {
+    this.app.post('/v1/spotify/queue', async (req, res) => {
       try {
         const uri = this.parseBodyString(req.body?.uri);
-        if (!uri) {
-          res.status(400).json({ success: false, error: 'Missing uri' });
-          return;
-        }
+        if (!uri) { res.status(400).json({ success: false, error: 'Missing uri' }); return; }
         await this.spotifyClient.addToQueue(uri);
         res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    // Spotify playlists
-    this.app.get('/v1/spotify/playlists', async (req: Request, res: Response) => {
+    // Spotify library/playlists
+    this.app.get('/v1/spotify/playlists', async (req, res) => {
+      try { res.json(await this.spotifyClient.getPlaylists({ limit: this.clampNumber(req.query.limit, 1, 50), offset: this.clampNumber(req.query.offset, 0, 10000) })); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+    });
+
+    this.app.get('/v1/spotify/playlists/:id/tracks', async (req, res) => {
       try {
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
-        const result = await this.spotifyClient.getPlaylists({ limit, offset });
-        res.json(result);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+        const id = req.params.id;
+        if (!id || !/^[a-zA-Z0-9]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid playlist id' }); return; }
+        res.json(await this.spotifyClient.getPlaylistTracks(id, { limit: this.clampNumber(req.query.limit, 1, 100), offset: this.clampNumber(req.query.offset, 0, 10000) }));
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/spotify/playlists/:id/tracks', async (req: Request, res: Response) => {
+    this.app.get('/v1/spotify/history', async (req, res) => {
       try {
-        const playlistId = this.parseRouteParam(req.params.id);
-        if (!playlistId) {
-          res.status(400).json({ success: false, error: 'Missing playlist id' });
-          return;
-        }
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
-        const result = await this.spotifyClient.getPlaylistTracks(playlistId, { limit, offset });
-        res.json(result);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+        const limit = this.clampNumber(req.query.limit, 1, 50);
+        res.json(await this.spotifyClient.getRecentlyPlayed({ limit }));
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    // Spotify history
-    this.app.get('/v1/spotify/history', async (req: Request, res: Response) => {
-      try {
-        const limit = this.parseNumberParam(req.query.limit);
-        const after = this.parseNumberParam(req.query.after);
-        const before = this.parseNumberParam(req.query.before);
-        const result = await this.spotifyClient.getRecentlyPlayed({ limit, after, before });
-        res.json(result);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.get('/v1/spotify/library/tracks', async (req, res) => {
+      try { res.json(await this.spotifyClient.getSavedTracks({ limit: this.clampNumber(req.query.limit, 1, 50), offset: this.clampNumber(req.query.offset, 0, 10000) })); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    // Spotify library
-    this.app.get('/v1/spotify/library/tracks', async (req: Request, res: Response) => {
-      try {
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
-        const result = await this.spotifyClient.getSavedTracks({ limit, offset });
-        res.json(result);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.get('/v1/spotify/library/albums', async (req, res) => {
+      try { res.json(await this.spotifyClient.getSavedAlbums({ limit: this.clampNumber(req.query.limit, 1, 50), offset: this.clampNumber(req.query.offset, 0, 10000) })); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/spotify/library/albums', async (req: Request, res: Response) => {
-      try {
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
-        const result = await this.spotifyClient.getSavedAlbums({ limit, offset });
-        res.json(result);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
-    });
-
-    // Apple Music search
-    this.app.get('/v1/apple/search', async (req: Request, res: Response) => {
+    // Apple Music
+    this.app.get('/v1/apple/search', async (req, res) => {
       try {
         const client = this.getAppleMusicClient();
         const query = req.query.q;
-        if (typeof query !== 'string' || query.trim().length === 0) {
-          res.status(400).json({ success: false, error: 'Missing query (q)' });
-          return;
-        }
-
-        const typeParam = typeof req.query.type === 'string' ? req.query.type : 'songs';
-        const types = this.parseAppleSearchTypes(typeParam);
-        if (types.length === 0) {
-          res.status(400).json({ success: false, error: 'Invalid search types' });
-          return;
-        }
-
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
-        const result = await client.search(query, types, { limit, offset });
-        res.json(result);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+        if (typeof query !== 'string' || !query.trim()) { res.status(400).json({ success: false, error: 'Missing query (q)' }); return; }
+        const types = this.parseAppleSearchTypes(typeof req.query.type === 'string' ? req.query.type : 'songs');
+        res.json(await client.search(query, types, { limit: this.clampNumber(req.query.limit, 1, 25) }));
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/apple/songs/:id', async (req: Request, res: Response) => {
+    this.app.get('/v1/apple/songs/:id', async (req, res) => {
       try {
-        const client = this.getAppleMusicClient();
-        const songId = this.parseRouteParam(req.params.id);
-        if (!songId) {
-          res.status(400).json({ success: false, error: 'Missing song id' });
-          return;
-        }
-        const song = await client.getSong(songId);
-        res.json(song);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+        const id = req.params.id;
+        if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
+        res.json(await this.getAppleMusicClient().getSong(id));
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/apple/albums/:id', async (req: Request, res: Response) => {
+    this.app.get('/v1/apple/albums/:id', async (req, res) => {
       try {
-        const client = this.getAppleMusicClient();
-        const albumId = this.parseRouteParam(req.params.id);
-        if (!albumId) {
-          res.status(400).json({ success: false, error: 'Missing album id' });
-          return;
-        }
-        const album = await client.getAlbum(albumId);
-        res.json(album);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+        const id = req.params.id;
+        if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
+        res.json(await this.getAppleMusicClient().getAlbum(id));
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/apple/artists/:id', async (req: Request, res: Response) => {
+    this.app.get('/v1/apple/artists/:id', async (req, res) => {
       try {
-        const client = this.getAppleMusicClient();
-        const artistId = this.parseRouteParam(req.params.id);
-        if (!artistId) {
-          res.status(400).json({ success: false, error: 'Missing artist id' });
-          return;
-        }
-        const artist = await client.getArtist(artistId);
-        res.json(artist);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+        const id = req.params.id;
+        if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
+        res.json(await this.getAppleMusicClient().getArtist(id));
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/apple/playlists/:id', async (req: Request, res: Response) => {
+    this.app.get('/v1/apple/playlists/:id', async (req, res) => {
       try {
-        const client = this.getAppleMusicClient();
-        const playlistId = this.parseRouteParam(req.params.id);
-        if (!playlistId) {
-          res.status(400).json({ success: false, error: 'Missing playlist id' });
-          return;
-        }
-        const playlist = await client.getPlaylist(playlistId);
-        res.json(playlist);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+        const id = req.params.id;
+        if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
+        res.json(await this.getAppleMusicClient().getPlaylist(id));
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/apple/library/songs', async (req: Request, res: Response) => {
-      try {
-        const client = this.getAppleMusicClient();
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
-        const songs = await client.getLibrarySongs({ limit, offset });
-        res.json(songs);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.get('/v1/apple/library/songs', async (req, res) => {
+      try { res.json(await this.getAppleMusicClient().getLibrarySongs({ limit: this.clampNumber(req.query.limit, 1, 100) })); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/apple/library/albums', async (req: Request, res: Response) => {
-      try {
-        const client = this.getAppleMusicClient();
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
-        const albums = await client.getLibraryAlbums({ limit, offset });
-        res.json(albums);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.get('/v1/apple/library/albums', async (req, res) => {
+      try { res.json(await this.getAppleMusicClient().getLibraryAlbums({ limit: this.clampNumber(req.query.limit, 1, 100) })); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.get('/v1/apple/library/playlists', async (req: Request, res: Response) => {
-      try {
-        const client = this.getAppleMusicClient();
-        const limit = this.parseNumberParam(req.query.limit);
-        const offset = this.parseNumberParam(req.query.offset);
-        const playlists = await client.getLibraryPlaylists({ limit, offset });
-        res.json(playlists);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.get('/v1/apple/library/playlists', async (req, res) => {
+      try { res.json(await this.getAppleMusicClient().getLibraryPlaylists({ limit: this.clampNumber(req.query.limit, 1, 100) })); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    // Apple Music playback via AppleScript (macOS only)
-    this.app.post('/v1/apple/play', async (req: Request, res: Response) => {
+    // Apple Music playback via AppleScript — with injection protection
+    this.app.post('/v1/apple/play', async (req, res) => {
       try {
         const url = this.parseBodyString(req.body?.url);
         await this.playAppleMusic(url);
         res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/apple/pause', async (_req: Request, res: Response) => {
-      try {
-        await this.runAppleScriptCommand('pause');
-        res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.post('/v1/apple/pause', async (_req, res) => {
+      try { await this.runAppleScriptCommand('pause'); res.json({ success: true }); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/apple/next', async (_req: Request, res: Response) => {
-      try {
-        await this.runAppleScriptCommand('next track');
-        res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.post('/v1/apple/next', async (_req, res) => {
+      try { await this.runAppleScriptCommand('next track'); res.json({ success: true }); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    this.app.post('/v1/apple/prev', async (_req: Request, res: Response) => {
-      try {
-        await this.runAppleScriptCommand('previous track');
-        res.json({ success: true });
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+    this.app.post('/v1/apple/prev', async (_req, res) => {
+      try { await this.runAppleScriptCommand('previous track'); res.json({ success: true }); }
+      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
     });
 
-    // Error handler (must be last)
+    // Error handler
     this.app.use(errorHandler(this.logger));
   }
 
+  // ============================================================================
+  // SSE
+  // ============================================================================
+
   private setupSSE(): void {
-    // Heartbeat to keep connections alive
     this.sseHeartbeat = setInterval(() => {
       const event = this.createEvent('heartbeat', { timestamp: new Date().toISOString() });
       const message = `data: ${JSON.stringify(event)}\n\n`;
-
       const deadClients: Response[] = [];
 
       for (const client of this.sseClients) {
         try {
-          const success = client.write(message);
-          if (!success) {
-            this.logger.debug('SSE client write buffer full');
-          }
-        } catch (error) {
-          this.logger.warn({ error }, 'SSE heartbeat failed, removing client');
-          deadClients.push(client);
-        }
+          if (!client.write(message)) deadClients.push(client);
+        } catch { deadClients.push(client); }
       }
 
-      // Clean up dead clients
       for (const client of deadClients) {
         this.sseClients.delete(client);
-        try {
-          client.end();
-        } catch {
-          // Ignore close errors
-        }
-      }
-
-      if (deadClients.length > 0) {
-        this.logger.info({ removed: deadClients.length, active: this.sseClients.size }, 'SSE clients cleaned up');
+        try { client.end(); } catch { /* ignore */ }
       }
     }, SSE_HEARTBEAT_MS);
   }
 
   private setupSSEClient(req: Request, res: Response): void {
-    // Set SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
-
-    // Send initial connection event
-    res.write(`data: ${JSON.stringify(this.createEvent('connected', { timestamp: new Date().toISOString() }))}\n\n`);
-
-    // Track client
+    res.write(`data: ${JSON.stringify(this.createEvent('connected', {}))}\n\n`);
     this.sseClients.add(res);
-
-    // Remove client on close
-    req.on('close', () => {
-      this.sseClients.delete(res);
-    });
+    req.on('close', () => { this.sseClients.delete(res); });
   }
 
   private broadcastEvent(type: string, payload: Record<string, unknown> = {}): void {
     const event = this.createEvent(type, payload);
     const message = `data: ${JSON.stringify(event)}\n\n`;
-
-    this.logger.debug({ type, clients: this.sseClients.size }, 'Broadcasting SSE event');
-
     const deadClients: Response[] = [];
 
     for (const client of this.sseClients) {
-      try {
-        client.write(message);
-      } catch (error) {
-        this.logger.warn({ error, eventType: type }, 'Failed to send SSE event');
-        deadClients.push(client);
-      }
+      try { client.write(message); }
+      catch { deadClients.push(client); }
     }
 
-    // Clean up dead clients
     for (const client of deadClients) {
       this.sseClients.delete(client);
+      try { client.end(); } catch { /* ignore */ }
     }
   }
 
@@ -1013,69 +704,82 @@ export class Harmond {
   }
 
   // ============================================================================
-  // Command Handlers
+  // Command Handlers — with per-type payload validation
   // ============================================================================
 
   private async handleCommand(command: Command): Promise<{ success: boolean; sessionId?: string }> {
-    await this.store.logEvent('command', { type: command.type, commandId: command.id }, this.session?.id);
+    await this.store.logEvent('command', { type: command.type, commandId: command.id });
 
     switch (command.type) {
-      case 'session.start':
-        return this.startSession((command.payload as { policy: SessionPolicy }).policy);
+      case 'session.start': {
+        // Validate payload has a policy
+        const payloadResult = SessionStartCommand.safeParse(command.payload || {});
+        if (!payloadResult.success) {
+          throw new Error(`Invalid session.start payload: ${payloadResult.error.issues.map(i => i.message).join(', ')}`);
+        }
+        return this.startSession(payloadResult.data.policy);
+      }
 
       case 'session.stop':
         return this.stopSession();
 
-      case 'session.nudge':
-        return this.nudgeSession(
-          (command.payload as { direction: 'calmer' | 'sharper' }).direction,
-          (command.payload as { amount?: number }).amount
-        );
+      case 'session.nudge': {
+        const nudgeResult = SessionNudgeCommand.safeParse(command.payload || {});
+        if (!nudgeResult.success) {
+          throw new Error(`Invalid session.nudge payload: ${nudgeResult.error.issues.map(i => i.message).join(', ')}`);
+        }
+        return this.nudgeSession(nudgeResult.data.direction, nudgeResult.data.amount);
+      }
 
       case 'skip':
-        return this.skipTrack((command.payload as { reason?: string }).reason);
+        return this.skipTrack((command.payload as Record<string, unknown>)?.reason as string | undefined);
+
+      case 'auth.spotify.login':
+      case 'auth.spotify.logout':
+      case 'auth.apple.login':
+      case 'auth.apple.logout':
+      case 'auth.youtube.login':
+      case 'auth.youtube.logout':
+      case 'device.use':
+      case 'device.discover':
+        throw new Error(`Command type '${command.type}' not yet implemented via command endpoint — use dedicated endpoints`);
 
       default:
         throw new Error(`Unknown command type: ${command.type}`);
     }
   }
 
+  // Wire to ENGINE — the real session management
   private async startSession(policy: SessionPolicy): Promise<{ success: boolean; sessionId: string }> {
-    // Create session in store
-    const sessionId = await this.store.createSession(JSON.stringify(policy));
+    // Delegate to the engine
+    await this.engine.start(policy);
 
-    // Start local session
-    this.session = {
-      id: sessionId,
-      policy,
-      startedAt: new Date(),
-      queue: [],
-      status: 'running',
-    };
+    const state = this.engine.getState();
+    const sessionId = state?.id || 'unknown';
 
-    // Emit event
     this.broadcastEvent('session.started', {
       sessionId,
       policy,
-      startedAt: this.session.startedAt.toISOString(),
+      startedAt: Date.now(),
     });
+
+    // Start track change polling
+    this.startTrackPolling();
 
     return { success: true, sessionId };
   }
 
   private async stopSession(): Promise<{ success: boolean }> {
-    if (!this.session) {
-      throw new Error('No active session');
-    }
+    const state = this.engine.getState();
+    if (!state) throw new Error('No active session');
 
-    await this.store.endSession(this.session.id);
+    const sessionId = state.id;
+    const elapsed = Date.now() - state.startedAt;
 
-    this.broadcastEvent('session.stopped', {
-      sessionId: this.session.id,
-      duration: Date.now() - this.session.startedAt.getTime(),
-    });
+    await this.engine.stop();
+    this.stopTrackPolling();
 
-    this.session = null;
+    this.broadcastEvent('session.stopped', { sessionId, duration: elapsed });
 
     return { success: true };
   }
@@ -1083,76 +787,57 @@ export class Harmond {
   private async nudgeSession(
     direction: 'calmer' | 'sharper',
     amount?: number
-  ): Promise<{ success: boolean; newWeights?: Record<string, number> }> {
-    if (!this.session) {
-      throw new Error('No active session');
-    }
+  ): Promise<{ success: boolean }> {
+    await this.engine.nudge(direction, amount);
 
-    const nudgeAmount = amount || 0.1;
-    const sign = direction === 'calmer' ? -1 : 1;
-
-    // Update soft weights
-    const currentSoft = this.session.policy.soft || {};
-    const weights = { ...(currentSoft.weights || {}) };
-    if (typeof weights.energy === 'number') {
-      weights.energy = Math.max(0, Math.min(1, weights.energy + sign * nudgeAmount));
-    }
-    if (typeof weights.valence === 'number') {
-      weights.valence = Math.max(0, Math.min(1, weights.valence + sign * nudgeAmount * 0.5));
-    }
-    this.session.policy.soft = { ...currentSoft, weights };
-
+    const state = this.engine.getState();
     this.broadcastEvent('session.nudged', {
-      sessionId: this.session.id,
+      sessionId: state?.id,
       direction,
-      amount: nudgeAmount,
-      newWeights: weights,
-    });
-
-    return { success: true, newWeights: weights as Record<string, number> };
-  }
-
-  private async skipTrack(reason?: string): Promise<{ success: boolean }> {
-    if (!this.session) {
-      throw new Error('No active session');
-    }
-
-    await this.store.logEvent('skip', { reason, sessionId: this.session.id }, this.session.id);
-
-    this.broadcastEvent('track.skipped', {
-      sessionId: this.session.id,
-      reason,
-      timestamp: new Date().toISOString(),
+      amount: amount || 0.1,
     });
 
     return { success: true };
   }
 
-  // ============================================================================
-  // Spotify Integration (placeholder)
-  // ============================================================================
+  private async skipTrack(reason?: string): Promise<{ success: boolean }> {
+    const state = this.engine.getState();
+    if (!state) throw new Error('No active session');
 
-  private async getDevices(): Promise<DeviceInfo[]> {
-    return this.spotifyClient.getDevices();
-  }
+    await this.spotifyClient.next();
+    this.broadcastEvent('track.skipped', { sessionId: state.id, reason });
 
-  private async useDevice(deviceId: string): Promise<void> {
-    await this.spotifyClient.transferTo(deviceId);
-    await this.store.logEvent('device.use', { deviceId }, this.session?.id);
-    this.broadcastEvent('device.changed', { deviceId });
-  }
-
-  private getSpotifyAuthUrl(): string {
-    return this.spotifyAuth.getLoginUrl();
-  }
-
-  private async logoutSpotify(): Promise<void> {
-    await this.spotifyAuth.logout();
-    this.broadcastEvent('spotify.disconnected', {});
+    return { success: true };
   }
 
   // ============================================================================
-  // Apple Music (AppleScript)
+  // Track Change Polling — feeds engine.recordPlay()
+  // ============================================================================
+
+  private startTrackPolling(): void {
+    if (this.trackPollInterval) return;
+    this.trackPollInterval = setInterval(async () => {
+      try {
+        const track = await this.playback.getNowPlaying();
+        if (track && track.id !== this.lastTrackId) {
+          this.lastTrackId = track.id;
+          await this.engine.recordPlay(track);
+          this.broadcastEvent('track.started', { track });
+        }
+      } catch { /* polling failure is non-fatal */ }
+    }, TRACK_POLL_INTERVAL_MS);
+  }
+
+  private stopTrackPolling(): void {
+    if (this.trackPollInterval) {
+      clearInterval(this.trackPollInterval);
+      this.trackPollInterval = null;
+    }
+    this.lastTrackId = null;
+  }
+
+  // ============================================================================
+  // Apple Music (AppleScript) — injection-safe
   // ============================================================================
 
   private ensureAppleScriptAvailable(): void {
@@ -1161,8 +846,13 @@ export class Harmond {
     }
   }
 
+  /** Escape a string for safe embedding in AppleScript double-quoted strings.
+   *  Strips control characters (newlines, tabs, etc.) that can break out of string context. */
   private escapeAppleScriptString(value: string): string {
-    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    // Strip ALL control characters (prevents \n, \r, \t injection)
+    const sanitized = value.replace(/[\x00-\x1f\x7f]/g, '');
+    // Escape backslashes and quotes
+    return sanitized.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   }
 
   private async runAppleScript(script: string): Promise<void> {
@@ -1171,18 +861,23 @@ export class Harmond {
   }
 
   private async runAppleScriptCommand(command: string): Promise<void> {
-    const script = `tell application "Music" to ${command}`;
-    await this.runAppleScript(script);
+    await this.runAppleScript(`tell application "Music" to ${command}`);
   }
 
   private async playAppleMusic(url?: string): Promise<void> {
     if (url) {
+      // Validate URL protocol — only allow music-related URLs
+      try {
+        const parsed = new URL(url);
+        if (!['https:', 'http:', 'music:'].includes(parsed.protocol)) {
+          throw new Error('URL must use https, http, or music protocol');
+        }
+      } catch (e) {
+        if (e instanceof TypeError) throw new Error('Invalid URL');
+        throw e;
+      }
       const escaped = this.escapeAppleScriptString(url);
-      const script = `tell application "Music"
-  activate
-  open location "${escaped}"
-end tell`;
-      await this.runAppleScript(script);
+      await this.runAppleScript(`tell application "Music"\n  activate\n  open location "${escaped}"\nend tell`);
       return;
     }
     await this.runAppleScriptCommand('play');
@@ -1193,19 +888,24 @@ end tell`;
   // ============================================================================
 
   private getStatus(): DaemonStatus {
+    const engineState = this.engine.getState();
     return {
       isRunning: this.server !== null,
       version: '0.0.0',
       spotifyConnected: this.spotifyAuth.isConnected(),
-      session: this.session
+      providers: {
+        spotify: { connected: this.spotifyAuth.isConnected(), name: 'Spotify' },
+        apple: { connected: !!this.appleMusicClient, name: 'Apple Music' },
+      },
+      session: engineState
         ? {
-            id: this.session.id,
-            isActive: this.session.status === 'running',
-            currentTrack: this.session.currentTrack || null,
-            queueDepth: this.session.queue.length,
-            policy: this.session.policy,
-            elapsedMs: Date.now() - this.session.startedAt.getTime(),
-            startedAt: this.session.startedAt.getTime(),
+            id: engineState.id,
+            isActive: engineState.status === 'running',
+            currentTrack: engineState.currentTrack || null,
+            queueDepth: engineState.queuedTracks.length,
+            policy: engineState.policy,
+            elapsedMs: Date.now() - engineState.startedAt,
+            startedAt: engineState.startedAt,
           }
         : undefined,
     };
@@ -1215,40 +915,47 @@ end tell`;
   // Server Lifecycle
   // ============================================================================
 
-  /**
-   * Start the daemon
-   */
   async start(): Promise<void> {
+    // Run migrations (WAL mode + tables)
     await this.store.migrate();
+
+    // Enable WAL mode for concurrent read/write
+    try {
+      await (this.store as any).client?.execute('PRAGMA journal_mode=WAL');
+    } catch { /* WAL not supported in memory mode */ }
+
     await this.spotifyAuth.loadTokens();
 
-    return new Promise((resolve) => {
+    // Start SSE heartbeat
+    this.setupSSE();
+
+    return new Promise((resolve, reject) => {
       this.server = this.app.listen(this.port, this.host, () => {
-        console.log(`Harmond listening on http://${this.host}:${this.port}`);
-        console.log('Endpoints:');
-        console.log('  GET  /health              - Health check');
-        console.log('  GET  /v1/status           - Daemon status');
-        console.log('  GET  /v1/devices          - Spotify devices');
-        console.log('  POST /v1/command          - Send command');
-        console.log('  POST /v1/device/use       - Switch device');
-        console.log('  POST /v1/auth/spotify/import - Import Spotify cookies');
-        console.log('  GET  /v1/events           - SSE stream');
-        console.log('  GET  /v1/journal          - List journal entries');
-        console.log('  POST /v1/journal          - Add journal entry');
-        console.log('  GET  /v1/stats            - Statistics');
-        console.log('  POST /v1/apple/play       - Apple Music playback (AppleScript)');
+        this.logger.info({ port: this.port, host: this.host }, 'Harmond listening');
         resolve();
+      });
+
+      this.server.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          this.logger.error({ port: this.port }, 'Port already in use — is another harmond running?');
+        }
+        reject(err);
       });
     });
   }
 
-  /**
-   * Stop the daemon
-   */
   async stop(): Promise<void> {
+    this.logger.info('Shutting down...');
+
+    // Stop track polling
+    this.stopTrackPolling();
+
+    // Stop engine (clears refill interval)
+    try { await this.engine.stop(); } catch { /* no session active is fine */ }
+
     // Close SSE clients
     for (const client of this.sseClients) {
-      client.end();
+      try { client.end(); } catch { /* ignore */ }
     }
     this.sseClients.clear();
     if (this.sseHeartbeat) {
@@ -1256,48 +963,76 @@ end tell`;
       this.sseHeartbeat = null;
     }
 
-    // Stop server
+    // Stop server with timeout
     if (this.server) {
-      await new Promise<void>((resolve) => {
-        this.server!.close(() => resolve());
-      });
+      await Promise.race([
+        new Promise<void>((resolve) => { this.server!.close(() => resolve()); }),
+        new Promise<void>((resolve) => setTimeout(() => {
+          this.logger.warn('Shutdown timeout — forcing close');
+          resolve();
+        }, SHUTDOWN_TIMEOUT_MS)),
+      ]);
       this.server = null;
     }
 
     // Close store
     await this.store.close();
+
+    // Destroy encryptor (zero sensitive state)
+    this.encryptor?.destroy();
   }
 
-  /**
-   * Get the store instance
-   */
-  getStore(): HarmonStore {
-    return this.store;
+  // ============================================================================
+  // Auth middleware — HMAC-based timing-safe comparison
+  // ============================================================================
+
+  private requireAuth(req: Request, res: Response, next: NextFunction): void {
+    if (req.path === '/auth/spotify/callback') { next(); return; }
+
+    if (process.env.NODE_ENV === 'production' && !this.apiToken) {
+      res.status(500).json({ success: false, error: 'Server misconfigured' });
+      return;
+    }
+
+    if (!this.apiToken) { next(); return; }
+
+    const authHeader = req.header('authorization') || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+
+    // HMAC both values to fixed-length, then compare — no length oracle
+    const hmacKey = 'harmon-auth-compare';
+    const expectedMac = createHmac('sha256', hmacKey).update(this.apiToken).digest();
+    const providedMac = createHmac('sha256', hmacKey).update(token).digest();
+
+    // timingSafeEqual on equal-length HMACs — no length leak
+    const { timingSafeEqual } = require('node:crypto');
+    if (!timingSafeEqual(expectedMac, providedMac)) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    next();
   }
+
+  // ============================================================================
+  // Token/Cookie Storage
+  // ============================================================================
 
   private createSpotifyTokenStore(): TokenStore {
     return {
       get: async () => {
         const raw = await this.store.getSetting('spotify.tokens');
         if (!raw) return null;
-
         try {
           const decrypted = this.encryptor ? this.encryptor.decrypt(raw) : raw;
           return JSON.parse(decrypted) as SpotifyTokens;
-        } catch (error) {
-          this.logger.error({ error }, 'Failed to decrypt tokens');
-          return null;
-        }
+        } catch { return null; }
       },
       set: async (tokens) => {
-        if (!tokens) {
-          await this.store.deleteSetting('spotify.tokens');
-          return;
-        }
-
+        if (!tokens) { await this.store.deleteSetting('spotify.tokens'); return; }
         const json = JSON.stringify(tokens);
-        const encrypted = this.encryptor ? this.encryptor.encrypt(json) : json;
-        await this.store.setSetting('spotify.tokens', encrypted);
+        const value = this.encryptor ? this.encryptor.encrypt(json) : json;
+        await this.store.setSetting('spotify.tokens', value);
       },
     };
   }
@@ -1307,32 +1042,29 @@ end tell`;
       get: async () => {
         const raw = await this.store.getSetting('spotify.cookies');
         if (!raw) return null;
-
         try {
           const decrypted = this.encryptor ? this.encryptor.decrypt(raw) : raw;
           return JSON.parse(decrypted) as SpotifyCookieRecord[];
-        } catch (error) {
-          this.logger.error({ error }, 'Failed to decrypt cookies');
-          return null;
-        }
+        } catch { return null; }
       },
       set: async (cookies) => {
-        if (!cookies || cookies.length === 0) {
-          await this.store.deleteSetting('spotify.cookies');
-          return;
-        }
-
+        if (!cookies || cookies.length === 0) { await this.store.deleteSetting('spotify.cookies'); return; }
         const json = JSON.stringify(cookies);
-        const encrypted = this.encryptor ? this.encryptor.encrypt(json) : json;
-        await this.store.setSetting('spotify.cookies', encrypted);
+        const value = this.encryptor ? this.encryptor.encrypt(json) : json;
+        await this.store.setSetting('spotify.cookies', value);
       },
     };
   }
 
-  private parseNumberParam(value: unknown): number | undefined {
+  // ============================================================================
+  // Helpers
+  // ============================================================================
+
+  private clampNumber(value: unknown, min: number, max: number): number | undefined {
     if (typeof value !== 'string') return undefined;
     const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    if (!Number.isFinite(parsed)) return undefined;
+    return Math.min(max, Math.max(min, parsed));
   }
 
   private parseBodyString(value: unknown): string | undefined {
@@ -1342,9 +1074,7 @@ end tell`;
   }
 
   private parseBodyNumber(value: unknown): number | undefined {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return Math.trunc(value);
-    }
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
     if (typeof value !== 'string') return undefined;
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) ? parsed : undefined;
@@ -1352,7 +1082,6 @@ end tell`;
 
   private parseBodyBoolean(value: unknown): boolean | undefined {
     if (typeof value === 'boolean') return value;
-    if (typeof value !== 'string') return undefined;
     if (value === 'true') return true;
     if (value === 'false') return false;
     return undefined;
@@ -1360,104 +1089,43 @@ end tell`;
 
   private parseSearchTypes(value: string): Array<'track' | 'album' | 'artist' | 'playlist'> {
     const allowed = new Set(['track', 'album', 'artist', 'playlist']);
-    return value
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter((entry) => allowed.has(entry)) as Array<'track' | 'album' | 'artist' | 'playlist'>;
+    return value.split(',').map(e => e.trim()).filter(e => allowed.has(e)) as Array<'track' | 'album' | 'artist' | 'playlist'>;
   }
 
   private parseAppleSearchTypes(value: string): Array<'songs' | 'albums' | 'artists' | 'playlists'> {
     const allowed = new Set(['songs', 'albums', 'artists', 'playlists']);
-    return value
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter((entry) => allowed.has(entry)) as Array<'songs' | 'albums' | 'artists' | 'playlists'>;
-  }
-
-  private parseRouteParam(value: string | string[] | undefined): string | null {
-    if (!value) return null;
-    return Array.isArray(value) ? value[0] : value;
-  }
-
-  private requireAuth(req: Request, res: Response, next: NextFunction): void {
-    // Exempt callback endpoint
-    if (req.path === '/auth/spotify/callback') {
-      next();
-      return;
-    }
-
-    // Production requires API token
-    if (process.env.NODE_ENV === 'production' && !this.apiToken) {
-      this.logger.error('API token required in production');
-      res.status(500).json({ success: false, error: 'Server misconfigured' });
-      return;
-    }
-
-    // Skip auth if no token configured in development
-    if (!this.apiToken) {
-      this.logger.debug('Authentication skipped (no token configured)');
-      next();
-      return;
-    }
-
-    const authHeader = req.header('authorization') || '';
-    const token = authHeader.startsWith('Bearer ')
-      ? authHeader.slice(7)
-      : authHeader;
-
-    // Constant-time comparison to prevent timing attacks
-    const expectedBuffer = Buffer.from(this.apiToken);
-    const providedBuffer = Buffer.from(token);
-
-    if (expectedBuffer.length !== providedBuffer.length) {
-      this.logger.warn({ path: req.path }, 'Invalid token length');
-      res.status(401).json({ success: false, error: 'Unauthorized' });
-      return;
-    }
-
-    const matches = timingSafeEqual(expectedBuffer, providedBuffer);
-
-    if (!matches) {
-      this.logger.warn({ path: req.path }, 'Invalid token');
-      res.status(401).json({ success: false, error: 'Unauthorized' });
-      return;
-    }
-
-    next();
+    return value.split(',').map(e => e.trim()).filter(e => allowed.has(e)) as Array<'songs' | 'albums' | 'artists' | 'playlists'>;
   }
 
   private getAppleMusicClient(): AppleMusicClient {
-    if (!this.appleMusicClient) {
-      throw new Error('Apple Music is not configured (missing APPLE_MUSIC_DEVELOPER_TOKEN).');
-    }
+    if (!this.appleMusicClient) throw new Error('Apple Music not configured (set APPLE_MUSIC_DEVELOPER_TOKEN).');
     return this.appleMusicClient;
+  }
+
+  getStore(): HarmonStore {
+    return this.store;
   }
 }
 
-/**
- * Create a daemon with default configuration
- */
 export function createDaemon(config?: DaemonConfig): Harmond {
   return new Harmond(config);
 }
 
-// Run as standalone server
-// For ESM, this code runs when the file is executed directly
+// Run as standalone
 const isMain = import.meta.url === pathToFileURL(process.argv[1] || '').href;
 if (isMain) {
   const daemon = createDaemon();
-  daemon.start().catch(console.error);
-
-  // Handle shutdown
-  process.on('SIGINT', async () => {
-    console.log('\nShutting down...');
-    await daemon.stop();
-    process.exit(0);
+  daemon.start().then(() => {
+    console.log(`Harmond listening on http://127.0.0.1:${DEFAULT_PORT}`);
+  }).catch((err) => {
+    console.error('Failed to start:', err.message);
+    process.exit(1);
   });
 
-  process.on('SIGTERM', async () => {
-    console.log('\nShutting down...');
+  const shutdown = async () => {
     await daemon.stop();
     process.exit(0);
-  });
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }

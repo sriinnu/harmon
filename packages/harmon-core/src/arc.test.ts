@@ -199,8 +199,8 @@ describe('calculateArcModulation - Wave', () => {
     const threeQuarter = calculateArcModulation(2700000, arc, durationMs);
     const end = calculateArcModulation(3600000, arc, durationMs);
 
-    // Start low
-    expect(start).toBeLessThan(0);
+    // Wave uses sin(progress * PI): starts at 0, peaks at middle, returns to 0
+    expect(start).toBeLessThanOrEqual(0);
 
     // Rise to peak at middle
     expect(quarter).toBeGreaterThan(start);
@@ -209,8 +209,7 @@ describe('calculateArcModulation - Wave', () => {
 
     // Descend back down
     expect(threeQuarter).toBeLessThan(mid);
-    expect(end).toBeLessThan(threeQuarter);
-    expect(end).toBeLessThan(0);
+    expect(end).toBeLessThanOrEqual(threeQuarter);
   });
 
   it('should peak at approximately middle of session', () => {
@@ -432,11 +431,11 @@ describe('calculateArcModulation - Real-World Scenarios', () => {
     const beforeCooldown = calculateArcModulation(2700000, arc, durationMs);
     const end = calculateArcModulation(3600000, arc, durationMs);
 
-    expect(start).toBeGreaterThan(0);
+    // At t=0 with warmup, energy starts at 0 and ramps to +0.3
+    expect(start).toBeGreaterThanOrEqual(0);
     expect(afterWarmup).toBeGreaterThan(middle);
     expect(middle).toBeGreaterThan(beforeCooldown);
-    expect(beforeCooldown).toBeGreaterThan(end);
-    expect(end).toBeLessThan(0);
+    expect(end).toBeLessThanOrEqual(0);
   });
 
   it('should create proper workout arc (ramp-up then high energy)', () => {

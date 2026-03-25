@@ -10,6 +10,10 @@
     "dev": "tsc --watch",
     "lint": "tsc --noEmit"
   },
+  "dependencies": {
+    "@athena/harmon-protocol": "workspace:*",
+    "@athena/harmon-core": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^25.0.8",
     "typescript": "^5.9.3"

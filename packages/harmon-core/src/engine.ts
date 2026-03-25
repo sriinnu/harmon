@@ -1,11 +1,14 @@
 /**
  * Session engine - Core orchestrator for session lifecycle and queue management
+ *
+ * Provider-agnostic: works with any MusicProvider + PlaybackController.
  */
 
 import type { SessionPolicy, TrackInfo } from '@athena/harmon-protocol';
-import type { SpotifyClient } from '@athena/harmon-spotify';
 import type { HarmonStore } from '@athena/harmon-store';
 import type {
+  MusicProvider,
+  PlaybackController,
   SessionState,
   EventCallback,
   EngineEvent,
@@ -26,24 +29,28 @@ export interface SessionEngine {
   recordPlay(track: TrackInfo): Promise<void>;
 }
 
-interface EngineConfig {
-  spotifyClient: SpotifyClient;
+export interface EngineConfig {
+  provider: MusicProvider;
+  playback: PlaybackController;
   store: HarmonStore;
   onEvent?: EventCallback;
 }
 
 class SessionEngineImpl implements SessionEngine {
-  private spotifyClient: SpotifyClient;
+  private provider: MusicProvider;
+  private playback: PlaybackController;
   private store: HarmonStore;
   private onEvent: EventCallback;
   private state: SessionState | null = null;
   private refillInterval: ReturnType<typeof setInterval> | null = null;
+  private refilling = false;
 
   // Constants
   private readonly REFILL_CHECK_INTERVAL_MS = 10000;  // Check every 10s
 
   constructor(config: EngineConfig) {
-    this.spotifyClient = config.spotifyClient;
+    this.provider = config.provider;
+    this.playback = config.playback;
     this.store = config.store;
     this.onEvent = config.onEvent || (() => {});
   }
@@ -140,17 +147,17 @@ class SessionEngineImpl implements SessionEngine {
     const currentWeights = policy.soft?.weights || {};
     const newWeights = { ...currentWeights };
 
-    // Adjust energy and valence
+    // Adjust energy and valence — always clamp to [0,1]
     if (typeof newWeights.energy === 'number') {
       newWeights.energy = clamp(newWeights.energy + sign * amount, 0, 1);
     } else {
-      newWeights.energy = 0.5 + sign * amount;
+      newWeights.energy = clamp(0.5 + sign * amount, 0, 1);
     }
 
     if (typeof newWeights.valence === 'number') {
       newWeights.valence = clamp(newWeights.valence + sign * amount * 0.5, 0, 1);
     } else {
-      newWeights.valence = 0.5 + sign * amount * 0.5;
+      newWeights.valence = clamp(0.5 + sign * amount * 0.5, 0, 1);
     }
 
     // Update policy
@@ -182,27 +189,28 @@ class SessionEngineImpl implements SessionEngine {
   }
 
   async refillQueue(): Promise<void> {
-    if (!this.state) {
+    if (!this.state || this.refilling) {
       return;
     }
 
-    const policy = this.state.policy;
-    const queuePrefs = policy.queue || {};
-    const targetDepth = queuePrefs.target || 12;
-    const refillThreshold = queuePrefs.refillWhenBelow || 5;
-
-    const currentDepth = this.state.queuedTracks.length;
-
-    if (currentDepth >= refillThreshold) {
-      return;  // Queue still healthy
-    }
-
-    const needed = targetDepth - currentDepth;
-
+    this.refilling = true;
     try {
-      // Fetch candidates
+      const policy = this.state.policy;
+      const queuePrefs = policy.queue || {};
+      const targetDepth = queuePrefs.target || 12;
+      const refillThreshold = queuePrefs.refillWhenBelow || 5;
+
+      const currentDepth = this.state.queuedTracks.length;
+
+      if (currentDepth >= refillThreshold) {
+        return;  // Queue still healthy
+      }
+
+      const needed = targetDepth - currentDepth;
+
+      // Fetch candidates via provider
       const candidates = await fetchCandidates(
-        this.spotifyClient,
+        this.provider,
         policy.sources || {},
         needed * 3  // Fetch 3x needed for filtering
       );
@@ -226,10 +234,10 @@ class SessionEngineImpl implements SessionEngine {
       // Take top N
       const topTracks = ranked.slice(0, needed);
 
-      // Add to Spotify queue
+      // Add to playback queue
       for (const { track } of topTracks) {
         if (track.uri) {
-          await this.spotifyClient.addToQueue(track.uri);
+          await this.playback.addToQueue(track.uri);
         }
       }
 
@@ -258,6 +266,8 @@ class SessionEngineImpl implements SessionEngine {
           message: error instanceof Error ? error.message : 'Queue refill failed',
         },
       });
+    } finally {
+      this.refilling = false;
     }
   }
 
@@ -269,7 +279,9 @@ class SessionEngineImpl implements SessionEngine {
 
     const record: PlayRecord = {
       trackId: track.id,
-      artistIds: [track.artist],  // Simplified: would parse from artist string
+      artistIds: track.artistIds && track.artistIds.length > 0
+        ? track.artistIds
+        : [track.artist],
       playedAt: Date.now(),
     };
 

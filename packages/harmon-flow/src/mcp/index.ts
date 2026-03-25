@@ -12,7 +12,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { MarkdownParser, createFlowParser } from '../parser/index.js';
 import { PatternGraphBuilder, PatternDetector, SuggestionEngine } from '../graph/index.js';
-import type { ToolDefinition, ToolHandler, JournalEntry } from '../types.js';
+import type { ToolDefinition, ToolHandler, JournalEntry, PatternGraph } from '../types.js';
 
 interface FlowServerConfig {
   flowDir?: string;
@@ -25,6 +25,7 @@ export class HarmonFlowMCPServer {
   private parser: MarkdownParser;
   private entries: JournalEntry[] = [];
   private graphBuilt = false;
+  private graph: PatternGraph | null = null;
   private suggestionEngine: SuggestionEngine | null = null;
 
   constructor(config: FlowServerConfig = {}) {
@@ -141,6 +142,7 @@ export class HarmonFlowMCPServer {
       this.refreshEntries();
       const builder = new PatternGraphBuilder(this.entries);
       const graph = builder.build();
+      this.graph = graph;
       const detector = new PatternDetector(graph, this.entries);
       const patterns = detector.getAllPatterns();
       this.suggestionEngine = new SuggestionEngine(graph, this.entries);
@@ -415,7 +417,7 @@ export class HarmonFlowMCPServer {
     this.ensureGraphBuilt();
 
     const detector = new PatternDetector(
-      { nodes: new Map(), edges: new Map(), embeddings: new Map() },
+      this.graph!,
       this.entries
     );
     const patterns = detector.getAllPatterns();
@@ -509,8 +511,8 @@ export class HarmonFlowMCPServer {
 
     const filename = this.parser.writeEntry({
       timestamp: new Date(),
-      source: 'voice',
-      device: 'macos',
+      source: (args.source as string) || 'mcp',
+      device: (args.device as string) || (process.platform === 'darwin' ? 'macos' : 'linux'),
       moodTags: mood,
       energyLevel: energy,
       context: {
@@ -613,8 +615,7 @@ export class HarmonFlowMCPServer {
 
     this.ensureGraphBuilt();
 
-    const builder = new PatternGraphBuilder(this.entries);
-    const graph = builder.build();
+    const graph = this.graph!;
 
     const nodes = [...graph.nodes.values()];
     const edges = [...graph.edges.values()];
