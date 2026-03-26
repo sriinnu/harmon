@@ -1,6 +1,6 @@
 {
   "name": "@athena/harmon-core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Session engine + ranking + adaptation for Harmon",
   "license": "AGPL-3.0-only",
   "type": "module",

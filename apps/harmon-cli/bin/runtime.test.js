@@ -78,7 +78,7 @@ describe('harmon CLI runtime helpers', () => {
       helpError.code = 'commander.helpDisplayed';
       helpError.exitCode = 0;
 
-      const versionError = new Error('0.0.0');
+      const versionError = new Error('0.1.0');
       versionError.name = 'CommanderError';
       versionError.code = 'commander.version';
       versionError.exitCode = 0;
