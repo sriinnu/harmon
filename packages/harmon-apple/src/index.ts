@@ -2,6 +2,9 @@
  * Harmon Apple - Apple Music API client
  */
 
+import type { TrackInfo } from '@athena/harmon-protocol';
+import type { MusicProvider, PlaybackController, AudioFeatures } from '@athena/harmon-core';
+
 const APPLE_MUSIC_API_BASE = 'https://api.music.apple.com/v1';
 
 export interface AppleMusicConfig {
@@ -349,6 +352,88 @@ function mapLibraryPlaylist(resource: AppleCatalogResource<AppleLibraryPlaylistA
     name: resource.attributes.name,
     trackCount: resource.attributes.trackCount,
   };
+}
+
+/** Map Apple Music song to provider-agnostic TrackInfo */
+function mapSongToTrackInfo(song: AppleMusicSong): TrackInfo {
+  return {
+    id: song.id,
+    name: song.name,
+    artist: song.artistName,
+    album: song.albumName || '',
+    durationMs: song.durationMs || 0,
+    uri: song.url || `apple:song:${song.id}`,
+    provider: 'apple',
+  };
+}
+
+function mapLibrarySongToTrackInfo(song: AppleMusicLibrarySong): TrackInfo {
+  return {
+    id: song.id,
+    name: song.name,
+    artist: song.artistName,
+    album: song.albumName || '',
+    durationMs: 0,
+    uri: `apple:song:${song.id}`,
+    provider: 'apple',
+  };
+}
+
+/**
+ * Adapts AppleMusicClient to the MusicProvider interface.
+ */
+export class AppleMusicProvider implements MusicProvider {
+  readonly name = 'apple' as const;
+  private client: AppleMusicClient;
+  private connected: boolean;
+
+  constructor(client: AppleMusicClient, connected = true) {
+    this.client = client;
+    this.connected = connected;
+  }
+
+  isConnected(): boolean {
+    return this.connected;
+  }
+
+  async search(query: string, limit?: number): Promise<TrackInfo[]> {
+    const result = await this.client.search(query, ['songs'], { limit });
+    return result.songs.map(mapSongToTrackInfo);
+  }
+
+  async getLibraryTracks(options?: { limit?: number }): Promise<TrackInfo[]> {
+    const songs = await this.client.getLibrarySongs(options);
+    return songs.map(mapLibrarySongToTrackInfo);
+  }
+
+  async getTopTracks(_options?: { limit?: number }): Promise<TrackInfo[]> {
+    // Apple Music API has no "top tracks" — return empty
+    return [];
+  }
+
+  async getRecentlyPlayed(_options?: { limit?: number }): Promise<TrackInfo[]> {
+    // Apple Music API /me/recent/played/tracks not yet implemented in client
+    return [];
+  }
+
+  async getPlaylistTracks(_playlistId: string, _options?: { limit?: number }): Promise<TrackInfo[]> {
+    // Would need playlist tracks endpoint — not in current client
+    return [];
+  }
+
+  async getRecommendations(_options: { seedTrackIds?: string[]; limit?: number }): Promise<TrackInfo[]> {
+    // Apple Music has recommendations but not exposed in current client
+    return [];
+  }
+
+  async getTrackFeatures(trackIds: string[]): Promise<(AudioFeatures | null)[]> {
+    // Apple Music has no audio features API — return nulls
+    return trackIds.map(() => null);
+  }
+}
+
+export function createAppleMusicProvider(client: AppleMusicClient): MusicProvider {
+  return new AppleMusicProvider(client);
 }
 
 export function createAppleMusicClient(config: AppleMusicConfig): AppleMusicClient {

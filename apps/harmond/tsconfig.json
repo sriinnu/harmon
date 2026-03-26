@@ -13,9 +13,12 @@
   "references": [
     { "path": "../../packages/harmon-protocol" },
     { "path": "../../packages/harmon-store" },
+    { "path": "../../packages/harmon-core" },
     { "path": "../../packages/harmon-spotify" },
-    { "path": "../../packages/harmon-apple" }
+    { "path": "../../packages/harmon-apple" },
+    { "path": "../../packages/harmon-logger" },
+    { "path": "../../packages/harmon-crypto" }
   ],
   "include": ["src/**/*", "bin/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
 }

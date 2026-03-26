@@ -5,14 +5,9 @@
 import type { TrackInfo, SessionPolicy } from '@athena/harmon-protocol';
 
 /**
- * Audio features from Spotify (extended TrackInfo)
- */
-export interface TrackWithFeatures extends TrackInfo {
-  features: AudioFeatures;
-}
-
-/**
- * Spotify audio features (maps to Spotify API response)
+ * Audio features for track ranking.
+ * Canonical definition — providers map their features to this shape.
+ * Providers that don't support features (YouTube Music) return null.
  */
 export interface AudioFeatures {
   energy: number;              // 0-1
@@ -30,12 +25,94 @@ export interface AudioFeatures {
 }
 
 /**
+ * Extended TrackInfo with audio features attached
+ */
+export interface TrackWithFeatures extends TrackInfo {
+  features: AudioFeatures;
+}
+
+// ============================================================================
+// Provider Abstractions
+// ============================================================================
+
+/**
+ * Provider-agnostic interface for fetching music data.
+ * Each music service (Spotify, Apple Music, YouTube Music) implements this.
+ */
+export interface MusicProvider {
+  readonly name: 'spotify' | 'apple' | 'youtube' | 'local';
+
+  isConnected(): boolean;
+
+  /** Search for tracks */
+  search(query: string, limit?: number): Promise<TrackInfo[]>;
+
+  /** Get user's library/saved tracks */
+  getLibraryTracks(options?: { limit?: number; offset?: number }): Promise<TrackInfo[]>;
+
+  /** Get user's top/most-played tracks */
+  getTopTracks(options?: { limit?: number; timeRange?: string }): Promise<TrackInfo[]>;
+
+  /** Get recently played tracks */
+  getRecentlyPlayed(options?: { limit?: number }): Promise<TrackInfo[]>;
+
+  /** Get tracks from a specific playlist */
+  getPlaylistTracks(playlistId: string, options?: { limit?: number }): Promise<TrackInfo[]>;
+
+  /** Get recommendations based on seed tracks */
+  getRecommendations(options: { seedTrackIds?: string[]; limit?: number }): Promise<TrackInfo[]>;
+
+  /**
+   * Get audio features for tracks.
+   * Returns array with same length as trackIds. Null for tracks without features.
+   */
+  getTrackFeatures(trackIds: string[]): Promise<(AudioFeatures | null)[]>;
+}
+
+/**
+ * Provider-agnostic playback controller.
+ * Optional methods (seek, volume, etc.) may not be supported by all providers.
+ */
+export interface PlaybackController {
+  readonly name: 'spotify' | 'apple' | 'youtube' | 'local';
+
+  play(options?: { uri?: string; trackId?: string }): Promise<void>;
+  pause(): Promise<void>;
+  next(): Promise<void>;
+  previous(): Promise<void>;
+  seek?(positionMs: number): Promise<void>;
+  setVolume?(volumePercent: number): Promise<void>;
+  setShuffle?(state: boolean): Promise<void>;
+  setRepeat?(state: 'off' | 'track' | 'context'): Promise<void>;
+  getNowPlaying(): Promise<TrackInfo | null>;
+  addToQueue(trackUri: string): Promise<void>;
+}
+
+// ============================================================================
+// Engine Types
+// ============================================================================
+
+/**
  * Track play record in history
  */
 export interface PlayRecord {
   trackId: string;
   artistIds: string[];
   playedAt: number;  // timestamp ms
+}
+
+/**
+ * Storage contract required by the session engine.
+ * I keep this narrow so harmon-core stays decoupled from any concrete store.
+ */
+export interface SessionStore {
+  createSession(policy: string): Promise<string>;
+  endSession(id: string): Promise<void>;
+  logEvent(
+    type: string,
+    payload: Record<string, unknown>,
+    sessionId?: string
+  ): Promise<string>;
 }
 
 /**
@@ -83,7 +160,7 @@ export interface SourcesConfig {
   seedPlaylists?: string[];
   seedArtists?: string[];
   discovery?: {
-    enabled: boolean;
-    ratio: number;
+    enabled?: boolean;
+    ratio?: number;
   };
 }

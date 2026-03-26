@@ -2,14 +2,23 @@
   "name": "@athena/harmond",
   "version": "0.0.0",
   "description": "Harmon daemon - engine + store + spotify",
+  "license": "AGPL-3.0-only",
   "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
   "bin": {
     "harmond": "./bin/harmond.js"
   },
   "scripts": {
     "build": "tsc -b",
     "dev": "tsc --watch",
-    "start": "node ./dist/index.js",
+    "start": "node ./dist/src/index.js",
     "lint": "tsc --noEmit",
     "test": "vitest",
     "test:run": "vitest run",

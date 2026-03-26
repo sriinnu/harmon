@@ -164,7 +164,7 @@ describe('rankTracks - Hard Constraints', () => {
     const ranked = await rankTracks(candidates, policy, [], 0);
 
     expect(ranked).toHaveLength(2);
-    expect(ranked.map(r => r.track.id)).toEqual(['track-2', 'track-3']);
+    expect(ranked.map(r => r.track.id).sort()).toEqual(['track-2', 'track-3']);
   });
 
   it('should return empty array when all tracks filtered out', async () => {

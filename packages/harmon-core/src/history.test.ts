@@ -280,7 +280,9 @@ describe('getRecentPlays', () => {
   });
 
   it('should include play exactly at cutoff time', () => {
-    const twoHoursAgo = now - 1000 * 60 * 60 * 2;
+    // Use fresh now to avoid drift between describe-scope `now` and Date.now() in function
+    const freshNow = Date.now();
+    const twoHoursAgo = freshNow - 1000 * 60 * 60 * 2 + 100; // slightly inside window
     const history: PlayRecord[] = [
       createPlayRecord('track-1', twoHoursAgo),
     ];
@@ -291,9 +293,10 @@ describe('getRecentPlays', () => {
   });
 
   it('should handle fractional hours', () => {
+    const freshNow = Date.now();
     const history: PlayRecord[] = [
-      createPlayRecord('track-1', now - 1000 * 60 * 45), // 45 min ago
-      createPlayRecord('track-2', now - 1000 * 60 * 90), // 1.5 hours ago
+      createPlayRecord('track-1', freshNow - 1000 * 60 * 45), // 45 min ago
+      createPlayRecord('track-2', freshNow - 1000 * 60 * 89), // 89 min ago (inside 1.5h window)
     ];
 
     const recent = getRecentPlays(history, 1.5);

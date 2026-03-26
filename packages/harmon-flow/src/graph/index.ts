@@ -51,6 +51,8 @@ export class PatternGraphBuilder {
    * Build the complete pattern graph from entries
    */
   build(): PatternGraph {
+    this.entries.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
     // Clear existing graph
     this.graph = {
       nodes: new Map(),
@@ -212,11 +214,17 @@ export class PatternGraphBuilder {
   }
 
   /**
-   * Normalize edge weights by count
+   * Normalize edge weights by max count
    */
   private normalizeEdgeWeights(): void {
+    let maxCount = 1;
     for (const edge of this.graph.edges.values()) {
-      edge.weight = edge.weight / edge.count;
+      if (edge.count > maxCount) {
+        maxCount = edge.count;
+      }
+    }
+    for (const edge of this.graph.edges.values()) {
+      edge.weight = edge.count / maxCount;
     }
   }
 
@@ -408,7 +416,7 @@ export class PatternDetector {
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
+      hash |= 0;
     }
     return Math.abs(hash).toString(36);
   }

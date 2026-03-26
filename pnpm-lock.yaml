@@ -99,6 +99,13 @@ importers:
         version: 5.9.3
 
   packages/harmon-apple:
+    dependencies:
+      '@athena/harmon-core':
+        specifier: workspace:*
+        version: link:../harmon-core
+      '@athena/harmon-protocol':
+        specifier: workspace:*
+        version: link:../harmon-protocol
     devDependencies:
       '@types/node':
         specifier: ^25.0.8
@@ -182,6 +189,9 @@ importers:
 
   packages/harmon-spotify:
     dependencies:
+      '@athena/harmon-core':
+        specifier: workspace:*
+        version: link:../harmon-core
       '@athena/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol
@@ -205,6 +215,22 @@ importers:
       '@types/uuid':
         specifier: ^11.0.0
         version: 11.0.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/harmon-youtube:
+    dependencies:
+      '@athena/harmon-core':
+        specifier: workspace:*
+        version: link:../harmon-core
+      '@athena/harmon-protocol':
+        specifier: workspace:*
+        version: link:../harmon-protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.8
+        version: 25.0.9
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

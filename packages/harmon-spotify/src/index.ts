@@ -4,6 +4,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import type { DeviceInfo, TrackInfo } from '@athena/harmon-protocol';
+import type { MusicProvider, PlaybackController, AudioFeatures as CoreAudioFeatures } from '@athena/harmon-core';
 
 const SPOTIFY_ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
@@ -65,10 +66,13 @@ export interface SpotifyAuth {
   refresh(): Promise<void>;
   logout(): Promise<void>;
   getAccessToken(): Promise<string | null>;
+  getAuthMode(): SpotifyAuthMode;
   setCookies(cookies: SpotifyCookieRecord[] | null): Promise<void>;
   isConnected(): boolean;
   loadTokens(): Promise<void>;
 }
+
+export type SpotifyAuthMode = 'none' | 'oauth' | 'cookies';
 
 class SpotifyAuthImpl implements SpotifyAuth {
   private clientId: string;
@@ -81,6 +85,7 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private tokensLoaded = false;
   private cookies: SpotifyCookieRecord[] | null = null;
   private cookiesLoaded = false;
+  private refreshPromise: Promise<void> | null = null;
   private codeVerifier: string | null = null;
   private state: string | null = null;
 
@@ -99,15 +104,28 @@ class SpotifyAuthImpl implements SpotifyAuth {
   }
 
   async setCookies(cookies: SpotifyCookieRecord[] | null): Promise<void> {
-    this.cookies = cookies;
+    this.cookies = cookies ? sanitizeSpotifyCookies(cookies) : null;
     this.cookiesLoaded = true;
-    await this.cookieStore?.set(cookies);
+    await this.cookieStore?.set(this.cookies);
   }
 
   isConnected(): boolean {
     if (this.tokens !== null) return true;
     if (!this.cookiesLoaded) return false;
     return Array.isArray(this.cookies) && this.cookies.length > 0;
+  }
+
+  getAuthMode(): SpotifyAuthMode {
+    if (this.tokens?.refreshToken) {
+      return 'oauth';
+    }
+    if (Array.isArray(this.cookies) && this.cookies.length > 0) {
+      return 'cookies';
+    }
+    if (this.tokens !== null) {
+      return 'oauth';
+    }
+    return 'none';
   }
 
   getLoginUrl(): string {
@@ -138,8 +156,13 @@ class SpotifyAuthImpl implements SpotifyAuth {
     if (!this.codeVerifier) {
       throw new Error('Login flow expired. Request a new login URL.');
     }
-    if (this.state && state && state !== this.state) {
-      throw new Error('Invalid OAuth state');
+    if (this.state) {
+      if (!state) {
+        throw new Error('Missing OAuth state parameter');
+      }
+      if (state !== this.state) {
+        throw new Error('Invalid OAuth state');
+      }
     }
 
     const tokens = await this.exchangeCodeForToken(code, this.codeVerifier);
@@ -149,6 +172,19 @@ class SpotifyAuthImpl implements SpotifyAuth {
   }
 
   async refresh(): Promise<void> {
+    // Prevent concurrent refreshes
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+    this.refreshPromise = this._doRefresh();
+    try {
+      await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  private async _doRefresh(): Promise<void> {
     await this.ensureTokensLoaded();
 
     if (!this.tokens?.refreshToken) {
@@ -217,8 +253,13 @@ class SpotifyAuthImpl implements SpotifyAuth {
       await this.saveTokens(cookieTokens);
     }
 
+    const tokens = this.tokens;
+    if (!tokens) {
+      return null;
+    }
+
     const now = Date.now();
-    if (this.tokens.expiresAt - now <= 60_000) {
+    if (tokens.expiresAt - now <= 60_000) {
       await this.refresh();
     }
 
@@ -314,9 +355,12 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private buildCookieHeader(records: SpotifyCookieRecord[]): string {
     const now = Date.now();
     const values = new Map<string, string>();
+    const requestPath = '/get_access_token';
 
-    for (const record of records) {
-      if (!record.name) continue;
+    for (const record of sanitizeSpotifyCookies(records)) {
+      if (!isCookiePathApplicable(record.path, requestPath)) {
+        continue;
+      }
       if (record.expires) {
         const expiresAt = Date.parse(record.expires);
         if (Number.isFinite(expiresAt) && expiresAt <= now) {
@@ -346,7 +390,8 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private async ensureCookiesLoaded(force = false): Promise<void> {
     if (this.cookiesLoaded && !force) return;
     this.cookiesLoaded = true;
-    this.cookies = this.cookieStore ? await this.cookieStore.get() : null;
+    const cookies = this.cookieStore ? await this.cookieStore.get() : null;
+    this.cookies = cookies ? sanitizeSpotifyCookies(cookies) : null;
   }
 
   private async saveTokens(tokens: SpotifyTokens): Promise<void> {
@@ -369,6 +414,94 @@ interface SpotifyWebTokenResponse {
   accessTokenExpirationTimestampMs?: number;
   tokenType?: string;
   scope?: string;
+}
+
+const ALLOWED_SPOTIFY_COOKIE_NAMES = new Set(['sp_dc', 'sp_key']);
+
+/**
+ * I keep only the Spotify auth cookies that are safe and relevant for
+ * `open.spotify.com/get_access_token`.
+ */
+export function sanitizeSpotifyCookies(records: unknown[]): SpotifyCookieRecord[] {
+  const sanitized = new Map<string, SpotifyCookieRecord>();
+
+  for (const record of records) {
+    const normalized = normalizeSpotifyCookieRecord(record);
+    if (!normalized) {
+      continue;
+    }
+    sanitized.set(`${normalized.domain}:${normalized.path}:${normalized.name}`, normalized);
+  }
+
+  return Array.from(sanitized.values());
+}
+
+function normalizeSpotifyCookieRecord(record: unknown): SpotifyCookieRecord | null {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+
+  const value = record as Partial<SpotifyCookieRecord>;
+  const name = normalizeCookieName(value.name);
+  const domain = normalizeSpotifyCookieDomain(value.domain);
+  const path = normalizeSpotifyCookiePath(value.path);
+
+  if (!name || !domain || !path || typeof value.value !== 'string') {
+    return null;
+  }
+
+  return {
+    domain,
+    name,
+    path,
+    value: value.value.slice(0, 4096),
+    expires: typeof value.expires === 'string' ? value.expires : null,
+    isSecure: value.isSecure === true,
+    isHTTPOnly: value.isHTTPOnly === true,
+  };
+}
+
+function normalizeCookieName(name: unknown): string | null {
+  if (typeof name !== 'string') {
+    return null;
+  }
+
+  const normalized = name.trim();
+  if (!ALLOWED_SPOTIFY_COOKIE_NAMES.has(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeSpotifyCookieDomain(domain: unknown): string | null {
+  if (typeof domain !== 'string') {
+    return null;
+  }
+
+  const normalized = domain.trim().toLowerCase().replace(/^\.+/, '');
+  if (normalized === 'spotify.com' || normalized === 'open.spotify.com') {
+    return normalized;
+  }
+
+  return null;
+}
+
+function normalizeSpotifyCookiePath(cookiePath: unknown): string | null {
+  if (typeof cookiePath !== 'string') {
+    return '/';
+  }
+
+  const normalized = cookiePath.trim();
+  if (!normalized.startsWith('/')) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function isCookiePathApplicable(cookiePath: string, requestPath: string): boolean {
+  return requestPath === cookiePath || requestPath.startsWith(`${cookiePath.replace(/\/$/, '')}/`) || cookiePath === '/';
 }
 
 function generateCodeVerifier(): string {
@@ -416,7 +549,7 @@ export interface SpotifyClient {
   getRecentlyPlayed(options?: SpotifyHistoryOptions): Promise<SpotifyRecentlyPlayedResponse>;
   getSavedTracks(options?: SpotifyListOptions): Promise<SpotifyPagedResponse<SpotifyPlaylistTrack>>;
   getSavedAlbums(options?: SpotifyListOptions): Promise<SpotifyPagedResponse<SpotifySavedAlbum>>;
-  getAudioFeatures(trackIds: string[]): Promise<AudioFeatures[]>;
+  getAudioFeatures(trackIds: string[]): Promise<(AudioFeatures | null)[]>;
   getRecommendations(options: RecommendationSeed): Promise<TrackInfo[]>;
   getTopTracks(options?: { timeRange?: TimeRange; limit?: number; offset?: number }): Promise<SpotifyPagedResponse<TrackInfo>>;
 }
@@ -525,6 +658,8 @@ class SpotifyClientImpl implements SpotifyClient {
       albums: (data.albums?.items || []).map(mapAlbum),
       artists: (data.artists?.items || []).map(mapArtist),
       playlists: (data.playlists?.items || []).map(mapPlaylist),
+      episodes: (data.episodes?.items || []).map(mapEpisode),
+      shows: (data.shows?.items || []).map(mapShow),
     };
   }
 
@@ -631,14 +766,14 @@ class SpotifyClientImpl implements SpotifyClient {
     };
   }
 
-  async getAudioFeatures(trackIds: string[]): Promise<AudioFeatures[]> {
+  async getAudioFeatures(trackIds: string[]): Promise<(AudioFeatures | null)[]> {
     if (trackIds.length === 0) {
       return [];
     }
 
     // Spotify API allows max 100 IDs per request
     const BATCH_SIZE = 100;
-    const results: AudioFeatures[] = [];
+    const results: (AudioFeatures | null)[] = [];
 
     for (let i = 0; i < trackIds.length; i += BATCH_SIZE) {
       const batch = trackIds.slice(i, i + BATCH_SIZE);
@@ -649,10 +784,9 @@ class SpotifyClientImpl implements SpotifyClient {
         { ids: batch.join(',') }
       );
 
-      // Filter out nulls (tracks without features)
+      // Preserve null positions for index-based matching
       const batchFeatures = (data.audio_features || [])
-        .filter((f): f is SpotifyAudioFeaturesRaw => f !== null)
-        .map(mapAudioFeatures);
+        .map((f): AudioFeatures | null => f ? mapAudioFeatures(f) : null);
 
       results.push(...batchFeatures);
     }
@@ -806,6 +940,16 @@ class SpotifyClientImpl implements SpotifyClient {
       response = await execute(token);
     }
 
+    // Handle 429 - rate limited (retry up to 2 times)
+    let retries = 0;
+    while (response.status === 429 && retries < 2) {
+      const retryAfter = parseInt(response.headers.get('Retry-After') || '1', 10);
+      const delayMs = Math.min(retryAfter * 1000, 10000); // Cap at 10s
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      response = await execute(token!);
+      retries++;
+    }
+
     if (response.status === 204) {
       return null as T;
     }
@@ -824,9 +968,11 @@ export interface SpotifySearchResult {
   albums: SpotifyAlbum[];
   artists: SpotifyArtist[];
   playlists: SpotifyPlaylist[];
+  episodes: SpotifyEpisode[];
+  shows: SpotifyShow[];
 }
 
-export type SpotifySearchType = 'track' | 'album' | 'artist' | 'playlist';
+export type SpotifySearchType = 'track' | 'album' | 'artist' | 'playlist' | 'episode' | 'show';
 
 export interface SpotifyListOptions {
   limit?: number;
@@ -854,6 +1000,26 @@ export interface SpotifyPlaylist {
   owner: string;
   totalTracks: number;
   public: boolean | null;
+  uri?: string;
+}
+
+export interface SpotifyEpisode {
+  id: string;
+  name: string;
+  description?: string;
+  releaseDate?: string;
+  durationMs?: number;
+  showName?: string;
+  publisher?: string;
+  uri?: string;
+}
+
+export interface SpotifyShow {
+  id: string;
+  name: string;
+  publisher?: string;
+  description?: string;
+  totalEpisodes?: number;
   uri?: string;
 }
 
@@ -948,7 +1114,7 @@ interface SpotifyTrack {
   duration_ms: number;
   uri: string;
   type: string;
-  artists: Array<{ name: string }>;
+  artists: Array<{ id?: string; name: string }>;
   album: { name: string };
 }
 
@@ -976,11 +1142,37 @@ interface SpotifyPlaylistRaw {
   tracks?: { total?: number };
 }
 
+interface SpotifyEpisodeRaw {
+  id: string;
+  name: string;
+  uri: string;
+  description?: string;
+  html_description?: string;
+  release_date?: string;
+  duration_ms?: number;
+  show?: {
+    name?: string;
+    publisher?: string;
+  };
+}
+
+interface SpotifyShowRaw {
+  id: string;
+  name: string;
+  uri: string;
+  publisher?: string;
+  description?: string;
+  html_description?: string;
+  total_episodes?: number;
+}
+
 interface SpotifySearchResponse {
   tracks?: { items: SpotifyTrack[] };
   albums?: { items: SpotifyAlbumRaw[] };
   artists?: { items: SpotifyArtistRaw[] };
   playlists?: { items: SpotifyPlaylistRaw[] };
+  episodes?: { items: SpotifyEpisodeRaw[] };
+  shows?: { items: SpotifyShowRaw[] };
 }
 
 interface SpotifyPlaylistsResponse {
@@ -1084,9 +1276,11 @@ function mapTrack(track: SpotifyTrack): TrackInfo {
     id: track.id,
     name: track.name,
     artist: track.artists.map((artist) => artist.name).join(', '),
+    artistIds: track.artists.map(a => a.id).filter((id): id is string => !!id),
     album: track.album?.name || '',
     durationMs: track.duration_ms,
     uri: track.uri,
+    provider: 'spotify',
   };
 }
 
@@ -1117,6 +1311,30 @@ function mapPlaylist(playlist: SpotifyPlaylistRaw): SpotifyPlaylist {
     totalTracks: playlist.tracks?.total ?? 0,
     public: playlist.public ?? null,
     uri: playlist.uri,
+  };
+}
+
+function mapEpisode(episode: SpotifyEpisodeRaw): SpotifyEpisode {
+  return {
+    id: episode.id,
+    name: episode.name,
+    description: episode.description || episode.html_description,
+    releaseDate: episode.release_date,
+    durationMs: episode.duration_ms,
+    showName: episode.show?.name,
+    publisher: episode.show?.publisher,
+    uri: episode.uri,
+  };
+}
+
+function mapShow(show: SpotifyShowRaw): SpotifyShow {
+  return {
+    id: show.id,
+    name: show.name,
+    publisher: show.publisher,
+    description: show.description || show.html_description,
+    totalEpisodes: show.total_episodes,
+    uri: show.uri,
   };
 }
 
@@ -1194,4 +1412,127 @@ export function createSpotifyAuth(config: SpotifyAuthConfig): SpotifyAuth {
 
 export function createSpotifyClient(config: { auth: SpotifyAuth }): SpotifyClient {
   return new SpotifyClientImpl(config.auth);
+}
+
+// ============================================================================
+// MusicProvider / PlaybackController Adapters
+// ============================================================================
+
+/**
+ * Adapts SpotifyClient to the MusicProvider interface.
+ * This is the bridge that lets harmon-core work with Spotify.
+ */
+export class SpotifyMusicProvider implements MusicProvider {
+  readonly name = 'spotify' as const;
+  private client: SpotifyClient;
+
+  constructor(client: SpotifyClient) {
+    this.client = client;
+  }
+
+  isConnected(): boolean {
+    return this.client.isConnected();
+  }
+
+  async search(query: string, limit?: number): Promise<TrackInfo[]> {
+    const result = await this.client.search(query, ['track'], { limit });
+    return result.tracks;
+  }
+
+  async getLibraryTracks(options?: { limit?: number; offset?: number }): Promise<TrackInfo[]> {
+    const result = await this.client.getSavedTracks(options);
+    return result.items.map(item => item.track);
+  }
+
+  async getTopTracks(options?: { limit?: number; timeRange?: string }): Promise<TrackInfo[]> {
+    const result = await this.client.getTopTracks({
+      limit: options?.limit,
+      timeRange: (options?.timeRange as TimeRange) || 'medium_term',
+    });
+    return result.items;
+  }
+
+  async getRecentlyPlayed(options?: { limit?: number }): Promise<TrackInfo[]> {
+    const result = await this.client.getRecentlyPlayed(options);
+    return result.items.map(item => item.track);
+  }
+
+  async getPlaylistTracks(playlistId: string, options?: { limit?: number }): Promise<TrackInfo[]> {
+    const result = await this.client.getPlaylistTracks(playlistId, options);
+    return result.items.map(item => item.track);
+  }
+
+  async getRecommendations(options: { seedTrackIds?: string[]; limit?: number }): Promise<TrackInfo[]> {
+    // Guard: Spotify requires at least 1 seed
+    if (!options.seedTrackIds || options.seedTrackIds.length === 0) return [];
+    return this.client.getRecommendations({
+      seedTracks: options.seedTrackIds,
+      limit: options.limit,
+    });
+  }
+
+  async getTrackFeatures(trackIds: string[]): Promise<(CoreAudioFeatures | null)[]> {
+    return this.client.getAudioFeatures(trackIds);
+  }
+}
+
+/**
+ * Adapts SpotifyClient to the PlaybackController interface.
+ */
+export class SpotifyPlaybackController implements PlaybackController {
+  readonly name = 'spotify' as const;
+  private client: SpotifyClient;
+
+  constructor(client: SpotifyClient) {
+    this.client = client;
+  }
+
+  async play(options?: { uri?: string; trackId?: string }): Promise<void> {
+    const uri = options?.trackId ? `spotify:track:${options.trackId}` : options?.uri;
+    await this.client.play(uri ? { uri } : undefined);
+  }
+
+  async pause(): Promise<void> {
+    await this.client.pause();
+  }
+
+  async next(): Promise<void> {
+    await this.client.next();
+  }
+
+  async previous(): Promise<void> {
+    await this.client.previous();
+  }
+
+  async seek(positionMs: number): Promise<void> {
+    await this.client.seek(positionMs);
+  }
+
+  async setVolume(volumePercent: number): Promise<void> {
+    await this.client.setVolume(volumePercent);
+  }
+
+  async setShuffle(state: boolean): Promise<void> {
+    await this.client.setShuffle(state);
+  }
+
+  async setRepeat(state: 'off' | 'track' | 'context'): Promise<void> {
+    await this.client.setRepeat(state);
+  }
+
+  async getNowPlaying(): Promise<TrackInfo | null> {
+    return this.client.getNowPlaying();
+  }
+
+  async addToQueue(trackUri: string): Promise<void> {
+    await this.client.addToQueue(trackUri);
+  }
+}
+
+export function createSpotifyProvider(client: SpotifyClient): MusicProvider {
+  return new SpotifyMusicProvider(client);
+}
+
+export function createSpotifyPlayback(client: SpotifyClient): PlaybackController {
+  return new SpotifyPlaybackController(client);
 }

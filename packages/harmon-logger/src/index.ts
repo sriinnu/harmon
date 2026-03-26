@@ -6,7 +6,7 @@ import pino from 'pino';
 import type { Logger } from 'pino';
 
 export interface LoggerConfig {
-  level?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+  level?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
   prettyPrint?: boolean;
   name?: string;
 }
@@ -22,7 +22,7 @@ export interface LoggerConfig {
  */
 export function createLogger(config: LoggerConfig = {}): Logger {
   const isDev = process.env.NODE_ENV !== 'production';
-  const defaultLevel = isDev ? 'debug' : 'info';
+  const defaultLevel = process.env.NODE_ENV === 'test' ? 'silent' : isDev ? 'debug' : 'info';
 
   return pino({
     level: config.level || process.env.LOG_LEVEL || defaultLevel,

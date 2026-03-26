@@ -21,7 +21,7 @@
 
 ## Overview
 
-Harmon is a **production-grade daemon-first music session manager** that runs as a background service, exposing a **HTTP+SSE API** for controlling music playback sessions. It intelligently manages your music queue using **AI-compiled policies** and provides real-time session feedback through Server-Sent Events.
+Harmon is a **production-grade daemon-first music session manager** that runs as a background service, exposing a **HTTP+SSE API** for controlling music playback sessions. It intelligently manages your music queue using **AI-compiled policies**, keeps contracts shared through a provider-agnostic protocol layer, and ships provider packages for Spotify, Apple Music, and YouTube Music. Session orchestration is currently anchored on the Spotify runtime surface, while `/v1/status` exposes the exact auth mode and capability split for each provider.
 
 ### Core Philosophy
 
@@ -46,9 +46,10 @@ Harmon is a **production-grade daemon-first music session manager** that runs as
 - ✅ **Audio feature analysis**: Energy, instrumentalness, tempo, valence, acousticness
 - ✅ **Recency penalties**: Prevent track/artist repetition
 - ✅ **Multi-source candidates**: Liked tracks, top tracks, playlists, recommendations, discovery
+- ✅ **Provider adapters**: Shared contract layer for Spotify, Apple Music, and YouTube Music packages
 
 ### Security & Production Features
-- 🔒 **Rate limiting**: Global (100/15min), Auth (5/15min), Commands (20/min)
+- 🔒 **Rate limiting**: Global (120/min), Auth (5/15min), Commands (30/min)
 - 🔐 **AES-256-GCM encryption**: Secure token/cookie storage
 - 🛡️ **Timing-safe authentication**: Prevents timing attacks
 - 🚫 **Strict CORS validation**: No wildcards in production
@@ -73,19 +74,25 @@ Harmon is a **production-grade daemon-first music session manager** that runs as
 │  │ (CLI/UI) │◀───────────────│ (daemon) │                          │
 │  └──────────┘                └─────┬────┘                          │
 │                                    │                                │
-│                          ┌─────────┼─────────┐                      │
-│                          │         │         │                      │
-│                          ▼         ▼         ▼                      │
-│                   ┌──────────┬─────────┬──────────┐                │
-│                   │  Core    │  Store  │ Spotify  │                │
-│                   │  Engine  │ (SQLite)│   API    │                │
-│                   └──────────┴─────────┴──────────┘                │
-│                          │                                          │
-│                          ▼                                          │
-│                   ┌─────────────────┐                              │
-│                   │   harmon-flow   │                              │
-│                   │   (MCP Server)  │                              │
-│                   └─────────────────┘                              │
+│                          ┌─────────┼─────────┬──────────┐           │
+│                          │         │         │          │           │
+│                          ▼         ▼         ▼          ▼           │
+│                   ┌──────────┬─────────┬──────────┬──────────┐      │
+│                   │  Core    │  Store  │ Provider │ Protocol │      │
+│                   │  Engine  │ (SQLite)│ Adapters │ Contract │      │
+│                   └──────────┴─────────┴──────────┴──────────┘      │
+│                                    │                                │
+│                                    ▼                                │
+│                 ┌──────────────────────────────────────────┐         │
+│                 │ Spotify / Apple Music / YouTube Music   │         │
+│                 │            Provider Packages             │         │
+│                 └──────────────────────────────────────────┘         │
+│                                    │                                │
+│                                    ▼                                │
+│                           ┌─────────────────┐                       │
+│                           │   harmon-flow   │                       │
+│                           │   (MCP Server)  │                       │
+│                           └─────────────────┘                       │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -97,8 +104,10 @@ Harmon is a **production-grade daemon-first music session manager** that runs as
 | `@athena/harmon-protocol` | Zod schemas for Command, Event, and Policy types | ✅ Production |
 | `@athena/harmon-store` | SQLite persistence layer with migrations | ✅ Production |
 | `@athena/harmon-core` | Core session engine with track ranking & queue management | ✅ Production |
+| `@athena/harmon` | CLI client and terminal interface for harmond | ✅ Production |
 | `@athena/harmon-spotify` | Spotify Web API integration (OAuth, playback, recommendations) | ✅ Production |
-| `@athena/harmon-apple` | Apple Music API integration | ✅ Production |
+| `@athena/harmon-apple` | Apple Music integration (catalog, library, local playback routes) | ✅ Production |
+| `@athena/harmon-youtube` | YouTube Music adapter for song search and song lookup | ⚠️ Limited |
 | `@athena/harmon-logger` | Structured logging with Pino | ✅ Production |
 | `@athena/harmon-crypto` | AES-256-GCM encryption utilities | ✅ Production |
 | `@athena/harmon-flow` | MCP server for journal analysis | ✅ Production |
@@ -189,12 +198,13 @@ curl -H "Authorization: Bearer $HARMON_API_TOKEN" \
 Harmon enforces strict security in production environments:
 
 - ✅ **API Token Required**: Set `HARMON_API_TOKEN` (required in production)
-- 🔐 **Encryption REQUIRED**: Set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - **daemon will not start without it**
+- 🔐 **Credential Encryption REQUIRED**: Set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - **daemon will not start without it**
 - ✅ **CORS Whitelist**: No wildcard origins allowed in production
+- ✅ **Explicit OAuth Callback**: Set `SPOTIFY_REDIRECT_URI` in production
 - ✅ **Rate Limiting**: Automatic protection against abuse
 - ✅ **Timing-Safe Auth**: Constant-time token comparison prevents timing attacks
 
-**⚠️ Critical**: The daemon will **refuse to start** in production (`NODE_ENV=production`) if `HARMON_ENCRYPTION_SECRET` is not set. This prevents accidental plaintext storage of Spotify OAuth tokens and cookies.
+**⚠️ Critical**: The daemon will **refuse to start** in production (`NODE_ENV=production`) unless `HARMON_API_TOKEN`, `HARMON_ENCRYPTION_SECRET`, and `SPOTIFY_REDIRECT_URI` are set and `HARMON_CORS_ORIGINS` does not contain `*`. This prevents accidental plaintext token storage, unauthenticated control surfaces, and inferred OAuth callback URLs. Journal, session, and event rows still remain unencrypted local SQLite data.
 
 ### Generating Secrets
 
@@ -210,9 +220,9 @@ export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 
 | Endpoint Type | Limit | Window |
 |---------------|-------|--------|
-| Global | 100 requests | 15 minutes |
+| Global | 120 requests | 1 minute |
 | Auth endpoints (`/v1/auth/*`) | 5 requests | 15 minutes |
-| Commands (`/v1/command`) | 20 requests | 1 minute |
+| Commands (`/v1/command`) | 30 requests | 1 minute |
 | Health check | Unlimited | - |
 
 ## Configuration
@@ -225,9 +235,10 @@ HARMON_API_TOKEN=your_api_token              # API authentication
 HARMON_ENCRYPTION_SECRET=your_secret         # Token/cookie encryption (min 32 chars) - REQUIRED
 HARMON_CORS_ORIGINS=https://app.example.com  # Comma-separated, no wildcards
 SPOTIFY_CLIENT_ID=your_client_id             # Spotify OAuth
+SPOTIFY_REDIRECT_URI=https://harmon.example/v1/auth/spotify/callback
 ```
 
-**Note**: `HARMON_ENCRYPTION_SECRET` is **mandatory** in production. The daemon will exit with code 1 if this is not set when `NODE_ENV=production`. Generate a secure secret using:
+**Note**: production startup is blocked unless `HARMON_API_TOKEN`, `HARMON_ENCRYPTION_SECRET`, and `SPOTIFY_REDIRECT_URI` are set and `HARMON_CORS_ORIGINS` stays explicit. Generate a secure encryption secret using:
 ```bash
 export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 ```
@@ -238,12 +249,11 @@ export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 HARMON_PORT=17373                            # Server port (default: 17373)
 HARMON_BIND_ADDRESS=127.0.0.1                # Bind address (default: 127.0.0.1)
 HARMON_DB_PATH=.harmon.db                    # Database path (default: .harmon.db)
-LOG_LEVEL=debug                              # trace|debug|info|warn|error|fatal (default: info)
+LOG_LEVEL=debug                              # trace|debug|info|warn|error|fatal|silent (default: info)
 NODE_ENV=production                          # Affects logging, CORS, auth enforcement
 
 # Spotify Configuration
 SPOTIFY_CLIENT_SECRET=your_secret            # Optional for server-side OAuth
-SPOTIFY_REDIRECT_URI=http://localhost:17373/v1/auth/spotify/callback
 
 # Apple Music Configuration
 APPLE_MUSIC_DEVELOPER_TOKEN=your_token       # Apple Music developer token
@@ -327,7 +337,7 @@ interface SessionPolicy {
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Health check (no auth required) |
-| GET | `/v1/status` | Daemon status with session info |
+| GET | `/v1/status` | Daemon status with session info, provider auth mode, and capabilities |
 | POST | `/v1/command` | Send command (session.start, session.stop, session.nudge, skip) |
 | GET | `/v1/devices` | List available Spotify devices |
 | POST | `/v1/device/use` | Switch active device |
@@ -338,7 +348,7 @@ interface SessionPolicy {
 | POST | `/v1/auth/spotify/login` | Get OAuth login URL |
 | GET | `/v1/auth/spotify/callback` | OAuth callback (no auth required) |
 | POST | `/v1/auth/spotify/logout` | Clear tokens and cookies |
-| POST | `/v1/auth/spotify/import` | Import Spotify cookies |
+| POST | `/v1/auth/spotify/import` | Import Spotify auth cookies (`sp_dc`, `sp_key`) |
 
 #### Spotify Playback & Library
 | Method | Endpoint | Description |
@@ -353,7 +363,7 @@ interface SessionPolicy {
 | POST | `/v1/spotify/shuffle` | Toggle shuffle |
 | POST | `/v1/spotify/repeat` | Set repeat mode (off/track/context) |
 | POST | `/v1/spotify/queue` | Add track to queue |
-| GET | `/v1/spotify/search` | Search tracks/albums/artists/playlists |
+| GET | `/v1/spotify/search` | Search tracks/albums/artists/playlists/episodes/shows |
 | GET | `/v1/spotify/playlists` | List user playlists |
 | GET | `/v1/spotify/playlists/:id/tracks` | Get playlist tracks |
 | GET | `/v1/spotify/history` | Recently played history |
@@ -377,7 +387,7 @@ interface SessionPolicy {
 #### Events & Analytics
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/v1/events` | SSE event stream (real-time updates) |
+| GET | `/v1/events` | SSE event stream (real-time updates, when enabled) |
 | GET | `/v1/journal` | List journal entries |
 | POST | `/v1/journal` | Create journal entry |
 | GET | `/v1/stats` | Session statistics |
@@ -395,13 +405,15 @@ interface Event {
 }
 
 type EventType =
+  | 'connected'           // Initial SSE handshake event
   | 'heartbeat'           // Keepalive ping every 30s
   | 'session.started'     // Session began
   | 'session.stopped'     // Session ended
   | 'session.nudged'      // Energy adjusted
   | 'queue.refilled'      // Queue replenished
   | 'track.started'       // Track began playing
-  | 'track.ended'         // Track finished
+  | 'track.skipped'       // Track skip was requested
+  | 'device.changed'      // Playback device changed
   | 'spotify.connected'   // Spotify auth successful
   | 'spotify.disconnected'// Spotify auth cleared
   | 'error';              // Error occurred
@@ -422,7 +434,7 @@ pnpm dev
 # Type checking
 pnpm lint
 
-# Run tests (Phase 6 - coming soon)
+# Run tests
 pnpm test
 
 # Code formatting
@@ -434,15 +446,17 @@ pnpm format
 ```
 harmon/
 ├── apps/
+│   ├── harmon-cli/           # CLI package and terminal entrypoint
 │   └── harmond/              # Main daemon application
 ├── packages/
-│   ├── harmon-protocol/      # Zod schemas (309 LOC)
-│   ├── harmon-store/         # SQLite persistence (508 LOC)
-│   ├── harmon-core/          # Session engine (complete implementation)
-│   ├── harmon-spotify/       # Spotify API client (972 LOC)
+│   ├── harmon-protocol/      # Shared command, event, and policy schemas
+│   ├── harmon-store/         # SQLite persistence and migrations
+│   ├── harmon-core/          # Session engine, ranking, and adaptation
+│   ├── harmon-spotify/       # Spotify API client and playback adapter
 │   ├── harmon-apple/         # Apple Music client
-│   ├── harmon-logger/        # Structured logging (NEW)
-│   ├── harmon-crypto/        # Encryption utilities (NEW)
+│   ├── harmon-youtube/       # YouTube Music adapter
+│   ├── harmon-logger/        # Structured logging
+│   ├── harmon-crypto/        # Encryption utilities
 │   └── harmon-flow/          # MCP server
 └── tools/
     └── Silo/                 # Cookie extraction utility
@@ -513,6 +527,7 @@ Before deploying to production:
 - [ ] **Generate and set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - MANDATORY**
 - [ ] Configure `HARMON_CORS_ORIGINS` (no wildcards)
 - [ ] Set up Spotify OAuth credentials
+- [ ] Set `SPOTIFY_REDIRECT_URI` to the exact production callback URL
 - [ ] Configure logging level (`LOG_LEVEL=info`)
 - [ ] Set up process manager (PM2, systemd)
 - [ ] Configure reverse proxy (nginx, caddy)
@@ -520,7 +535,7 @@ Before deploying to production:
 - [ ] Monitor logs and error rates
 - [ ] Set up database backups
 
-**⚠️ Important**: The daemon will not start if `HARMON_ENCRYPTION_SECRET` is missing in production. This is a safety mechanism to prevent accidental plaintext token storage.
+**⚠️ Important**: The daemon will not start if `HARMON_API_TOKEN`, `HARMON_ENCRYPTION_SECRET`, or `SPOTIFY_REDIRECT_URI` are missing in production, or if `HARMON_CORS_ORIGINS` contains `*`. This keeps the control plane authenticated and the OAuth callback explicit.
 
 ## Roadmap
 
@@ -565,7 +580,7 @@ sudo pnpm install
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+GNU Affero General Public License v3.0 only - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 

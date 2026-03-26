@@ -47,23 +47,23 @@ export const HardConstraints = z.object({
 });
 export type HardConstraints = z.infer<typeof HardConstraints>;
 
-/** Soft weights for ranking tracks */
+/** Soft weights for ranking tracks (bounded to prevent extreme values) */
 export const SoftWeights = z.object({
-  energy: z.number().optional(),
-  instrumentalness: z.number().optional(),
-  speechiness: z.number().optional(),
-  valence: z.number().optional(),
-  acousticness: z.number().optional(),
-  tempo: z.number().optional(),
-  recencyPenalty: z.number().optional(),
+  energy: z.number().min(-1).max(1).optional(),
+  instrumentalness: z.number().min(-1).max(1).optional(),
+  speechiness: z.number().min(-1).max(1).optional(),
+  valence: z.number().min(-1).max(1).optional(),
+  acousticness: z.number().min(-1).max(1).optional(),
+  tempo: z.number().min(-1).max(1).optional(),
+  recencyPenalty: z.number().min(0).max(1).optional(),
 });
 export type SoftWeights = z.infer<typeof SoftWeights>;
 
 /** Energy arc for session */
 export const EnergyArc = z.object({
   shape: z.enum(['flat', 'ramp-up', 'ramp-down', 'wave']).optional(),
-  warmupMs: z.number().optional(),
-  cooldownMs: z.number().optional(),
+  warmupMs: z.number().int().min(0).optional(),
+  cooldownMs: z.number().int().min(0).optional(),
 });
 export type EnergyArc = z.infer<typeof EnergyArc>;
 
@@ -92,8 +92,8 @@ export type MusicSources = z.infer<typeof MusicSources>;
 
 /** Repetition limits */
 export const RepetitionLimits = z.object({
-  repeatTrackWithinDays: z.number().optional(),
-  repeatArtistWithinHours: z.number().optional(),
+  repeatTrackWithinDays: z.number().int().min(0).max(365).optional(),
+  repeatArtistWithinHours: z.number().min(0).max(168).optional(),
 });
 export type RepetitionLimits = z.infer<typeof RepetitionLimits>;
 
@@ -122,8 +122,8 @@ export type DevicePreferences = z.infer<typeof DevicePreferences>;
 
 /** Queue preferences */
 export const QueuePreferences = z.object({
-  target: z.number().optional(),
-  refillWhenBelow: z.number().optional(),
+  target: z.number().int().min(1).max(100).optional(),
+  refillWhenBelow: z.number().int().min(0).max(100).optional(),
 });
 export type QueuePreferences = z.infer<typeof QueuePreferences>;
 
@@ -135,7 +135,7 @@ export type SessionMode = z.infer<typeof SessionMode>;
 export const SessionPolicy = z.object({
   version: z.literal(1),
   mode: SessionMode.optional(),
-  durationMs: z.number().optional(),
+  durationMs: z.number().int().min(1000).max(86400000).optional(), // 1s to 24h
   device: DevicePreferences.optional(),
   queue: QueuePreferences.optional(),
   hard: HardConstraints.optional(),
@@ -170,12 +170,6 @@ export const SkipCommand = z.object({
 });
 export type SkipCommand = z.infer<typeof SkipCommand>;
 
-/** Device use command */
-export const DeviceUseCommand = z.object({
-  deviceId: z.string(),
-});
-export type DeviceUseCommand = z.infer<typeof DeviceUseCommand>;
-
 /** Command envelope */
 export const Command = z.object({
   id: z.string().startsWith('c_'),
@@ -186,18 +180,8 @@ export const Command = z.object({
     'session.stop',
     'session.nudge',
     'skip',
-    'device.use',
-    'device.discover',
-    'auth.spotify.login',
-    'auth.spotify.logout',
   ]),
-  payload: z.union([
-    SessionStartCommand,
-    SessionNudgeCommand,
-    SkipCommand,
-    DeviceUseCommand,
-    z.object({}),
-  ]),
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 export type Command = z.infer<typeof Command>;
 
@@ -205,14 +189,18 @@ export type Command = z.infer<typeof Command>;
 // Event Schema
 // ============================================================================
 
-/** Track information */
+/** Track information (provider-agnostic) */
 export const TrackInfo = z.object({
-  id: z.string(),
-  name: z.string(),
-  artist: z.string(),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  artist: z.string().min(1),
+  artistIds: z.array(z.string()).optional(),
   album: z.string(),
   durationMs: z.number(),
   uri: z.string().optional(),
+  provider: z.enum(['spotify', 'apple', 'youtube', 'local']).optional(),
+  imageUrl: z.string().optional(),
+  isrc: z.string().optional(),
 });
 export type TrackInfo = z.infer<typeof TrackInfo>;
 
@@ -239,10 +227,25 @@ export const SessionStatus = z.object({
 export type SessionStatus = z.infer<typeof SessionStatus>;
 
 /** Daemon status */
+export const ProviderStatus = z.object({
+  connected: z.boolean(),
+  name: z.string().optional(),
+  status: z.enum(['missing', 'configured', 'ready', 'degraded']).optional(),
+  auth: z
+    .enum(['none', 'oauth', 'cookies', 'developer-token', 'developer-and-user-token'])
+    .optional(),
+  capabilities: z.record(z.string(), z.boolean()).optional(),
+});
+export type ProviderStatus = z.infer<typeof ProviderStatus>;
+
 export const DaemonStatus = z.object({
   isRunning: z.boolean(),
   version: z.string(),
   spotifyConnected: z.boolean(),
+  features: z.object({
+    sse: z.boolean(),
+  }).optional(),
+  providers: z.record(z.string(), ProviderStatus).optional(),
   session: SessionStatus.optional(),
 });
 export type DaemonStatus = z.infer<typeof DaemonStatus>;
@@ -256,12 +259,14 @@ export const Event = z.object({
     'session.stopped',
     'session.nudged',
     'track.started',
-    'track.ended',
+    'track.skipped',
     'queue.refilled',
-    'user.nudged',
-    'device.discovered',
+    'device.changed',
     'spotify.connected',
     'spotify.disconnected',
+    'connected',
+    'heartbeat',
+    'command',
     'error',
   ]),
   payload: z.record(z.string(), z.unknown()).optional(),

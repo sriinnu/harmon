@@ -2,6 +2,7 @@
   "name": "@athena/harmon-apple",
   "version": "0.0.0",
   "description": "Apple Music API client",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,6 +10,10 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@athena/harmon-protocol": "workspace:*",
+    "@athena/harmon-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.0.8",

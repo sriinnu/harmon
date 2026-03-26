@@ -49,8 +49,13 @@ export function checkRecencyPenalty(
       const timeSince = now - r.playedAt;
       if (timeSince >= windowMs) return false;
 
-      // Simple artist match (in production, would parse artist IDs properly)
-      return r.artistIds.some(aid => track.artist.includes(aid));
+      // Use structured artistIds when available, fall back to exact name match
+      return r.artistIds.some(aid => {
+        if (track.artistIds && track.artistIds.length > 0) {
+          return track.artistIds.includes(aid);
+        }
+        return aid === track.artist;
+      });
     });
 
     if (recentArtistPlays.length > 0) {

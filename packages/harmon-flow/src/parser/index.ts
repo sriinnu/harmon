@@ -7,6 +7,7 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import type { JournalEntry, JournalEntryFrontmatter } from '../types.js';
+import { parseJournalEntryFrontmatter } from './frontmatter.js';
 
 const DEFAULT_FLOW_DIR = '.harmonic-flow';
 
@@ -35,8 +36,13 @@ export class MarkdownParser {
     const content = fs.readFileSync(filepath, 'utf-8');
     const parsed = matter(content);
 
-    // Parse frontmatter
-    const frontmatter = this.parseFrontmatter(parsed.data);
+    let frontmatter: JournalEntryFrontmatter;
+    try {
+      frontmatter = this.parseFrontmatter(parsed.data);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown frontmatter error';
+      throw new Error(`Invalid journal frontmatter in ${filename}: ${message}`);
+    }
 
     // Extract mood tags and energy from content if not in frontmatter
     const contentMoodTags = this.extractMoodTags(parsed.content);
@@ -61,16 +67,7 @@ export class MarkdownParser {
    * Parse frontmatter with defaults
    */
   private parseFrontmatter(data: Record<string, unknown>): JournalEntryFrontmatter {
-    return {
-      ts: (data.ts as string) || new Date().toISOString(),
-      source: (data.source as 'cli' | 'menubar' | 'voice') || 'cli',
-      device: (data.device as 'macos' | 'windows' | 'wsl' | 'linux') || 'linux',
-      sessionId: data.sessionId as string | undefined,
-      policy: data.policy as Record<string, unknown> | undefined,
-      moodTags: (data.moodTags as string[]) || [],
-      energyLevel: data.energyLevel as 'low' | 'medium' | 'high' | undefined,
-      context: data.context as JournalEntryFrontmatter['context'],
-    } as JournalEntryFrontmatter;
+    return parseJournalEntryFrontmatter(data);
   }
 
   /**

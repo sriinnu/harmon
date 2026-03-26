@@ -10,15 +10,19 @@ export { checkRecencyPenalty, getRecentPlays, getRecentArtists } from './history
 
 export type {
   SessionEngine,
+  EngineConfig,
 } from './engine.js';
 
 export type {
   AudioFeatures,
+  MusicProvider,
+  PlaybackController,
   TrackWithFeatures,
   PlayRecord,
   SessionState,
   EngineEvent,
   EventCallback,
   RankedTrack,
+  SessionStore,
   SourcesConfig,
 } from './types.js';

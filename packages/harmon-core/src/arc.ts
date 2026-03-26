@@ -34,22 +34,46 @@ export function calculateArcModulation(
     : 0;
 
   switch (arc.shape) {
-    case 'ramp-up':
-      // Start low, end high
+    case 'ramp-up': {
+      // Start low (-0.3), end high (+0.3)
       if (warmupProgress < 1) {
-        return -0.3 * (1 - warmupProgress);  // Warming up
+        return -0.3 * (1 - warmupProgress);  // Warming up: -0.3 → 0
       }
-      return -0.3 + (0.6 * progress);  // Linear ramp from -0.3 to +0.3
+      // Post-warmup: use adjusted progress for continuity
+      // At warmup end, this yields 0. At session end, yields +0.3.
+      const postWarmupProgress = warmupMs > 0
+        ? Math.min((elapsedMs - warmupMs) / Math.max(totalDuration - warmupMs, 1), 1)
+        : progress;
+      // Without warmup: -0.3 + 0.6*progress (full range -0.3 to +0.3)
+      // With warmup: 0 + 0.3*postProgress (0 to +0.3, continuous from warmup end)
+      if (warmupMs > 0) {
+        return 0.3 * postWarmupProgress;
+      }
+      return -0.3 + (0.6 * progress);
+    }
 
-    case 'ramp-down':
-      // Start high, end low
+    case 'ramp-down': {
+      // Start high (+0.3), end low (-0.3)
       if (warmupProgress < 1) {
-        return 0.3 * warmupProgress;  // Warming up
+        return 0.3 * warmupProgress;  // Warming up: 0 → +0.3
       }
       if (cooldownProgress > 0) {
-        return 0.3 * (1 - cooldownProgress);  // Cooling down
+        // During cooldown, ramp to negative
+        const preCooldownValue = warmupMs > 0
+          ? (() => {
+              const postProg = Math.min((durationMs! - cooldownMs - warmupMs) / Math.max(totalDuration - warmupMs, 1), 1);
+              return 0.3 - (0.6 * postProg);
+            })()
+          : 0.3 - (0.6 * ((durationMs! - cooldownMs) / totalDuration));
+        return preCooldownValue + ((-0.3 - preCooldownValue) * cooldownProgress);
       }
-      return 0.3 - (0.6 * progress);  // Linear ramp from +0.3 to -0.3
+      // Post-warmup: linear ramp from +0.3 to -0.3
+      if (warmupMs > 0) {
+        const postWarmupProgress = Math.min((elapsedMs - warmupMs) / Math.max(totalDuration - warmupMs, 1), 1);
+        return 0.3 - (0.6 * postWarmupProgress);
+      }
+      return 0.3 - (0.6 * progress);
+    }
 
     case 'wave':
       // Sine wave: low -> high -> low

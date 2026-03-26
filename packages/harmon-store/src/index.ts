@@ -51,60 +51,75 @@ export interface EventLog {
 // Schema
 // ============================================================================
 
-const MIGRATIONS = [
-  // Initial schema
-  `
-    CREATE TABLE IF NOT EXISTS journal_entries (
-      id TEXT PRIMARY KEY,
-      filename TEXT NOT NULL,
-      timestamp TEXT NOT NULL,
-      source TEXT NOT NULL,
-      device TEXT NOT NULL,
-      sessionId TEXT,
-      moodTags TEXT,
-      energyLevel TEXT,
-      context TEXT,
-      content TEXT NOT NULL,
-      policy TEXT,
-      embedding BLOB,
-      createdAt TEXT DEFAULT (datetime('now'))
-    );
+interface Migration {
+  version: number;
+  statements: string[];
+}
 
-    CREATE INDEX IF NOT EXISTS idx_journal_timestamp ON journal_entries(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_journal_moodTags ON journal_entries(moodTags);
-    CREATE INDEX IF NOT EXISTS idx_journal_sessionId ON journal_entries(sessionId);
-
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      policy TEXT NOT NULL,
-      startedAt TEXT NOT NULL,
-      endedAt TEXT,
-      status TEXT NOT NULL DEFAULT 'active',
-      createdAt TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
-    CREATE INDEX IF NOT EXISTS idx_sessions_startedAt ON sessions(startedAt);
-
-    CREATE TABLE IF NOT EXISTS event_log (
-      id TEXT PRIMARY KEY,
-      sessionId TEXT,
-      type TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      createdAt TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_event_log_sessionId ON event_log(sessionId);
-    CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(type);
-    CREATE INDEX IF NOT EXISTS idx_event_log_createdAt ON event_log(createdAt);
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updatedAt TEXT DEFAULT (datetime('now'))
-    );
-  `,
+const MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS journal_entries (
+        id TEXT PRIMARY KEY,
+        filename TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        source TEXT NOT NULL,
+        device TEXT NOT NULL,
+        sessionId TEXT,
+        moodTags TEXT,
+        energyLevel TEXT,
+        context TEXT,
+        content TEXT NOT NULL,
+        policy TEXT,
+        embedding BLOB,
+        createdAt TEXT DEFAULT (datetime('now'))
+      )
+      `,
+      'CREATE INDEX IF NOT EXISTS idx_journal_timestamp ON journal_entries(timestamp)',
+      'CREATE INDEX IF NOT EXISTS idx_journal_moodTags ON journal_entries(moodTags)',
+      'CREATE INDEX IF NOT EXISTS idx_journal_sessionId ON journal_entries(sessionId)',
+      `
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        policy TEXT NOT NULL,
+        startedAt TEXT NOT NULL,
+        endedAt TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        createdAt TEXT DEFAULT (datetime('now'))
+      )
+      `,
+      'CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)',
+      'CREATE INDEX IF NOT EXISTS idx_sessions_startedAt ON sessions(startedAt)',
+      `
+      CREATE TABLE IF NOT EXISTS event_log (
+        id TEXT PRIMARY KEY,
+        sessionId TEXT,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        createdAt TEXT DEFAULT (datetime('now'))
+      )
+      `,
+      'CREATE INDEX IF NOT EXISTS idx_event_log_sessionId ON event_log(sessionId)',
+      'CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(type)',
+      'CREATE INDEX IF NOT EXISTS idx_event_log_createdAt ON event_log(createdAt)',
+    ],
+  },
+  {
+    version: 2,
+    statements: [`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updatedAt TEXT DEFAULT (datetime('now'))
+      )
+    `],
+  },
+  {
+    version: 3,
+    statements: ['PRAGMA journal_mode=WAL'],
+  },
 ];
 
 // ============================================================================
@@ -119,18 +134,24 @@ export interface HarmonStoreConfig {
 export class HarmonStore {
   private client: Client;
   private dbPath: string;
+  private memory: boolean;
 
   constructor(config: HarmonStoreConfig = {}) {
     const dbPath = config.dbPath || '.harmon.db';
     this.dbPath = path.resolve(dbPath);
+    this.memory = config.memory === true;
 
     // Ensure directory exists
     const dir = path.dirname(this.dbPath);
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
 
-    const url = config.memory ? 'file::memory:' : `file:${this.dbPath}`;
+    if (!this.memory) {
+      this.ensureDatabaseFiles();
+    }
+
+    const url = this.memory ? 'file::memory:' : `file:${this.dbPath}`;
 
     this.client = createClient({
       url,
@@ -141,16 +162,65 @@ export class HarmonStore {
    * Run migrations
    */
   async migrate(): Promise<void> {
+    // Ensure migration tracking table exists
+    await this.client.execute(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        version INTEGER PRIMARY KEY,
+        appliedAt TEXT DEFAULT (datetime('now'))
+      )
+    `);
+
+    // Get current version
+    const result = await this.client.execute('SELECT MAX(version) as v FROM _migrations');
+    const currentVersion = (result.rows[0]?.v as number) || 0;
+
+    // Run pending migrations
     for (const migration of MIGRATIONS) {
-      await this.client.execute(migration);
+      if (migration.version > currentVersion) {
+        for (const statement of migration.statements) {
+          await this.client.execute(statement.trim());
+        }
+        await this.client.execute({
+          sql: 'INSERT INTO _migrations (version) VALUES (?)',
+          args: [migration.version],
+        });
+      }
     }
+
+    this.enforceDatabaseFilePermissions();
   }
 
   /**
    * Close the database
    */
   async close(): Promise<void> {
-    // libsql client doesn't have explicit close, but we could clean up resources
+    this.client.close();
+  }
+
+  /**
+   * I create the SQLite files myself so the daemon never relies on process
+   * umask to keep journal data owner-only.
+   */
+  private ensureDatabaseFiles(): void {
+    const handle = fs.openSync(this.dbPath, 'a', 0o600);
+    fs.closeSync(handle);
+    this.enforceDatabaseFilePermissions();
+  }
+
+  /**
+   * I keep the main DB and SQLite sidecars private to the current user.
+   */
+  private enforceDatabaseFilePermissions(): void {
+    if (this.memory) {
+      return;
+    }
+
+    for (const filePath of [this.dbPath, `${this.dbPath}-shm`, `${this.dbPath}-wal`]) {
+      if (!fs.existsSync(filePath)) {
+        continue;
+      }
+      fs.chmodSync(filePath, 0o600);
+    }
   }
 
   // ============================================================================
@@ -274,26 +344,32 @@ export class HarmonStore {
 
   async endSession(id: string): Promise<void> {
     const now = new Date().toISOString();
-    await this.client.execute({
+    const result = await this.client.execute({
       sql: `
         UPDATE sessions
         SET endedAt = ?, status = 'completed'
-        WHERE id = ?
+        WHERE id = ? AND status = 'active'
       `,
       args: [now, id],
     });
+    if (result.rowsAffected === 0) {
+      throw new Error(`Session ${id} not found or not active`);
+    }
   }
 
   async cancelSession(id: string): Promise<void> {
     const now = new Date().toISOString();
-    await this.client.execute({
+    const result = await this.client.execute({
       sql: `
         UPDATE sessions
         SET endedAt = ?, status = 'cancelled'
-        WHERE id = ?
+        WHERE id = ? AND status = 'active'
       `,
       args: [now, id],
     });
+    if (result.rowsAffected === 0) {
+      throw new Error(`Session ${id} not found or not active`);
+    }
   }
 
   async getSession(id: string): Promise<Session | null> {
@@ -472,7 +548,7 @@ export class HarmonStore {
 
     const recentMoodDistribution: Record<string, number> = {};
     for (const row of moodResult.rows) {
-      const tags = (row.moodTags as string).split(',').map((t) => t.trim());
+      const tags = ((row.moodTags as string) || '').split(',').map((t) => t.trim());
       for (const tag of tags) {
         if (tag) {
           recentMoodDistribution[tag] = (recentMoodDistribution[tag] || 0) + (row.count as number);
@@ -519,9 +595,8 @@ export class HarmonStore {
 /**
  * Create a store with default configuration
  */
-export function createStore(config?: HarmonStoreConfig): HarmonStore {
+export async function createStore(config?: HarmonStoreConfig): Promise<HarmonStore> {
   const store = new HarmonStore(config);
-  // Auto-migrate
-  store.migrate().catch(console.error);
+  await store.migrate();
   return store;
 }
