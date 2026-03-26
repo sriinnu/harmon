@@ -30,6 +30,8 @@ DerivedData/
 
 # Runtime data
 .harmon.db
+.harmon.db-shm
+.harmon.db-wal
 *.sqlite
 *.sqlite3
 dist/

@@ -129,6 +129,7 @@ export class Harmond {
   private port: number;
   private host: string;
   private apiToken?: string;
+  private spotifyRedirectUri: string;
   private corsOrigins: Set<string>;
   private allowAllOrigins = false;
   private enableSSE: boolean;
@@ -173,8 +174,10 @@ export class Harmond {
       host: this.host,
       nodeEnv: process.env.NODE_ENV,
       port: this.port,
+      spotifyClientId: process.env.SPOTIFY_CLIENT_ID,
       spotifyRedirectUri: process.env.SPOTIFY_REDIRECT_URI,
     });
+    this.spotifyRedirectUri = validatedEnvironment.spotifyRedirectUri;
 
     if (encryptionSecret) {
       this.encryptor = createEncryptor({ secret: encryptionSecret });
@@ -183,13 +186,12 @@ export class Harmond {
       this.logger.warn('Credential encryption disabled — development only');
     }
 
-    const redirectUri = validatedEnvironment.spotifyRedirectUri;
     const tokenStore = this.createSpotifyTokenStore();
     const cookieStore = this.createSpotifyCookieStore();
     this.spotifyAuth = createSpotifyAuth({
       clientId: process.env.SPOTIFY_CLIENT_ID || '',
       clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
-      redirectUri,
+      redirectUri: this.spotifyRedirectUri,
       tokenStore,
       cookieStore,
     });
@@ -333,8 +335,12 @@ export class Harmond {
     });
 
     // Status
-    this.app.get('/v1/status', (_req: Request, res: Response) => {
-      res.json(this.getStatus());
+    this.app.get('/v1/status', async (_req: Request, res: Response) => {
+      try {
+        res.json(await this.getStatus());
+      } catch (error) {
+        this.handleRouteError(res, error);
+      }
     });
 
     // Devices
@@ -425,7 +431,7 @@ export class Harmond {
           });
           return;
         }
-        await this.spotifyAuth.logout();
+        await this.validateImportedSpotifyCookies(validated);
         await this.spotifyAuth.setCookies(validated);
         res.json({ success: true, cookiesImported: validated.length });
       } catch (error) {
@@ -439,7 +445,7 @@ export class Harmond {
         const limit = Math.min(Math.max(Number.parseInt(req.query.limit as string, 10) || 50, 1), 500);
         res.json(await this.store.getJournalEntries(limit));
       } catch (error) {
-        res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        this.handleRouteError(res, error);
       }
     });
 
@@ -482,7 +488,7 @@ export class Harmond {
       try {
         res.json(await this.store.getStats());
       } catch (error) {
-        res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        this.handleRouteError(res, error);
       }
     });
 
@@ -943,17 +949,19 @@ export class Harmond {
   // Status
   // ============================================================================
 
-  private getStatus(): DaemonStatus {
+  private async getStatus(): Promise<DaemonStatus> {
     const engineState = this.engine.getState();
+    const spotify = await this.getSpotifyProviderStatus();
+    const apple = this.getAppleProviderStatus();
     const providers = {
-      spotify: this.getSpotifyProviderStatus(),
-      apple: this.getAppleProviderStatus(),
+      spotify,
+      apple,
     } as DaemonStatus['providers'];
 
     return {
       isRunning: this.server !== null,
       version: DAEMON_VERSION,
-      spotifyConnected: this.spotifyAuth.isConnected(),
+      spotifyConnected: spotify.connected,
       features: {
         sse: this.enableSSE,
       },
@@ -1366,31 +1374,54 @@ export class Harmond {
   }
 
   /**
-   * I report Spotify as configured only when the daemon has persisted auth
-   * material, and I surface capability/auth details so callers can avoid
-   * guessing what "connected" actually means.
+   * I probe Spotify auth material before reporting provider readiness so
+   * status reflects more than stored credentials alone.
    */
-  private getSpotifyProviderStatus(): ProviderStatusDetails {
+  private async getSpotifyProviderStatus(): Promise<ProviderStatusDetails> {
     const authMode = this.getSpotifyAuthMode();
-
-    return {
-      connected: authMode !== 'none',
-      name: 'Spotify',
-      status: authMode === 'none' ? 'missing' : 'configured',
-      auth: authMode,
-      capabilities: {
-        cookieImport: true,
-        library: true,
-        playback: true,
-        search: true,
-        sessionControl: true,
-      },
+    const capabilities = {
+      cookieImport: true,
+      library: true,
+      playback: true,
+      search: true,
+      sessionControl: true,
     };
+
+    if (authMode === 'none') {
+      return {
+        connected: false,
+        name: 'Spotify',
+        status: 'missing',
+        auth: authMode,
+        capabilities,
+      };
+    }
+
+    try {
+      const accessToken = await this.spotifyAuth.getAccessToken();
+      const isReady = typeof accessToken === 'string' && accessToken.length > 0;
+
+      return {
+        connected: isReady,
+        name: 'Spotify',
+        status: isReady ? 'ready' : 'degraded',
+        auth: authMode,
+        capabilities,
+      };
+    } catch {
+      return {
+        connected: false,
+        name: 'Spotify',
+        status: 'degraded',
+        auth: authMode,
+        capabilities,
+      };
+    }
   }
 
   /**
-   * I split Apple catalog, library, and local playback readiness so status
-   * stays truthful about which subset of the Apple surface is actually usable.
+   * I split Apple catalog, library, and local playback readiness so provider
+   * status stays truthful about which subset of the Apple surface is usable.
    */
   private getAppleProviderStatus(): ProviderStatusDetails {
     const auth =
@@ -1399,11 +1430,15 @@ export class Harmond {
         : this.appleCatalogEnabled
           ? 'developer-token'
           : 'none';
+    const hasAppleCapability =
+      this.appleCatalogEnabled ||
+      this.appleLibraryEnabled ||
+      this.applePlaybackEnabled;
 
     return {
-      connected: this.appleCatalogEnabled,
+      connected: hasAppleCapability,
       name: 'Apple Music',
-      status: this.appleCatalogEnabled || this.applePlaybackEnabled ? 'configured' : 'missing',
+      status: hasAppleCapability ? 'ready' : 'missing',
       auth,
       capabilities: {
         catalog: this.appleCatalogEnabled,
@@ -1471,6 +1506,35 @@ export class Harmond {
     return auth.getAuthMode?.() ?? (auth.isConnected() ? 'oauth' : 'none');
   }
 
+  /**
+   * I probe imported Spotify cookies before persisting them so invalid browser
+   * exports cannot wipe a working daemon auth state.
+   */
+  private async validateImportedSpotifyCookies(cookies: SpotifyCookieRecord[]): Promise<void> {
+    const probeAuth = createSpotifyAuth({
+      clientId: process.env.SPOTIFY_CLIENT_ID || '',
+      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+      redirectUri: this.spotifyRedirectUri,
+    });
+
+    await probeAuth.setCookies(cookies);
+
+    try {
+      const accessToken = await probeAuth.getAccessToken();
+      if (!accessToken) {
+        throw new ValidationError('Imported Spotify cookies did not produce an access token.');
+      }
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        throw error;
+      }
+
+      throw new ValidationError(
+        'Imported Spotify cookies were rejected by Spotify. Export a fresh spotify.com session and try again.',
+      );
+    }
+  }
+
   getStore(): HarmonStore {
     return this.store;
   }
@@ -1491,11 +1555,21 @@ if (isMain) {
     console.error('Failed to initialize harmond:', message);
     process.exit(1);
   }
-  daemon.start().then(() => {
-    console.log(`Harmond listening on http://127.0.0.1:${DEFAULT_PORT}`);
-  }).catch((err) => {
-    console.error('Failed to start:', err.message);
+  const failFast = async (label: string, error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(label, message);
+    try {
+      await daemon.stop();
+    } catch {
+      // I ignore shutdown failures during fatal exit because the process is terminating anyway.
+    }
     process.exit(1);
+  };
+
+  daemon.start().then(() => {
+    console.log('Harmond listening');
+  }).catch((err) => {
+    void failFast('Failed to start:', err);
   });
 
   const shutdown = async () => {
@@ -1504,4 +1578,10 @@ if (isMain) {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('uncaughtException', (error) => {
+    void failFast('Uncaught exception:', error);
+  });
+  process.on('unhandledRejection', (reason) => {
+    void failFast('Unhandled rejection:', reason);
+  });
 }

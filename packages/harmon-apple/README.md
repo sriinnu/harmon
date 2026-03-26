@@ -16,8 +16,8 @@ pnpm add @athena/harmon-apple
 import { createAppleMusicClient } from '@athena/harmon-apple';
 
 const client = createAppleMusicClient({
-  developerToken: process.env.APPLE_DEVELOPER_TOKEN!,
-  userToken: process.env.APPLE_USER_TOKEN,
+  developerToken: process.env.APPLE_MUSIC_DEVELOPER_TOKEN!,
+  userToken: process.env.APPLE_MUSIC_USER_TOKEN,
 });
 const results = await client.search('ambient study', ['songs']);
 console.log(results.songs[0].name);

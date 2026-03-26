@@ -5,13 +5,28 @@
 
 import { createDaemon } from '../dist/src/index.js';
 
-const daemon = createDaemon();
+let daemon;
+try {
+  daemon = createDaemon();
+} catch (error) {
+  console.error('Failed to initialize harmond:', error instanceof Error ? error.message : error);
+  process.exit(1);
+}
+
+const failFast = async (label, error) => {
+  console.error(label, error instanceof Error ? error.message : error);
+  try {
+    await daemon.stop();
+  } catch {
+    // I ignore shutdown failures during fatal exit because the process is terminating anyway.
+  }
+  process.exit(1);
+};
 
 daemon.start().then(() => {
   console.log('Harmond started');
 }).catch((err) => {
-  console.error('Failed to start harmond:', err.message || err);
-  process.exit(1);
+  void failFast('Failed to start harmond:', err);
 });
 
 // Graceful shutdown on signals
@@ -29,6 +44,9 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 // Catch unhandled rejections
+process.on('uncaughtException', (error) => {
+  void failFast('Uncaught exception:', error);
+});
 process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled rejection:', reason);
+  void failFast('Unhandled rejection:', reason);
 });

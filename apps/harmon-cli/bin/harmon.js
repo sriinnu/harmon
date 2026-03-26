@@ -82,6 +82,16 @@ function outputResult(opts, data, formatters = {}) {
   console.log(JSON.stringify(data, null, 2));
 }
 
+function formatProviderStatusLine(name, provider) {
+  if (!provider) {
+    return `${name}: unavailable`;
+  }
+
+  const status = provider.status || (provider.connected ? 'ready' : 'missing');
+  const auth = provider.auth ? ` (${provider.auth})` : '';
+  return `${name}: ${status}${auth}`;
+}
+
 async function readCookieFile(filePath) {
   const raw = await fs.readFile(filePath, 'utf8');
   const parsed = JSON.parse(raw);
@@ -379,10 +389,17 @@ program
         return `${data.status.isRunning ? '1' : '0'}\t${data.status.spotifyConnected ? '1' : '0'}\t${sessionId}\t${sessionActive}`;
       },
       human: (data) => {
+        const spotifyProvider = data.status.providers?.spotify;
+        const appleProvider = data.status.providers?.apple;
         const lines = [
           `daemon: ${data.status.isRunning ? 'running' : 'stopped'}`,
-          `spotify: ${data.status.spotifyConnected ? 'connected' : 'not connected'}`,
+          spotifyProvider
+            ? formatProviderStatusLine('spotify', spotifyProvider)
+            : `spotify: ${data.status.spotifyConnected ? 'connected' : 'not connected'}`,
         ];
+        if (appleProvider) {
+          lines.push(formatProviderStatusLine('apple', appleProvider));
+        }
         if (data.status.session) {
           lines.push(`session: ${data.status.session.id} (${data.status.session.isActive ? 'active' : 'idle'})`);
         }
@@ -412,7 +429,15 @@ auth
     const status = await cli.status();
     outputResult(opts, status, {
       plain: (data) => `${data.spotifyConnected ? '1' : '0'}`,
-      human: (data) => (data.spotifyConnected ? 'spotify: connected' : 'spotify: not connected'),
+      human: (data) => {
+        const lines = [
+          formatProviderStatusLine('spotify', data.providers?.spotify),
+        ];
+        if (data.providers?.apple) {
+          lines.push(formatProviderStatusLine('apple', data.providers.apple));
+        }
+        return lines.join('\n');
+      },
     });
   });
 

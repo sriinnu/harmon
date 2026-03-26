@@ -33,6 +33,44 @@ function createTestDaemon(
   });
 }
 
+async function withProductionDaemon(
+  run: (daemon: Harmond, app: any) => Promise<void>,
+): Promise<void> {
+  const previousEnv = {
+    HARMON_CORS_ORIGINS: process.env.HARMON_CORS_ORIGINS,
+    HARMON_ENCRYPTION_SECRET: process.env.HARMON_ENCRYPTION_SECRET,
+    NODE_ENV: process.env.NODE_ENV,
+    SPOTIFY_CLIENT_ID: process.env.SPOTIFY_CLIENT_ID,
+    SPOTIFY_REDIRECT_URI: process.env.SPOTIFY_REDIRECT_URI,
+  };
+
+  process.env.NODE_ENV = 'production';
+  process.env.HARMON_ENCRYPTION_SECRET = 'x'.repeat(32);
+  process.env.HARMON_CORS_ORIGINS = 'http://localhost:3000';
+  delete process.env.SPOTIFY_CLIENT_ID;
+  delete process.env.SPOTIFY_REDIRECT_URI;
+
+  const daemon = createTestDaemon({
+    apiToken: TEST_API_TOKEN,
+    corsOrigins: ['http://localhost:3000'],
+  });
+
+  try {
+    await daemon.start();
+    await run(daemon, (daemon as any).app);
+  } finally {
+    await daemon.stop().catch(() => undefined);
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 const mockSessionPolicy: SessionPolicy = {
   version: 1,
   mode: 'focus',
@@ -269,6 +307,11 @@ describe('Authentication', () => {
       await daemon.stop();
     });
 
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
     it('rejects cookie payloads without supported Spotify auth cookies', async () => {
       const response = await request(app)
         .post('/v1/auth/spotify/import')
@@ -288,7 +331,18 @@ describe('Authentication', () => {
       expect(response.body.error).toContain('sp_dc');
     });
 
-    it('imports only supported Spotify auth cookies', async () => {
+    it('imports only supported Spotify auth cookies without clearing existing auth state', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          accessToken: 'cookie-token',
+          accessTokenExpirationTimestampMs: Date.now() + 5 * 60_000,
+          tokenType: 'Bearer',
+        }),
+      }));
+      const logoutSpy = vi.spyOn((daemon as any).spotifyAuth, 'logout');
+      const setCookiesSpy = vi.spyOn((daemon as any).spotifyAuth, 'setCookies');
+
       const response = await request(app)
         .post('/v1/auth/spotify/import')
         .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
@@ -314,6 +368,39 @@ describe('Authentication', () => {
         success: true,
         cookiesImported: 1,
       });
+      expect(logoutSpy).not.toHaveBeenCalled();
+      expect(setCookiesSpy).toHaveBeenCalledWith([
+        expect.objectContaining({
+          domain: 'spotify.com',
+          name: 'sp_dc',
+          value: 'keep-me',
+        }),
+      ]);
+    });
+
+    it('rejects imported cookies that cannot produce a Spotify access token', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: async () => 'expired',
+      }));
+
+      const response = await request(app)
+        .post('/v1/auth/spotify/import')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+        .send({
+          cookies: [
+            {
+              domain: '.spotify.com',
+              name: 'sp_dc',
+              path: '/',
+              value: 'stale-cookie',
+            },
+          ],
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('rejected by Spotify');
     });
   });
 });
@@ -365,6 +452,43 @@ describe('Status Endpoint', () => {
         search: expect.any(Boolean),
       }),
       status: expect.any(String),
+    });
+  });
+
+  it('marks Spotify as degraded when auth material cannot produce an access token', async () => {
+    const spotifyAuth = (daemon as any).spotifyAuth;
+    vi.spyOn(spotifyAuth, 'getAuthMode').mockReturnValue('cookies');
+    vi.spyOn(spotifyAuth, 'getAccessToken').mockRejectedValue(new Error('Spotify cookie token failed: 401 expired'));
+
+    const response = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.spotifyConnected).toBe(false);
+    expect(response.body.providers.spotify).toMatchObject({
+      auth: 'cookies',
+      connected: false,
+      status: 'degraded',
+    });
+  });
+
+  it('reports Apple playback-only setups as connected', async () => {
+    (daemon as any).appleCatalogEnabled = false;
+    (daemon as any).appleLibraryEnabled = false;
+    (daemon as any).applePlaybackEnabled = true;
+
+    const response = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.providers.apple).toMatchObject({
+      connected: true,
+      status: 'ready',
+      capabilities: expect.objectContaining({
+        playback: true,
+      }),
     });
   });
 
@@ -1041,6 +1165,32 @@ describe('Journal Endpoints', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error).toContain('context exceeds 2000 bytes');
+  });
+
+  it('redacts unexpected journal read failures in production', async () => {
+    await withProductionDaemon(async (daemon, app) => {
+      vi.spyOn((daemon as any).store, 'getJournalEntries').mockRejectedValue(new Error('sqlite exploded'));
+
+      const response = await request(app)
+        .get('/v1/journal')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Internal server error');
+    });
+  });
+
+  it('redacts unexpected stats failures in production', async () => {
+    await withProductionDaemon(async (daemon, app) => {
+      vi.spyOn((daemon as any).store, 'getStats').mockRejectedValue(new Error('stats exploded'));
+
+      const response = await request(app)
+        .get('/v1/stats')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Internal server error');
+    });
   });
 });
 

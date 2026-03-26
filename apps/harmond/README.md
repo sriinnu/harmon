@@ -20,9 +20,12 @@ NODE_ENV=production \
 HARMON_PORT=17373 \
 HARMON_API_TOKEN=secret \
 HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32) \
+SPOTIFY_CLIENT_ID=your_client_id \
 SPOTIFY_REDIRECT_URI=https://harmon.example/v1/auth/spotify/callback \
 harmond
 ```
+
+Cookie-only Spotify deployments do not need `SPOTIFY_CLIENT_ID` or `SPOTIFY_REDIRECT_URI`.
 
 ```typescript
 // Programmatic usage
@@ -48,7 +51,7 @@ await daemon.start();
 | `POST` | `/v1/spotify/play` | Start/resume Spotify playback |
 | `POST` | `/v1/apple/play` | Start Apple Music playback |
 
-`/v1/status` includes per-provider `status`, `auth`, and `capabilities` fields so callers can distinguish stored auth material from actual Apple catalog/library/playback coverage.
+`/v1/status` includes per-provider `status`, `auth`, and `capabilities` fields so callers can distinguish live provider readiness from Apple catalog/library/playback coverage.
 
 ### SSE Events
 

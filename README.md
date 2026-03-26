@@ -200,11 +200,11 @@ Harmon enforces strict security in production environments:
 - ✅ **API Token Required**: Set `HARMON_API_TOKEN` (required in production)
 - 🔐 **Credential Encryption REQUIRED**: Set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - **daemon will not start without it**
 - ✅ **CORS Whitelist**: No wildcard origins allowed in production
-- ✅ **Explicit OAuth Callback**: Set `SPOTIFY_REDIRECT_URI` in production
+- ✅ **Explicit OAuth Callback**: Set `SPOTIFY_CLIENT_ID` + `SPOTIFY_REDIRECT_URI` together when Spotify OAuth is enabled
 - ✅ **Rate Limiting**: Automatic protection against abuse
 - ✅ **Timing-Safe Auth**: Constant-time token comparison prevents timing attacks
 
-**⚠️ Critical**: The daemon will **refuse to start** in production (`NODE_ENV=production`) unless `HARMON_API_TOKEN`, `HARMON_ENCRYPTION_SECRET`, and `SPOTIFY_REDIRECT_URI` are set and `HARMON_CORS_ORIGINS` does not contain `*`. This prevents accidental plaintext token storage, unauthenticated control surfaces, and inferred OAuth callback URLs. Journal, session, and event rows still remain unencrypted local SQLite data.
+**⚠️ Critical**: The daemon will **refuse to start** in production (`NODE_ENV=production`) unless `HARMON_API_TOKEN` and `HARMON_ENCRYPTION_SECRET` are set and `HARMON_CORS_ORIGINS` does not contain `*`. If Spotify OAuth is enabled, `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI` must be configured together. Cookie-only Spotify deployments remain valid without OAuth callback config. Journal, session, and event rows still remain unencrypted local SQLite data.
 
 ### Generating Secrets
 
@@ -234,11 +234,15 @@ export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 HARMON_API_TOKEN=your_api_token              # API authentication
 HARMON_ENCRYPTION_SECRET=your_secret         # Token/cookie encryption (min 32 chars) - REQUIRED
 HARMON_CORS_ORIGINS=https://app.example.com  # Comma-separated, no wildcards
-SPOTIFY_CLIENT_ID=your_client_id             # Spotify OAuth
+```
+
+**Optional for Spotify OAuth**
+```bash
+SPOTIFY_CLIENT_ID=your_client_id
 SPOTIFY_REDIRECT_URI=https://harmon.example/v1/auth/spotify/callback
 ```
 
-**Note**: production startup is blocked unless `HARMON_API_TOKEN`, `HARMON_ENCRYPTION_SECRET`, and `SPOTIFY_REDIRECT_URI` are set and `HARMON_CORS_ORIGINS` stays explicit. Generate a secure encryption secret using:
+**Note**: production startup is blocked unless `HARMON_API_TOKEN` and `HARMON_ENCRYPTION_SECRET` are set and `HARMON_CORS_ORIGINS` stays explicit. If you enable Spotify OAuth, set `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI` together. Generate a secure encryption secret using:
 ```bash
 export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 ```
@@ -496,7 +500,7 @@ pnpm --filter @athena/harmon-flow start
 4. **Start Daemon**: `harmond`
 5. **Get Login URL**: `POST /v1/auth/spotify/login`
 6. **Open in Browser**: Approve access
-7. **Verify**: `GET /v1/status` shows `spotifyConnected: true`
+7. **Verify**: `GET /v1/status` shows `providers.spotify.status: "ready"`
 
 ### Required Spotify Scopes
 
@@ -526,8 +530,8 @@ Before deploying to production:
 - [ ] Generate and set `HARMON_API_TOKEN`
 - [ ] **Generate and set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - MANDATORY**
 - [ ] Configure `HARMON_CORS_ORIGINS` (no wildcards)
-- [ ] Set up Spotify OAuth credentials
-- [ ] Set `SPOTIFY_REDIRECT_URI` to the exact production callback URL
+- [ ] Set up Spotify OAuth credentials if you need browser login
+- [ ] Set `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI` together if OAuth is enabled
 - [ ] Configure logging level (`LOG_LEVEL=info`)
 - [ ] Set up process manager (PM2, systemd)
 - [ ] Configure reverse proxy (nginx, caddy)
@@ -535,7 +539,7 @@ Before deploying to production:
 - [ ] Monitor logs and error rates
 - [ ] Set up database backups
 
-**⚠️ Important**: The daemon will not start if `HARMON_API_TOKEN`, `HARMON_ENCRYPTION_SECRET`, or `SPOTIFY_REDIRECT_URI` are missing in production, or if `HARMON_CORS_ORIGINS` contains `*`. This keeps the control plane authenticated and the OAuth callback explicit.
+**⚠️ Important**: The daemon will not start if `HARMON_API_TOKEN` or `HARMON_ENCRYPTION_SECRET` are missing in production, or if `HARMON_CORS_ORIGINS` contains `*`. If Spotify OAuth is enabled, `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI` must also be set.
 
 ## Roadmap
 
