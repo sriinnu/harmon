@@ -1,9 +1,9 @@
 ---
 name: harmon-youtube
-description: YouTube Music client using Data API v3 and internal YTM endpoints with MusicProvider adapter
+description: YouTube Music client for the currently implemented Data API v3 surface with MusicProvider adapter
 capabilities:
-  - Search YouTube Music for songs, albums, artists, and playlists
-  - Access user library, playlists, recommendations, and watch playlists
+  - Search YouTube Music for songs
+  - Look up a single song/video by id
   - Adapt YouTube Music to the harmon-core MusicProvider interface
 tags:
   - youtube-music
@@ -17,15 +17,15 @@ version: 0.1.0
 # Harmon YouTube
 
 ## What this does
-harmon-youtube integrates YouTube Music into the harmon ecosystem. It uses the YouTube Data API v3 for public search and reverse-engineered YouTube Music internal endpoints (WEB_REMIX client) for library access, recommendations, and radio-style watch playlists. Songs are mapped to the shared TrackInfo format, and the YouTubeMusicProvider adapter lets harmon-core treat YouTube Music as a standard track source.
+harmon-youtube integrates YouTube Music into the harmon ecosystem. It currently uses the YouTube Data API v3 for song search and single-song lookup. Library access, recommendations, and watch playlists remain intentionally disabled until their reverse-engineered YTM response parsers are reliable enough to ship. Songs are mapped to the shared TrackInfo format, and the YouTubeMusicProvider adapter lets harmon-core treat YouTube Music as a standard track source.
 
 ## When to use
-- Searching YouTube Music or accessing a user's liked videos and playlists
-- Generating radio-style queues from a seed track via the watch playlist endpoint
-- Adding YouTube Music as a candidate source in a harmon session
+- Searching YouTube Music songs through the Data API
+- Looking up an individual song/video by id
+- Adding YouTube Music as a candidate source in a harmon session when song search is sufficient
 
 ## Key exports
-- `createYouTubeMusicClient` — factory that returns a YouTubeMusicClient (needs accessToken, apiKey, or cookies)
+- `createYouTubeMusicClient` — factory that returns a YouTubeMusicClient (needs an accessToken or apiKey)
 - `YouTubeMusicProvider` — MusicProvider adapter for harmon-core
 - `mapSongToTrackInfo` — converts a YouTubeMusicSong to the provider-agnostic TrackInfo format
 

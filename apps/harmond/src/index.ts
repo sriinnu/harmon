@@ -7,7 +7,7 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { HarmonStore } from '@athena/harmon-store';
 import { createEngine, type SessionEngine, type EngineEvent } from '@athena/harmon-core';
 import { createLogger, type Logger } from '@athena/harmon-logger';
@@ -20,7 +20,7 @@ import {
   parseCommandSafe,
   SessionStartCommand,
   SessionNudgeCommand,
-  type SessionPolicy,
+  SessionPolicy,
   type Command,
   type Event,
   type DaemonStatus,
@@ -41,7 +41,17 @@ import {
 } from '@athena/harmon-spotify';
 import type { MusicProvider, PlaybackController } from '@athena/harmon-core';
 import { createAppleMusicClient, type AppleMusicClient } from '@athena/harmon-apple';
-import { errorHandler } from './errors.js';
+import {
+  ApiError,
+  ConfigurationError,
+  ProviderUnavailableError,
+  SessionNotFoundError,
+  UnsupportedPlatformError,
+  UpstreamServiceError,
+  ValidationError,
+  errorHandler,
+} from './errors.js';
+import { validateDaemonEnvironment } from './config.js';
 
 // ============================================================================
 // Configuration
@@ -63,6 +73,25 @@ interface DaemonConfig {
   enableSSE?: boolean;
   apiToken?: string;
   corsOrigins?: string[];
+}
+
+interface JournalEntryInput {
+  content: string;
+  context?: Record<string, unknown>;
+  device: string;
+  energyLevel?: string;
+  moodTags: string[];
+  policy?: SessionPolicy;
+  sessionId?: string;
+  source: string;
+}
+
+interface ProviderStatusDetails {
+  connected: boolean;
+  name?: string;
+  status?: 'missing' | 'configured' | 'ready' | 'degraded';
+  auth?: 'none' | 'oauth' | 'cookies' | 'developer-token' | 'developer-and-user-token';
+  capabilities?: Record<string, boolean>;
 }
 
 function parsePort(value?: string): number | undefined {
@@ -100,6 +129,10 @@ export class Harmond {
   private apiToken?: string;
   private corsOrigins: Set<string>;
   private allowAllOrigins = false;
+  private enableSSE: boolean;
+  private appleCatalogEnabled = false;
+  private appleLibraryEnabled = false;
+  private applePlaybackEnabled = process.platform === 'darwin';
   private sseClients: Set<Response> = new Set();
   private server: ReturnType<express.Application['listen']> | null = null;
   private sseHeartbeat: ReturnType<typeof setInterval> | null = null;
@@ -113,11 +146,12 @@ export class Harmond {
     const envCorsOrigins = parseCorsOrigins(process.env.HARMON_CORS_ORIGINS);
     const corsOrigins = config.corsOrigins ?? envCorsOrigins;
 
-    this.port = config.port || envPort || DEFAULT_PORT;
+    this.port = config.port ?? envPort ?? DEFAULT_PORT;
     this.host = config.host || envHost || DEFAULT_HOST;
     this.apiToken = config.apiToken || process.env.HARMON_API_TOKEN;
     this.allowAllOrigins = corsOrigins.includes('*');
     this.corsOrigins = new Set(corsOrigins.filter((origin) => origin !== '*'));
+    this.enableSSE = config.enableSSE ?? true;
 
     // Initialize logging
     this.logger = createLogger({ name: 'harmond' });
@@ -126,27 +160,28 @@ export class Harmond {
     this.app = express();
 
     // Use HarmonStore directly (not async createStore) — migrate() called in start()
-    this.store = new HarmonStore({ dbPath: config.dbPath || envDbPath || DEFAULT_DB_PATH });
+    this.store = new HarmonStore({ dbPath: config.dbPath ?? envDbPath ?? DEFAULT_DB_PATH });
 
     // Initialize encryption if secret provided
     const encryptionSecret = process.env.HARMON_ENCRYPTION_SECRET;
-
-    if (process.env.NODE_ENV === 'production' && !encryptionSecret) {
-      this.logger.error('FATAL: Encryption required in production. Set HARMON_ENCRYPTION_SECRET.');
-      console.error('\n❌ FATAL: Set HARMON_ENCRYPTION_SECRET (min 32 chars)\n');
-      process.exit(1);
-    }
+    const validatedEnvironment = validateDaemonEnvironment({
+      apiToken: this.apiToken,
+      corsOrigins,
+      encryptionSecret,
+      host: this.host,
+      nodeEnv: process.env.NODE_ENV,
+      port: this.port,
+      spotifyRedirectUri: process.env.SPOTIFY_REDIRECT_URI,
+    });
 
     if (encryptionSecret) {
       this.encryptor = createEncryptor({ secret: encryptionSecret });
-      this.logger.info('Token encryption enabled');
+      this.logger.info('Credential encryption enabled');
     } else {
-      this.logger.warn('Token encryption disabled — development only');
+      this.logger.warn('Credential encryption disabled — development only');
     }
 
-    const redirectUri =
-      process.env.SPOTIFY_REDIRECT_URI ||
-      `http://${this.host}:${this.port}/v1/auth/spotify/callback`;
+    const redirectUri = validatedEnvironment.spotifyRedirectUri;
     const tokenStore = this.createSpotifyTokenStore();
     const cookieStore = this.createSpotifyCookieStore();
     this.spotifyAuth = createSpotifyAuth({
@@ -163,10 +198,15 @@ export class Harmond {
     this.playback = createSpotifyPlayback(this.spotifyClient);
 
     const appleDeveloperToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
+    const appleUserToken = process.env.APPLE_MUSIC_USER_TOKEN;
     if (appleDeveloperToken) {
+      this.appleCatalogEnabled = true;
+      this.appleLibraryEnabled =
+        typeof appleUserToken === 'string' &&
+        appleUserToken.length > 0;
       this.appleMusicClient = createAppleMusicClient({
         developerToken: appleDeveloperToken,
-        userToken: process.env.APPLE_MUSIC_USER_TOKEN,
+        userToken: appleUserToken,
         storefront: process.env.APPLE_MUSIC_STOREFRONT || 'us',
       });
     }
@@ -200,6 +240,9 @@ export class Harmond {
       res.setHeader('X-Request-Id', requestId);
 
       res.on('finish', () => {
+        if (process.env.NODE_ENV === 'test') {
+          return;
+        }
         this.requestLogger.info({
           requestId,
           method: req.method,
@@ -234,6 +277,9 @@ export class Harmond {
       windowMs: 15 * 60 * 1000,
       max: 5,
       message: { success: false, error: 'Too many authentication attempts' },
+      // I keep the OAuth callback outside the auth attempt budget so a
+      // valid browser redirect is not stranded behind earlier retries.
+      skip: (req) => req.path === '/spotify/callback',
     });
 
     const commandLimiter = rateLimit({
@@ -294,7 +340,7 @@ export class Harmond {
       try {
         res.json(await this.spotifyClient.getDevices());
       } catch (error) {
-        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        this.handleRouteError(res, error);
       }
     });
 
@@ -309,7 +355,7 @@ export class Harmond {
         const result = await this.handleCommand(parsed.data);
         res.json(result);
       } catch (error) {
-        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        this.handleRouteError(res, error);
       }
     });
 
@@ -325,14 +371,17 @@ export class Harmond {
         this.broadcastEvent('device.changed', { deviceId });
         res.json({ success: true });
       } catch (error) {
-        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        this.handleRouteError(res, error);
       }
     });
 
     // Auth
     this.app.post('/v1/auth/spotify/login', (_req: Request, res: Response) => {
-      try { res.json({ url: this.spotifyAuth.getLoginUrl() }); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      try {
+        res.json({ url: this.spotifyAuth.getLoginUrl() });
+      } catch (error) {
+        this.handleRouteError(res, error);
+      }
     });
 
     this.app.get('/v1/auth/spotify/callback', async (req: Request, res: Response) => {
@@ -344,7 +393,7 @@ export class Harmond {
         this.broadcastEvent('spotify.connected', {});
         res.status(200).send('Spotify connected. You can close this window.');
       } catch (error) {
-        res.status(400).send(error instanceof Error ? error.message : 'Spotify auth failed.');
+        this.handleRouteError(res, error, true);
       }
     });
 
@@ -354,7 +403,7 @@ export class Harmond {
         this.broadcastEvent('spotify.disconnected', {});
         res.json({ success: true });
       } catch (error) {
-        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        this.handleRouteError(res, error);
       }
     });
 
@@ -366,72 +415,73 @@ export class Harmond {
           res.status(400).json({ success: false, error: 'Missing cookies array' });
           return;
         }
-        // Validate each cookie has required fields
-        const validated: SpotifyCookieRecord[] = [];
-        for (const c of cookies) {
-          if (typeof c !== 'object' || c === null) continue;
-          if (typeof c.name !== 'string' || typeof c.value !== 'string') continue;
-          validated.push({
-            domain: typeof c.domain === 'string' ? c.domain : '',
-            name: c.name,
-            path: typeof c.path === 'string' ? c.path : '/',
-            value: c.value.slice(0, 4096), // cap value length
-            expires: typeof c.expires === 'string' ? c.expires : null,
-            isSecure: typeof c.isSecure === 'boolean' ? c.isSecure : false,
-            isHTTPOnly: typeof c.isHTTPOnly === 'boolean' ? c.isHTTPOnly : false,
-          });
-        }
+        const validated = this.sanitizeImportedSpotifyCookies(cookies);
         if (validated.length === 0) {
-          res.status(400).json({ success: false, error: 'No valid cookies found' });
+          res.status(400).json({
+            success: false,
+            error: 'No supported Spotify auth cookies found. Import sp_dc and/or sp_key from spotify.com.',
+          });
           return;
         }
         await this.spotifyAuth.logout();
         await this.spotifyAuth.setCookies(validated);
         res.json({ success: true, cookiesImported: validated.length });
       } catch (error) {
-        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        this.handleRouteError(res, error);
       }
     });
 
     // Journal — with bounds
     this.app.get('/v1/journal', async (req: Request, res: Response) => {
-      const limit = Math.min(Math.max(Number.parseInt(req.query.limit as string, 10) || 50, 1), 500);
-      res.json(await this.store.getJournalEntries(limit));
+      try {
+        const limit = Math.min(Math.max(Number.parseInt(req.query.limit as string, 10) || 50, 1), 500);
+        res.json(await this.store.getJournalEntries(limit));
+      } catch (error) {
+        res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+      }
     });
 
     this.app.post('/v1/journal', async (req: Request, res: Response) => {
-      const entry = req.body;
-      if (!entry || typeof entry !== 'object') {
-        res.status(400).json({ success: false, error: 'Invalid journal entry' });
-        return;
+      try {
+        const entry = this.parseJournalEntry(req.body);
+        const id = await this.store.addJournalEntry({
+          filename: `api-${uuidv4()}.md`,
+          timestamp: new Date().toISOString(),
+          source: entry.source,
+          device: entry.device,
+          sessionId: entry.sessionId,
+          moodTags: entry.moodTags.join(', '),
+          energyLevel: entry.energyLevel,
+          context: this.serializeJournalField(entry.context, 'context', 2000),
+          content: entry.content,
+          policy: this.serializeJournalField(entry.policy, 'policy', 5000),
+        });
+        res.json({ id, success: true });
+      } catch (error) {
+        this.handleRouteError(res, error);
       }
-      const content = typeof entry.content === 'string' ? entry.content.slice(0, 10000) : '';
-      const id = await this.store.addJournalEntry({
-        filename: `api-${uuidv4()}.md`,
-        timestamp: new Date().toISOString(),
-        source: typeof entry.source === 'string' ? entry.source.slice(0, 50) : 'cli',
-        device: typeof entry.device === 'string' ? entry.device.slice(0, 50) : 'linux',
-        moodTags: Array.isArray(entry.moodTags) ? entry.moodTags.filter((t: unknown) => typeof t === 'string').join(', ') : '',
-        energyLevel: typeof entry.energyLevel === 'string' ? entry.energyLevel : undefined,
-        context: entry.context ? JSON.stringify(entry.context).slice(0, 2000) : undefined,
-        content,
-        policy: entry.policy ? JSON.stringify(entry.policy).slice(0, 5000) : undefined,
-      });
-      res.json({ id, success: true });
     });
 
     // SSE events
     this.app.get('/v1/events', (req: Request, res: Response) => {
-      if (this.sseClients.size >= MAX_SSE_CLIENTS) {
-        res.status(503).json({ success: false, error: 'Too many SSE connections' });
-        return;
+      try {
+        if (this.sseClients.size >= MAX_SSE_CLIENTS) {
+          res.status(503).json({ success: false, error: 'Too many SSE connections' });
+          return;
+        }
+        this.setupSSEClient(req, res);
+      } catch (error) {
+        this.handleRouteError(res, error);
       }
-      this.setupSSEClient(req, res);
     });
 
     // Stats
     this.app.get('/v1/stats', async (_req: Request, res: Response) => {
-      res.json(await this.store.getStats());
+      try {
+        res.json(await this.store.getStats());
+      } catch (error) {
+        res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+      }
     });
 
     // Spotify search
@@ -449,14 +499,14 @@ export class Harmond {
         const result = await this.spotifyClient.search(query, types, { limit, offset });
         res.json(result);
       } catch (error) {
-        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        this.handleRouteError(res, error);
       }
     });
 
     // Spotify playback
     this.app.get('/v1/spotify/now-playing', async (_req: Request, res: Response) => {
       try { res.json(await this.spotifyClient.getNowPlaying()); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/play', async (req: Request, res: Response) => {
@@ -465,22 +515,22 @@ export class Harmond {
         const contextUri = this.parseBodyString(req.body?.contextUri);
         await this.spotifyClient.play({ uri, contextUri });
         res.json({ success: true });
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/pause', async (_req, res) => {
       try { await this.spotifyClient.pause(); res.json({ success: true }); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/next', async (_req, res) => {
       try { await this.spotifyClient.next(); res.json({ success: true }); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/prev', async (_req, res) => {
       try { await this.spotifyClient.previous(); res.json({ success: true }); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/seek', async (req, res) => {
@@ -489,16 +539,16 @@ export class Harmond {
         if (positionMs === undefined || positionMs < 0) { res.status(400).json({ success: false, error: 'Invalid positionMs' }); return; }
         await this.spotifyClient.seek(positionMs);
         res.json({ success: true });
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/volume', async (req, res) => {
       try {
         const vol = this.parseBodyNumber(req.body?.volumePercent);
-        if (vol === undefined || vol < 0 || vol > 100) { res.status(400).json({ success: false, error: 'volumePercent must be 0-100' }); return; }
+        if (vol === undefined || vol < 0 || vol > 100) { res.status(400).json({ success: false, error: 'Invalid volumePercent: must be 0-100' }); return; }
         await this.spotifyClient.setVolume(vol);
         res.json({ success: true });
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/shuffle', async (req, res) => {
@@ -507,16 +557,16 @@ export class Harmond {
         if (state === undefined) { res.status(400).json({ success: false, error: 'Invalid state' }); return; }
         await this.spotifyClient.setShuffle(state);
         res.json({ success: true });
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/repeat', async (req, res) => {
       try {
         const state = this.parseBodyString(req.body?.state);
-        if (state !== 'off' && state !== 'track' && state !== 'context') { res.status(400).json({ success: false, error: 'state must be off|track|context' }); return; }
+        if (state !== 'off' && state !== 'track' && state !== 'context') { res.status(400).json({ success: false, error: 'Invalid state: must be off|track|context' }); return; }
         await this.spotifyClient.setRepeat(state);
         res.json({ success: true });
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/spotify/queue', async (req, res) => {
@@ -525,13 +575,13 @@ export class Harmond {
         if (!uri) { res.status(400).json({ success: false, error: 'Missing uri' }); return; }
         await this.spotifyClient.addToQueue(uri);
         res.json({ success: true });
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     // Spotify library/playlists
     this.app.get('/v1/spotify/playlists', async (req, res) => {
       try { res.json(await this.spotifyClient.getPlaylists({ limit: this.clampNumber(req.query.limit, 1, 50), offset: this.clampNumber(req.query.offset, 0, 10000) })); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/spotify/playlists/:id/tracks', async (req, res) => {
@@ -539,24 +589,24 @@ export class Harmond {
         const id = req.params.id;
         if (!id || !/^[a-zA-Z0-9]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid playlist id' }); return; }
         res.json(await this.spotifyClient.getPlaylistTracks(id, { limit: this.clampNumber(req.query.limit, 1, 100), offset: this.clampNumber(req.query.offset, 0, 10000) }));
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/spotify/history', async (req, res) => {
       try {
         const limit = this.clampNumber(req.query.limit, 1, 50);
         res.json(await this.spotifyClient.getRecentlyPlayed({ limit }));
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/spotify/library/tracks', async (req, res) => {
       try { res.json(await this.spotifyClient.getSavedTracks({ limit: this.clampNumber(req.query.limit, 1, 50), offset: this.clampNumber(req.query.offset, 0, 10000) })); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/spotify/library/albums', async (req, res) => {
       try { res.json(await this.spotifyClient.getSavedAlbums({ limit: this.clampNumber(req.query.limit, 1, 50), offset: this.clampNumber(req.query.offset, 0, 10000) })); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     // Apple Music
@@ -567,7 +617,7 @@ export class Harmond {
         if (typeof query !== 'string' || !query.trim()) { res.status(400).json({ success: false, error: 'Missing query (q)' }); return; }
         const types = this.parseAppleSearchTypes(typeof req.query.type === 'string' ? req.query.type : 'songs');
         res.json(await client.search(query, types, { limit: this.clampNumber(req.query.limit, 1, 25) }));
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/apple/songs/:id', async (req, res) => {
@@ -575,7 +625,7 @@ export class Harmond {
         const id = req.params.id;
         if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
         res.json(await this.getAppleMusicClient().getSong(id));
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/apple/albums/:id', async (req, res) => {
@@ -583,7 +633,7 @@ export class Harmond {
         const id = req.params.id;
         if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
         res.json(await this.getAppleMusicClient().getAlbum(id));
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/apple/artists/:id', async (req, res) => {
@@ -591,7 +641,7 @@ export class Harmond {
         const id = req.params.id;
         if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
         res.json(await this.getAppleMusicClient().getArtist(id));
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/apple/playlists/:id', async (req, res) => {
@@ -599,22 +649,22 @@ export class Harmond {
         const id = req.params.id;
         if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
         res.json(await this.getAppleMusicClient().getPlaylist(id));
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/apple/library/songs', async (req, res) => {
       try { res.json(await this.getAppleMusicClient().getLibrarySongs({ limit: this.clampNumber(req.query.limit, 1, 100) })); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/apple/library/albums', async (req, res) => {
       try { res.json(await this.getAppleMusicClient().getLibraryAlbums({ limit: this.clampNumber(req.query.limit, 1, 100) })); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/apple/library/playlists', async (req, res) => {
       try { res.json(await this.getAppleMusicClient().getLibraryPlaylists({ limit: this.clampNumber(req.query.limit, 1, 100) })); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     // Apple Music playback via AppleScript — with injection protection
@@ -623,22 +673,22 @@ export class Harmond {
         const url = this.parseBodyString(req.body?.url);
         await this.playAppleMusic(url);
         res.json({ success: true });
-      } catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/apple/pause', async (_req, res) => {
       try { await this.runAppleScriptCommand('pause'); res.json({ success: true }); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/apple/next', async (_req, res) => {
       try { await this.runAppleScriptCommand('next track'); res.json({ success: true }); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/apple/prev', async (_req, res) => {
       try { await this.runAppleScriptCommand('previous track'); res.json({ success: true }); }
-      catch (error) { res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }); }
+      catch (error) { this.handleRouteError(res, error); }
     });
 
     // Error handler
@@ -650,6 +700,10 @@ export class Harmond {
   // ============================================================================
 
   private setupSSE(): void {
+    if (!this.enableSSE) {
+      return;
+    }
+
     this.sseHeartbeat = setInterval(() => {
       const event = this.createEvent('heartbeat', { timestamp: new Date().toISOString() });
       const message = `data: ${JSON.stringify(event)}\n\n`;
@@ -669,6 +723,10 @@ export class Harmond {
   }
 
   private setupSSEClient(req: Request, res: Response): void {
+    if (!this.enableSSE) {
+      throw new ApiError(404, 'SSE is disabled for this daemon instance.', 'SSE_DISABLED');
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -679,6 +737,10 @@ export class Harmond {
   }
 
   private broadcastEvent(type: string, payload: Record<string, unknown> = {}): void {
+    if (!this.enableSSE) {
+      return;
+    }
+
     const event = this.createEvent(type, payload);
     const message = `data: ${JSON.stringify(event)}\n\n`;
     const deadClients: Response[] = [];
@@ -707,7 +769,7 @@ export class Harmond {
   // Command Handlers — with per-type payload validation
   // ============================================================================
 
-  private async handleCommand(command: Command): Promise<{ success: boolean; sessionId?: string }> {
+  private async handleCommand(command: Command): Promise<{ success: boolean; sessionId?: string; newWeights?: Record<string, number | undefined> }> {
     await this.store.logEvent('command', { type: command.type, commandId: command.id });
 
     switch (command.type) {
@@ -715,7 +777,10 @@ export class Harmond {
         // Validate payload has a policy
         const payloadResult = SessionStartCommand.safeParse(command.payload || {});
         if (!payloadResult.success) {
-          throw new Error(`Invalid session.start payload: ${payloadResult.error.issues.map(i => i.message).join(', ')}`);
+          throw new ValidationError(
+            `Invalid session.start payload: ${payloadResult.error.issues.map((issue) => issue.message).join(', ')}`,
+            payloadResult.error.issues,
+          );
         }
         return this.startSession(payloadResult.data.policy);
       }
@@ -726,7 +791,10 @@ export class Harmond {
       case 'session.nudge': {
         const nudgeResult = SessionNudgeCommand.safeParse(command.payload || {});
         if (!nudgeResult.success) {
-          throw new Error(`Invalid session.nudge payload: ${nudgeResult.error.issues.map(i => i.message).join(', ')}`);
+          throw new ValidationError(
+            `Invalid session.nudge payload: ${nudgeResult.error.issues.map((issue) => issue.message).join(', ')}`,
+            nudgeResult.error.issues,
+          );
         }
         return this.nudgeSession(nudgeResult.data.direction, nudgeResult.data.amount);
       }
@@ -734,35 +802,22 @@ export class Harmond {
       case 'skip':
         return this.skipTrack((command.payload as Record<string, unknown>)?.reason as string | undefined);
 
-      case 'auth.spotify.login':
-      case 'auth.spotify.logout':
-      case 'auth.apple.login':
-      case 'auth.apple.logout':
-      case 'auth.youtube.login':
-      case 'auth.youtube.logout':
-      case 'device.use':
-      case 'device.discover':
-        throw new Error(`Command type '${command.type}' not yet implemented via command endpoint — use dedicated endpoints`);
-
       default:
-        throw new Error(`Unknown command type: ${command.type}`);
+        throw new ValidationError(`Unknown command type: ${command.type}`);
     }
   }
 
   // Wire to ENGINE — the real session management
   private async startSession(policy: SessionPolicy): Promise<{ success: boolean; sessionId: string }> {
+    this.assertProviderConnected('starting a session');
+
     // Delegate to the engine
     await this.engine.start(policy);
 
     const state = this.engine.getState();
     const sessionId = state?.id || 'unknown';
 
-    this.broadcastEvent('session.started', {
-      sessionId,
-      policy,
-      startedAt: Date.now(),
-    });
-
+    // Engine emits 'session.started' via onEvent → handleEngineEvent → broadcastEvent
     // Start track change polling
     this.startTrackPolling();
 
@@ -771,15 +826,12 @@ export class Harmond {
 
   private async stopSession(): Promise<{ success: boolean }> {
     const state = this.engine.getState();
-    if (!state) throw new Error('No active session');
-
-    const sessionId = state.id;
-    const elapsed = Date.now() - state.startedAt;
+    if (!state) throw new SessionNotFoundError();
 
     await this.engine.stop();
     this.stopTrackPolling();
 
-    this.broadcastEvent('session.stopped', { sessionId, duration: elapsed });
+    // Engine emits 'session.stopped' via onEvent → handleEngineEvent → broadcastEvent
 
     return { success: true };
   }
@@ -787,7 +839,8 @@ export class Harmond {
   private async nudgeSession(
     direction: 'calmer' | 'sharper',
     amount?: number
-  ): Promise<{ success: boolean }> {
+  ): Promise<{ success: boolean; newWeights?: Record<string, number | undefined> }> {
+    this.assertProviderConnected('nudging a session');
     await this.engine.nudge(direction, amount);
 
     const state = this.engine.getState();
@@ -797,12 +850,13 @@ export class Harmond {
       amount: amount || 0.1,
     });
 
-    return { success: true };
+    return { success: true, newWeights: state?.policy.soft?.weights };
   }
 
   private async skipTrack(reason?: string): Promise<{ success: boolean }> {
     const state = this.engine.getState();
-    if (!state) throw new Error('No active session');
+    if (!state) throw new SessionNotFoundError();
+    this.assertProviderConnected('skipping a track');
 
     await this.spotifyClient.next();
     this.broadcastEvent('track.skipped', { sessionId: state.id, reason });
@@ -842,7 +896,7 @@ export class Harmond {
 
   private ensureAppleScriptAvailable(): void {
     if (process.platform !== 'darwin') {
-      throw new Error('AppleScript playback is only supported on macOS.');
+      throw new UnsupportedPlatformError('AppleScript playback is only supported on macOS.');
     }
   }
 
@@ -889,14 +943,19 @@ export class Harmond {
 
   private getStatus(): DaemonStatus {
     const engineState = this.engine.getState();
+    const providers = {
+      spotify: this.getSpotifyProviderStatus(),
+      apple: this.getAppleProviderStatus(),
+    } as DaemonStatus['providers'];
+
     return {
       isRunning: this.server !== null,
       version: '0.0.0',
       spotifyConnected: this.spotifyAuth.isConnected(),
-      providers: {
-        spotify: { connected: this.spotifyAuth.isConnected(), name: 'Spotify' },
-        apple: { connected: !!this.appleMusicClient, name: 'Apple Music' },
+      features: {
+        sse: this.enableSSE,
       },
+      providers,
       session: engineState
         ? {
             id: engineState.id,
@@ -908,7 +967,7 @@ export class Harmond {
             startedAt: engineState.startedAt,
           }
         : undefined,
-    };
+    } as DaemonStatus;
   }
 
   // ============================================================================
@@ -989,11 +1048,6 @@ export class Harmond {
   private requireAuth(req: Request, res: Response, next: NextFunction): void {
     if (req.path === '/auth/spotify/callback') { next(); return; }
 
-    if (process.env.NODE_ENV === 'production' && !this.apiToken) {
-      res.status(500).json({ success: false, error: 'Server misconfigured' });
-      return;
-    }
-
     if (!this.apiToken) { next(); return; }
 
     const authHeader = req.header('authorization') || '';
@@ -1004,8 +1058,6 @@ export class Harmond {
     const expectedMac = createHmac('sha256', hmacKey).update(this.apiToken).digest();
     const providedMac = createHmac('sha256', hmacKey).update(token).digest();
 
-    // timingSafeEqual on equal-length HMACs — no length leak
-    const { timingSafeEqual } = require('node:crypto');
     if (!timingSafeEqual(expectedMac, providedMac)) {
       res.status(401).json({ success: false, error: 'Unauthorized' });
       return;
@@ -1060,6 +1112,99 @@ export class Harmond {
   // Helpers
   // ============================================================================
 
+  /**
+   * I normalize route failures in one place so callers can distinguish bad input
+   * from missing session/provider state and upstream provider failures.
+   */
+  private handleRouteError(res: Response, error: unknown, asText = false): void {
+    const apiError = this.toApiError(error);
+    const message =
+      apiError.code === 'INTERNAL_ERROR' && process.env.NODE_ENV === 'production'
+        ? 'Internal server error'
+        : apiError.message;
+
+    if (asText) {
+      res.status(apiError.statusCode).send(message);
+      return;
+    }
+
+    res.status(apiError.statusCode).json({
+      success: false,
+      error: message,
+      code: apiError.code,
+      details: apiError.details,
+    });
+  }
+
+  /**
+   * I classify known daemon/provider failures into stable HTTP semantics.
+   */
+  private toApiError(error: unknown): ApiError {
+    if (error instanceof ApiError) {
+      return error;
+    }
+
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    const upstreamStatusCode = this.extractUpstreamStatusCode(message);
+
+    if (upstreamStatusCode !== undefined) {
+      return new UpstreamServiceError(message, upstreamStatusCode);
+    }
+
+    if (
+      message.includes('configuration missing') ||
+      message.includes('not configured')
+    ) {
+      return new ConfigurationError(message);
+    }
+
+    if (
+      message.includes('not connected') ||
+      message.includes('session expired') ||
+      message.includes('No refresh token available') ||
+      message.includes('user token required')
+    ) {
+      return new ProviderUnavailableError(message);
+    }
+
+    if (message === 'No active session') {
+      return new SessionNotFoundError();
+    }
+
+    if (message === 'AppleScript playback is only supported on macOS.') {
+      return new UnsupportedPlatformError(message);
+    }
+
+    if (
+      message.startsWith('Invalid ') ||
+      message.startsWith('Missing ') ||
+      message.includes('Login flow expired') ||
+      message.includes('must be one of') ||
+      message.includes('must use') ||
+      message.includes('Maximum 5 total seeds allowed') ||
+      message.includes('At least one seed')
+    ) {
+      return new ValidationError(message);
+    }
+
+    return new ApiError(500, message, 'INTERNAL_ERROR');
+  }
+
+  /**
+   * I reuse provider error prefixes instead of maintaining per-route parsing logic.
+   */
+  private extractUpstreamStatusCode(message: string): number | undefined {
+    const match = message.match(
+      /^(Spotify API error|Spotify token refresh failed|Spotify token exchange failed|Spotify cookie token failed|Apple Music API error): (\d+)/
+    );
+
+    if (!match) {
+      return undefined;
+    }
+
+    return Number.parseInt(match[2], 10);
+  }
+
   private clampNumber(value: unknown, min: number, max: number): number | undefined {
     if (typeof value !== 'string') return undefined;
     const parsed = Number.parseInt(value, 10);
@@ -1071,6 +1216,41 @@ export class Harmond {
     if (typeof value !== 'string') return undefined;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  /**
+   * I keep journal metadata limited to plain objects so persistence stays
+   * deterministic and the stored JSON can be parsed back safely later.
+   */
+  private isPlainObject(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  /**
+   * I reject oversize structured journal fields instead of truncating JSON
+   * mid-token and persisting corrupted blobs to SQLite.
+   */
+  private serializeJournalField(
+    value: Record<string, unknown> | SessionPolicy | undefined,
+    fieldName: 'context' | 'policy',
+    maxBytes: number
+  ): string | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      throw new ValidationError(`Invalid journal entry: ${fieldName} must be JSON serializable`);
+    }
+
+    if (Buffer.byteLength(serialized, 'utf8') > maxBytes) {
+      throw new ValidationError(`Invalid journal entry: ${fieldName} exceeds ${maxBytes} bytes once serialized`);
+    }
+
+    return serialized;
   }
 
   private parseBodyNumber(value: unknown): number | undefined {
@@ -1087,19 +1267,206 @@ export class Harmond {
     return undefined;
   }
 
-  private parseSearchTypes(value: string): Array<'track' | 'album' | 'artist' | 'playlist'> {
-    const allowed = new Set(['track', 'album', 'artist', 'playlist']);
-    return value.split(',').map(e => e.trim()).filter(e => allowed.has(e)) as Array<'track' | 'album' | 'artist' | 'playlist'>;
+  private assertProviderConnected(operation: string): void {
+    if (this.provider.isConnected()) {
+      return;
+    }
+
+    const providerName = `${this.provider.name.slice(0, 1).toUpperCase()}${this.provider.name.slice(1)}`;
+    throw new ProviderUnavailableError(
+      `${providerName} is not connected. Complete authentication before ${operation}.`,
+    );
+  }
+
+  private parseJournalEntry(value: unknown): JournalEntryInput {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new ValidationError('Invalid journal entry');
+    }
+
+    const entry = value as Record<string, unknown>;
+    const content = this.parseBodyString(entry.content);
+    if (!content) {
+      throw new ValidationError('Invalid journal entry: content is required');
+    }
+
+    if (entry.moodTags !== undefined && !Array.isArray(entry.moodTags)) {
+      throw new ValidationError('Invalid journal entry: moodTags must be an array');
+    }
+
+    const moodTags = Array.isArray(entry.moodTags)
+      ? entry.moodTags
+          .filter((tag): tag is string => typeof tag === 'string')
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0)
+          .slice(0, 20)
+      : [];
+
+    if (entry.context !== undefined && !this.isPlainObject(entry.context)) {
+      throw new ValidationError('Invalid journal entry: context must be an object');
+    }
+
+    let policy: SessionPolicy | undefined;
+    if (entry.policy !== undefined) {
+      if (!this.isPlainObject(entry.policy)) {
+        throw new ValidationError('Invalid journal entry: policy must be an object');
+      }
+      const policyResult = SessionPolicy.safeParse(entry.policy);
+      if (!policyResult.success) {
+        throw new ValidationError(
+          `Invalid journal entry: policy ${policyResult.error.issues.map((issue) => issue.message).join(', ')}`,
+          policyResult.error.issues,
+        );
+      }
+      policy = policyResult.data;
+    }
+
+    return {
+      content: content.slice(0, 10000),
+      context: entry.context as Record<string, unknown> | undefined,
+      device: (this.parseBodyString(entry.device) || 'linux').slice(0, 50),
+      energyLevel: this.parseBodyString(entry.energyLevel)?.slice(0, 50),
+      moodTags,
+      policy,
+      sessionId: this.parseBodyString(entry.sessionId),
+      source: (this.parseBodyString(entry.source) || 'cli').slice(0, 50),
+    };
+  }
+
+  private parseSearchTypes(value: string): Array<'track' | 'album' | 'artist' | 'playlist' | 'episode' | 'show'> {
+    const allowed = new Set(['track', 'album', 'artist', 'playlist', 'episode', 'show']);
+    const requested = value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+    if (requested.length === 0) {
+      throw new ValidationError('Search type must be one of: track, album, artist, playlist, episode, show');
+    }
+    if (requested.some((entry) => !allowed.has(entry))) {
+      throw new ValidationError('Search type must be one of: track, album, artist, playlist, episode, show');
+    }
+    return requested as Array<'track' | 'album' | 'artist' | 'playlist' | 'episode' | 'show'>;
   }
 
   private parseAppleSearchTypes(value: string): Array<'songs' | 'albums' | 'artists' | 'playlists'> {
     const allowed = new Set(['songs', 'albums', 'artists', 'playlists']);
-    return value.split(',').map(e => e.trim()).filter(e => allowed.has(e)) as Array<'songs' | 'albums' | 'artists' | 'playlists'>;
+    const requested = value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+    if (requested.length === 0) {
+      throw new ValidationError('Apple search type must be one of: songs, albums, artists, playlists');
+    }
+    if (requested.some((entry) => !allowed.has(entry))) {
+      throw new ValidationError('Apple search type must be one of: songs, albums, artists, playlists');
+    }
+    return requested as Array<'songs' | 'albums' | 'artists' | 'playlists'>;
   }
 
   private getAppleMusicClient(): AppleMusicClient {
-    if (!this.appleMusicClient) throw new Error('Apple Music not configured (set APPLE_MUSIC_DEVELOPER_TOKEN).');
+    if (!this.appleMusicClient) {
+      throw new ConfigurationError('Apple Music not configured (set APPLE_MUSIC_DEVELOPER_TOKEN).');
+    }
     return this.appleMusicClient;
+  }
+
+  /**
+   * I report Spotify as configured only when the daemon has persisted auth
+   * material, and I surface capability/auth details so callers can avoid
+   * guessing what "connected" actually means.
+   */
+  private getSpotifyProviderStatus(): ProviderStatusDetails {
+    const authMode = this.getSpotifyAuthMode();
+
+    return {
+      connected: authMode !== 'none',
+      name: 'Spotify',
+      status: authMode === 'none' ? 'missing' : 'configured',
+      auth: authMode,
+      capabilities: {
+        cookieImport: true,
+        library: true,
+        playback: true,
+        search: true,
+        sessionControl: true,
+      },
+    };
+  }
+
+  /**
+   * I split Apple catalog, library, and local playback readiness so status
+   * stays truthful about which subset of the Apple surface is actually usable.
+   */
+  private getAppleProviderStatus(): ProviderStatusDetails {
+    const auth =
+      this.appleLibraryEnabled
+        ? 'developer-and-user-token'
+        : this.appleCatalogEnabled
+          ? 'developer-token'
+          : 'none';
+
+    return {
+      connected: this.appleCatalogEnabled,
+      name: 'Apple Music',
+      status: this.appleCatalogEnabled || this.applePlaybackEnabled ? 'configured' : 'missing',
+      auth,
+      capabilities: {
+        catalog: this.appleCatalogEnabled,
+        library: this.appleLibraryEnabled,
+        playback: this.applePlaybackEnabled,
+        search: this.appleCatalogEnabled,
+      },
+    };
+  }
+
+  /**
+   * I keep the daemon-side cookie import contract aligned with the Spotify
+   * package's auth-cookie allowlist so only supported auth material crosses
+   * the HTTP boundary.
+   */
+  private sanitizeImportedSpotifyCookies(records: unknown[]): SpotifyCookieRecord[] {
+    const sanitized = new Map<string, SpotifyCookieRecord>();
+
+    for (const record of records) {
+      if (!record || typeof record !== 'object') {
+        continue;
+      }
+
+      const value = record as Partial<SpotifyCookieRecord>;
+      const domain = typeof value.domain === 'string' ? value.domain.trim().toLowerCase().replace(/^\.+/, '') : '';
+      const name = typeof value.name === 'string' ? value.name.trim() : '';
+      const path = typeof value.path === 'string' ? value.path.trim() : '/';
+
+      if (!['spotify.com', 'open.spotify.com'].includes(domain)) {
+        continue;
+      }
+      if (!['sp_dc', 'sp_key'].includes(name)) {
+        continue;
+      }
+      if (!path.startsWith('/')) {
+        continue;
+      }
+      if (typeof value.value !== 'string') {
+        continue;
+      }
+
+      sanitized.set(`${domain}:${path}:${name}`, {
+        domain,
+        name,
+        path,
+        value: value.value.slice(0, 4096),
+        expires: typeof value.expires === 'string' ? value.expires : null,
+        isSecure: value.isSecure === true,
+        isHTTPOnly: value.isHTTPOnly === true,
+      });
+    }
+
+    return Array.from(sanitized.values());
+  }
+
+  /**
+   * I read the richer auth mode when the Spotify package exposes it, while
+   * keeping an honest fallback for older type surfaces.
+   */
+  private getSpotifyAuthMode(): 'none' | 'oauth' | 'cookies' {
+    const auth = this.spotifyAuth as SpotifyAuth & {
+      getAuthMode?: () => 'none' | 'oauth' | 'cookies';
+    };
+
+    return auth.getAuthMode?.() ?? (auth.isConnected() ? 'oauth' : 'none');
   }
 
   getStore(): HarmonStore {
@@ -1114,7 +1481,14 @@ export function createDaemon(config?: DaemonConfig): Harmond {
 // Run as standalone
 const isMain = import.meta.url === pathToFileURL(process.argv[1] || '').href;
 if (isMain) {
-  const daemon = createDaemon();
+  let daemon: Harmond;
+  try {
+    daemon = createDaemon();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown startup error';
+    console.error('Failed to initialize harmond:', message);
+    process.exit(1);
+  }
   daemon.start().then(() => {
     console.log(`Harmond listening on http://127.0.0.1:${DEFAULT_PORT}`);
   }).catch((err) => {

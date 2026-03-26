@@ -3,6 +3,7 @@
 dist/
 **/dist/
 node_modules/
+.turbo/
 *.tsbuildinfo
 
 # Test coverage
@@ -31,11 +32,8 @@ DerivedData/
 .harmon.db
 *.sqlite
 *.sqlite3
-/.turbo
-/apps/harmon-cli/.turbo
 dist/
 node_modules/*
-/apps/harmon-cli/.turbo
 *.log
 
 # Environment / secrets

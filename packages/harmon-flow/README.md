@@ -13,12 +13,22 @@ pnpm add @athena/harmon-flow
 ## Quick Start
 
 ```typescript
-import { createFlowParser, PatternGraphBuilder, SuggestionEngine } from '@athena/harmon-flow';
+import {
+  createFlowParser,
+  PatternGraphBuilder,
+  PatternDetector,
+  SuggestionEngine,
+} from '@athena/harmon-flow';
 
-const parser = createFlowParser();
-const entries = parser.parseDirectory('./journal');
-const graph = new PatternGraphBuilder().build(entries);
-const suggestions = new SuggestionEngine(graph).suggest({ mood: 'focus', time: '09:00' });
+const parser = createFlowParser('./journal');
+const entries = parser.scanDirectory();
+const graph = new PatternGraphBuilder(entries).build();
+const patterns = new PatternDetector(graph, entries).getAllPatterns();
+const suggestions = new SuggestionEngine(graph, entries).suggest(
+  ['focused'],
+  'medium',
+  'morning',
+);
 ```
 
 ## API
@@ -26,19 +36,19 @@ const suggestions = new SuggestionEngine(graph).suggest({ mood: 'focus', time: '
 | Export | Description |
 |---|---|
 | `createFlowParser()` | Markdown journal parser |
-| `MarkdownParser` | Parser class for journal files |
+| `MarkdownParser` | Parser class for journal files with schema-validated frontmatter |
 | `PatternGraphBuilder` | Build a pattern graph from journal entries |
 | `PatternDetector` | Detect recurring patterns (time, mood, policy) |
 | `SuggestionEngine` | Generate session suggestions from patterns |
-| `createMCPServer()` | Expose flow capabilities via MCP protocol |
+| `createMCPServer()` | Start an MCP stdio server for flow analysis |
 | `JournalEntry` | Parsed journal entry type |
 | `PatternGraph` / `GraphNode` / `GraphEdge` | Graph structure types |
 | `Suggestion` | Generated suggestion type |
 
 ## Architecture
 
-harmon-flow reads markdown journal entries, parses frontmatter metadata (mood, energy, context), and builds an in-memory graph of patterns. The `SuggestionEngine` traverses this graph to recommend session policies based on time-of-day, mood history, and past listening behavior. It optionally exposes an MCP server for AI assistant integration.
+harmon-flow reads markdown journal entries, validates frontmatter metadata (mood, energy, context) against its declared schema, and builds an in-memory graph of patterns. The `SuggestionEngine` traverses this graph to recommend session policies based on time-of-day, mood history, and past listening behavior. It optionally exposes an MCP server for AI assistant integration.
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

@@ -2,7 +2,7 @@
 name: harmon-protocol
 description: Zod schemas for commands, events, policies, and track info
 capabilities:
-  - Validate command envelopes (session.start, skip, device.use, auth flows)
+  - Validate command envelopes (session.start, session.stop, session.nudge, skip)
   - Validate event envelopes (track.started, session.stopped, heartbeat, etc.)
   - Parse and enforce SessionPolicy constraints at runtime
 tags:

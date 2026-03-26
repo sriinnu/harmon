@@ -2,13 +2,14 @@
  * Integration tests for Harmond HTTP API
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import { Harmond } from './index.js';
 import type { SessionPolicy } from '@athena/harmon-protocol';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 
 // ============================================================================
 // Test Setup & Fixtures
@@ -17,7 +18,9 @@ import { randomBytes } from 'node:crypto';
 const TEST_API_TOKEN = 'test-token-' + randomBytes(16).toString('hex');
 const INVALID_TOKEN = 'invalid-token';
 
-function createTestDaemon(options: { apiToken?: string; corsOrigins?: string[] } = {}) {
+function createTestDaemon(
+  options: { apiToken?: string; corsOrigins?: string[]; enableSSE?: boolean } = {},
+) {
   const dbPath = join(tmpdir(), `harmon-test-${Date.now()}-${Math.random()}.db`);
 
   return new Harmond({
@@ -26,6 +29,7 @@ function createTestDaemon(options: { apiToken?: string; corsOrigins?: string[] }
     dbPath,
     apiToken: options.apiToken,
     corsOrigins: options.corsOrigins,
+    enableSSE: options.enableSSE,
   });
 }
 
@@ -49,6 +53,66 @@ const mockSessionPolicy: SessionPolicy = {
     topTracks: true,
   },
 };
+
+function getDaemonBaseUrl(daemon: Harmond): string {
+  const address = (daemon as any).server?.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Test daemon address unavailable');
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
+const mockProviderTracks = [
+  {
+    id: 'track-1',
+    name: 'Focus One',
+    artist: 'Artist One',
+    artistIds: ['artist-1'],
+    album: 'Album One',
+    durationMs: 180000,
+    uri: 'spotify:track:track-1',
+    provider: 'spotify' as const,
+  },
+  {
+    id: 'track-2',
+    name: 'Focus Two',
+    artist: 'Artist Two',
+    artistIds: ['artist-2'],
+    album: 'Album Two',
+    durationMs: 200000,
+    uri: 'spotify:track:track-2',
+    provider: 'spotify' as const,
+  },
+];
+
+const mockAudioFeatures = mockProviderTracks.map((_, index) => ({
+  energy: 0.55 + index * 0.05,
+  instrumentalness: 0.75,
+  speechiness: 0.05,
+  valence: 0.45,
+  acousticness: 0.3,
+  tempo: 118 + index,
+  danceability: 0.6,
+  liveness: 0.12,
+  loudness: -7,
+  key: 5,
+  mode: 1,
+  timeSignature: 4,
+}));
+
+function stubConnectedSpotify(daemon: Harmond): void {
+  const spotifyClient = (daemon as any).spotifyClient;
+  vi.spyOn(spotifyClient, 'isConnected').mockReturnValue(true);
+  vi.spyOn(spotifyClient, 'getSavedTracks').mockResolvedValue({
+    items: mockProviderTracks.map((track) => ({ track })),
+  });
+  vi.spyOn(spotifyClient, 'getTopTracks').mockResolvedValue({
+    items: mockProviderTracks,
+  });
+  vi.spyOn(spotifyClient, 'getAudioFeatures').mockResolvedValue(mockAudioFeatures);
+  vi.spyOn(spotifyClient, 'addToQueue').mockResolvedValue(undefined);
+  vi.spyOn(spotifyClient, 'next').mockResolvedValue(undefined);
+}
 
 // ============================================================================
 // Health Endpoint Tests
@@ -190,6 +254,68 @@ describe('Authentication', () => {
       expect(response.status).toBe(200);
     });
   });
+
+  describe('spotify cookie import', () => {
+    let daemon: Harmond;
+    let app: any;
+
+    beforeAll(async () => {
+      daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
+      await daemon.start();
+      app = (daemon as any).app;
+    });
+
+    afterAll(async () => {
+      await daemon.stop();
+    });
+
+    it('rejects cookie payloads without supported Spotify auth cookies', async () => {
+      const response = await request(app)
+        .post('/v1/auth/spotify/import')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+        .send({
+          cookies: [
+            {
+              domain: '.spotify.com',
+              name: 'other',
+              path: '/',
+              value: 'ignore-me',
+            },
+          ],
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('sp_dc');
+    });
+
+    it('imports only supported Spotify auth cookies', async () => {
+      const response = await request(app)
+        .post('/v1/auth/spotify/import')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+        .send({
+          cookies: [
+            {
+              domain: '.spotify.com',
+              name: 'sp_dc',
+              path: '/',
+              value: 'keep-me',
+            },
+            {
+              domain: '.spotify.com',
+              name: 'other',
+              path: '/',
+              value: 'drop-me',
+            },
+          ],
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        success: true,
+        cookiesImported: 1,
+      });
+    });
+  });
 });
 
 // ============================================================================
@@ -203,6 +329,7 @@ describe('Status Endpoint', () => {
   beforeAll(async () => {
     daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
     await daemon.start();
+    stubConnectedSpotify(daemon);
     app = (daemon as any).app;
   });
 
@@ -220,6 +347,24 @@ describe('Status Endpoint', () => {
       isRunning: true,
       version: expect.any(String),
       spotifyConnected: expect.any(Boolean),
+      features: {
+        sse: true,
+      },
+    });
+    expect(response.body.providers.spotify).toMatchObject({
+      auth: expect.any(String),
+      capabilities: expect.objectContaining({
+        playback: true,
+        search: true,
+      }),
+      status: expect.any(String),
+    });
+    expect(response.body.providers.apple).toMatchObject({
+      capabilities: expect.objectContaining({
+        playback: expect.any(Boolean),
+        search: expect.any(Boolean),
+      }),
+      status: expect.any(String),
     });
   });
 
@@ -264,10 +409,11 @@ describe('Command Endpoint', () => {
   beforeEach(async () => {
     daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
     await daemon.start();
+    stubConnectedSpotify(daemon);
     app = (daemon as any).app;
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     if (daemon) {
       await daemon.stop();
     }
@@ -291,6 +437,25 @@ describe('Command Endpoint', () => {
         success: true,
         sessionId: expect.stringMatching(/^sess_/),
       });
+    });
+
+    it('requires a connected Spotify backend', async () => {
+      vi.spyOn((daemon as any).spotifyClient, 'isConnected').mockReturnValue(false);
+
+      const response = await request(app)
+        .post('/v1/command')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+        .send({
+          id: 'c_start_disconnected',
+          ts: Date.now(),
+          source: { kind: 'cli', device: 'linux' },
+          type: 'session.start',
+          payload: { policy: mockSessionPolicy },
+        });
+
+      expect(response.status).toBe(503);
+      expect(response.body.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(response.body.error).toContain('Spotify is not connected');
     });
 
     it('validates policy schema', async () => {
@@ -357,8 +522,9 @@ describe('Command Endpoint', () => {
           payload: {},
         });
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(404);
       expect(response.body.success).toBe(false);
+      expect(response.body.code).toBe('SESSION_NOT_FOUND');
       expect(response.body.error).toContain('No active session');
     });
   });
@@ -445,13 +611,16 @@ describe('Command Endpoint', () => {
           },
         });
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('SESSION_NOT_FOUND');
       expect(response.body.error).toContain('No active session');
     });
   });
 
   describe('skip command', () => {
     it('skips current track with reason', async () => {
+      vi.spyOn((daemon as any).spotifyClient, 'next').mockResolvedValue(undefined);
+
       // Start session
       await request(app)
         .post('/v1/command')
@@ -540,6 +709,7 @@ describe('Error Handling', () => {
   beforeAll(async () => {
     daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
     await daemon.start();
+    stubConnectedSpotify(daemon);
     app = (daemon as any).app;
   });
 
@@ -588,7 +758,7 @@ describe('Error Handling', () => {
         payload: {},
       });
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(404);
     expect(response.body.error).toBeDefined();
   });
 });
@@ -604,6 +774,7 @@ describe('Rate Limiting', () => {
   beforeAll(async () => {
     daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
     await daemon.start();
+    stubConnectedSpotify(daemon);
     app = (daemon as any).app;
   });
 
@@ -614,8 +785,8 @@ describe('Rate Limiting', () => {
   it('applies rate limiting to command endpoint', async () => {
     const requests: Promise<any>[] = [];
 
-    // Send 25 requests rapidly (limit is 20 per minute for commands)
-    for (let i = 0; i < 25; i++) {
+    // Send more than the configured 30 requests/minute command budget.
+    for (let i = 0; i < 35; i++) {
       requests.push(
         request(app)
           .post('/v1/command')
@@ -665,6 +836,21 @@ describe('Rate Limiting', () => {
     expect(response.headers).toHaveProperty('ratelimit-limit');
     expect(response.headers).toHaveProperty('ratelimit-remaining');
     expect(response.headers).toHaveProperty('ratelimit-reset');
+  });
+
+  it('does not rate limit the Spotify OAuth callback after earlier auth retries', async () => {
+    for (let i = 0; i < 5; i++) {
+      await request(app)
+        .post('/v1/auth/spotify/login')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+    }
+
+    const response = await request(app)
+      .get('/v1/auth/spotify/callback')
+      .query({ state: 'state-only' });
+
+    expect(response.status).toBe(400);
+    expect(response.text).toContain('Missing code');
   });
 });
 
@@ -819,6 +1005,43 @@ describe('Journal Endpoints', () => {
     expect(response.status).toBe(400);
     expect(response.body.success).toBe(false);
   });
+
+  it('rejects non-object context and invalid policy payloads', async () => {
+    const contextResponse = await request(app)
+      .post('/v1/journal')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        content: 'Context should be an object',
+        context: ['not', 'an', 'object'],
+      });
+
+    expect(contextResponse.status).toBe(400);
+    expect(contextResponse.body.error).toContain('context must be an object');
+
+    const policyResponse = await request(app)
+      .post('/v1/journal')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        content: 'Policy should match SessionPolicy',
+        policy: { mode: 'focus' },
+      });
+
+    expect(policyResponse.status).toBe(400);
+    expect(policyResponse.body.error).toContain('policy');
+  });
+
+  it('rejects oversize serialized journal metadata instead of truncating JSON', async () => {
+    const response = await request(app)
+      .post('/v1/journal')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        content: 'Large metadata should fail cleanly',
+        context: { notes: 'x'.repeat(2500) },
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('context exceeds 2000 bytes');
+  });
 });
 
 // ============================================================================
@@ -839,14 +1062,13 @@ describe('Spotify Endpoints', () => {
     await daemon.stop();
   });
 
-  it('POST /v1/auth/spotify/login returns auth URL', async () => {
+  it('POST /v1/auth/spotify/login rejects requests when Spotify auth is not configured', async () => {
     const response = await request(app)
       .post('/v1/auth/spotify/login')
       .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
 
-    expect(response.status).toBe(200);
-    expect(response.body).toHaveProperty('url');
-    expect(response.body.url).toContain('accounts.spotify.com');
+    expect(response.status).toBe(503);
+    expect(response.body.error).toContain('Spotify configuration missing');
   });
 
   it('GET /v1/devices requires authentication', async () => {
@@ -875,6 +1097,37 @@ describe('Spotify Endpoints', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error).toContain('Missing query');
+  });
+
+  it('GET /v1/spotify/search rejects unsupported search types', async () => {
+    const response = await request(app)
+      .get('/v1/spotify/search')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ q: 'focus', type: 'audiobook' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Search type must be one of');
+  });
+
+  it('GET /v1/spotify/search forwards show and episode types', async () => {
+    const searchSpy = vi.spyOn((daemon as any).spotifyClient, 'search').mockResolvedValue({
+      tracks: [],
+      albums: [],
+      artists: [],
+      playlists: [],
+      episodes: [{ id: 'ep1', name: 'Episode 1', uri: 'spotify:episode:ep1', showName: 'Show 1' }],
+      shows: [{ id: 'show1', name: 'Show 1', uri: 'spotify:show:show1', publisher: 'Publisher 1' }],
+    });
+
+    const response = await request(app)
+      .get('/v1/spotify/search')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ q: 'podcast', type: 'episode,show' });
+
+    expect(response.status).toBe(200);
+    expect(searchSpy).toHaveBeenCalledWith('podcast', ['episode', 'show'], { limit: undefined, offset: undefined });
+    expect(response.body.episodes).toHaveLength(1);
+    expect(response.body.shows).toHaveLength(1);
   });
 
   it('POST /v1/spotify/volume validates range', async () => {
@@ -927,34 +1180,177 @@ describe('SSE Events', () => {
   });
 
   it('GET /v1/events establishes SSE connection', async () => {
-    const response = await request(app)
-      .get('/v1/events')
-      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
-      .set('Accept', 'text/event-stream');
+    const baseUrl = getDaemonBaseUrl(daemon);
 
-    expect(response.status).toBe(200);
-    expect(response.headers['content-type']).toContain('text/event-stream');
-    expect(response.headers['cache-control']).toBe('no-cache');
+    await new Promise<void>((resolve, reject) => {
+      const req = httpRequest(
+        `${baseUrl}/v1/events`,
+        {
+          headers: {
+            Accept: 'text/event-stream',
+            Authorization: `Bearer ${TEST_API_TOKEN}`,
+          },
+        },
+        (res) => {
+          try {
+            expect(res.statusCode).toBe(200);
+            expect(res.headers['content-type']).toContain('text/event-stream');
+            expect(res.headers['cache-control']).toBe('no-cache');
+            res.destroy();
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        }
+      );
+
+      req.on('error', reject);
+      req.end();
+    });
   });
 
-  it('sends initial connected event', (done) => {
-    const req = request(app)
-      .get('/v1/events')
-      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
-      .set('Accept', 'text/event-stream')
-      .buffer(false)
-      .parse((res, callback) => {
-        res.on('data', (chunk) => {
-          const data = chunk.toString();
-          if (data.includes('connected')) {
-            expect(data).toContain('data:');
-            done();
-          }
-        });
-        callback(null, res);
-      });
+  it('sends initial connected event', async () => {
+    const baseUrl = getDaemonBaseUrl(daemon);
 
-    req.end();
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+
+      const req = httpRequest(
+        `${baseUrl}/v1/events`,
+        {
+          headers: {
+            Accept: 'text/event-stream',
+            Authorization: `Bearer ${TEST_API_TOKEN}`,
+          },
+        },
+        (res) => {
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => {
+            if (!chunk.includes('"type":"connected"')) {
+              return;
+            }
+            try {
+              expect(chunk).toContain('data:');
+              res.destroy();
+              finish();
+            } catch (error) {
+              fail(error);
+            }
+          });
+          res.on('error', (error) => {
+            if ((error as NodeJS.ErrnoException).code !== 'ECONNRESET') {
+              fail(error);
+            }
+          });
+        }
+      );
+
+      req.on('error', fail);
+      req.end();
+    });
+  }, 10000);
+
+  it('GET /v1/events returns 404 when SSE is disabled', async () => {
+    const disabledDaemon = createTestDaemon({
+      apiToken: TEST_API_TOKEN,
+      enableSSE: false,
+    });
+    await disabledDaemon.start();
+    const disabledApp = (disabledDaemon as any).app;
+
+    const response = await request(disabledApp)
+      .get('/v1/events')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      success: false,
+      code: 'SSE_DISABLED',
+    });
+
+    await disabledDaemon.stop();
+  });
+
+  it('emits session.stopped payloads with elapsedMs and legacy duration compatibility', async () => {
+    const baseUrl = getDaemonBaseUrl(daemon);
+    const expectedPayload = {
+      sessionId: 'sess_test',
+      elapsedMs: 42,
+      duration: 42,
+      durationMs: 42,
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+
+      const req = httpRequest(
+        `${baseUrl}/v1/events`,
+        {
+          headers: {
+            Accept: 'text/event-stream',
+            Authorization: `Bearer ${TEST_API_TOKEN}`,
+          },
+        },
+        (res) => {
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => {
+            for (const line of chunk.split('\n')) {
+              if (!line.startsWith('data: ')) {
+                continue;
+              }
+
+              try {
+                const event = JSON.parse(line.slice(6));
+                if (event.type === 'connected') {
+                  (daemon as any).handleEngineEvent({
+                    type: 'session.stopped',
+                    payload: expectedPayload,
+                  });
+                  continue;
+                }
+
+                if (event.type === 'session.stopped') {
+                  expect(event.payload).toMatchObject(expectedPayload);
+                  res.destroy();
+                  finish();
+                }
+              } catch (error) {
+                fail(error);
+              }
+            }
+          });
+          res.on('error', (error) => {
+            if ((error as NodeJS.ErrnoException).code !== 'ECONNRESET') {
+              fail(error);
+            }
+          });
+        }
+      );
+
+      req.on('error', fail);
+      req.end();
+    });
   }, 10000);
 });
 
@@ -997,10 +1393,11 @@ describe('Integration Flows', () => {
   beforeEach(async () => {
     daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
     await daemon.start();
+    stubConnectedSpotify(daemon);
     app = (daemon as any).app;
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     if (daemon) {
       await daemon.stop();
     }

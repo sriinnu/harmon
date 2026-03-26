@@ -47,5 +47,5 @@ curl http://localhost:17373/health
 pnpm --filter @athena/harmon-flow start
 
 # Run CLI
-pnpm --filter @athena/harmon-cli -- help
+pnpm --filter @athena/harmon -- help
 ```

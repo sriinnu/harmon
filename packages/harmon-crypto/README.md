@@ -43,4 +43,4 @@ harmon-crypto provides the encryption primitive used by harmon-store and harmond
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

@@ -25,17 +25,18 @@ harmond is the long-running background process at the center of harmon. It start
 - Exposing harmon functionality over HTTP for integration with other tools or automations
 
 ## Key exports
-- `createDaemon` — factory that configures and starts the Express server with all routes
+- `createDaemon` — factory that configures the daemon instance with all routes
 - `Harmond` — the daemon class managing lifecycle, SSE clients, engine, and providers
 
 ## Example
 ```typescript
 import { createDaemon } from '@athena/harmond';
 
-const daemon = await createDaemon({
+const daemon = createDaemon({
   port: 17373,
   dbPath: '.harmon.db',
   enableSSE: true,
 });
+await daemon.start();
 // daemon is now listening on http://127.0.0.1:17373
 ```

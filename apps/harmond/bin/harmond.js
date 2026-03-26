@@ -3,7 +3,7 @@
  * Harmond entry point — with signal handling and proper error propagation
  */
 
-import { createDaemon } from '../dist/index.js';
+import { createDaemon } from '../dist/src/index.js';
 
 const daemon = createDaemon();
 

@@ -2,14 +2,7 @@
  * Harmon CLI - Thin client that calls the daemon
  */
 
-// Placeholder type - will be imported from built harmon-protocol
-type Command = {
-  id: string;
-  ts: number;
-  source: { kind: string; device: string };
-  type: string;
-  payload: Record<string, unknown>;
-};
+import type { Command } from '@athena/harmon-protocol';
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:17373';
 

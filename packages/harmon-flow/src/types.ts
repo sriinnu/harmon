@@ -18,6 +18,8 @@ export type MoodTag = z.infer<typeof MoodTagSchema>;
 
 export const EnergyLevelSchema = z.enum(['low', 'medium', 'high']);
 export type EnergyLevel = z.infer<typeof EnergyLevelSchema>;
+export const EntrySourceSchema = z.enum(['cli', 'menubar', 'voice', 'mcp']);
+export type EntrySource = z.infer<typeof EntrySourceSchema>;
 
 export const SessionContextSchema = z.object({
   timeOfDay: z.enum(['morning', 'afternoon', 'evening', 'night']).optional(),
@@ -30,10 +32,10 @@ export type SessionContext = z.infer<typeof SessionContextSchema>;
 
 export const JournalEntryFrontmatterSchema = z.object({
   ts: z.string().datetime(),
-  source: z.enum(['cli', 'menubar', 'voice']),
+  source: EntrySourceSchema,
   device: z.enum(['macos', 'windows', 'wsl', 'linux']),
   sessionId: z.string().optional(),
-  policy: z.record(z.unknown()).optional(),
+  policy: z.record(z.string(), z.unknown()).optional(),
   moodTags: z.array(MoodTagSchema).optional(),
   energyLevel: EnergyLevelSchema.optional(),
   context: SessionContextSchema.optional(),
@@ -45,7 +47,7 @@ export interface JournalEntry {
   id: string;
   filename: string;
   timestamp: Date;
-  source: 'cli' | 'menubar' | 'voice';
+  source: EntrySource;
   device: 'macos' | 'windows' | 'wsl' | 'linux';
   sessionId?: string;
   policy?: Record<string, unknown>;

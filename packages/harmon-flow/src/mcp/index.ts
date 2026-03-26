@@ -511,8 +511,8 @@ export class HarmonFlowMCPServer {
 
     const filename = this.parser.writeEntry({
       timestamp: new Date(),
-      source: (args.source as string) || 'mcp',
-      device: (args.device as string) || (process.platform === 'darwin' ? 'macos' : 'linux'),
+      source: (args.source as JournalEntry['source']) || 'mcp',
+      device: (args.device as JournalEntry['device']) || (process.platform === 'darwin' ? 'macos' : 'linux'),
       moodTags: mood,
       energyLevel: energy,
       context: {

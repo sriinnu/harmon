@@ -17,7 +17,7 @@ version: 0.1.0
 # Harmon Flow
 
 ## What this does
-harmon-flow turns markdown journal entries into a queryable pattern graph. The MarkdownParser extracts frontmatter (mood tags, energy level, session context, policy) from journal files. The PatternGraphBuilder constructs a directed graph of nodes and edges representing relationships between moods, energy levels, times, and policies. A PatternDetector finds recurring patterns, and the SuggestionEngine recommends session policies. The whole system is exposed as an MCP server for LLM tool use.
+harmon-flow turns markdown journal entries into a queryable pattern graph. The MarkdownParser extracts and validates frontmatter (mood tags, energy level, session context, policy) from journal files. The PatternGraphBuilder constructs a directed graph of nodes and edges representing relationships between moods, energy levels, times, and policies. A PatternDetector finds recurring patterns, and the SuggestionEngine recommends session policies. The whole system is exposed as an MCP server for LLM tool use.
 
 ## When to use
 - Analyzing journal history to find recurring mood-energy-time patterns
@@ -31,10 +31,14 @@ harmon-flow turns markdown journal entries into a queryable pattern graph. The M
 
 ## Example
 ```typescript
-import { MarkdownParser, PatternGraphBuilder, HarmonFlowMCPServer } from '@athena/harmon-flow';
+import {
+  MarkdownParser,
+  PatternGraphBuilder,
+  createMCPServer,
+} from '@athena/harmon-flow';
 
-const parser = new MarkdownParser();
-const entries = await parser.parseDirectory('./journals');
-const graph = new PatternGraphBuilder().build(entries);
-const server = new HarmonFlowMCPServer(graph);
+const parser = new MarkdownParser({ path: './journals' });
+const entries = parser.scanDirectory();
+const graph = new PatternGraphBuilder(entries).build();
+const server = await createMCPServer({ flowDir: './journals' });
 ```

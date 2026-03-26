@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { DeviceKind, DeviceOS, SourceInfo, HardConstraints } from './index.js'
+import { DaemonStatus, DeviceKind, DeviceOS, Event, SourceInfo, HardConstraints, TrackInfo, validateCommand } from './index.js'
 
 describe('harmon-protocol', () => {
   describe('DeviceKind', () => {
@@ -73,6 +73,123 @@ describe('harmon-protocol', () => {
         instrumentalnessMin: 1.5,
       }
       expect(() => HardConstraints.parse(invalidConstraints)).toThrow()
+    })
+  })
+
+  describe('TrackInfo', () => {
+    it('should accept track info with non-empty identity fields', () => {
+      expect(() =>
+        TrackInfo.parse({
+          id: 'track_1',
+          name: 'Track Name',
+          artist: 'Artist Name',
+          album: 'Album Name',
+          durationMs: 123000,
+        })
+      ).not.toThrow()
+    })
+
+    it('should reject empty id, name, or artist fields', () => {
+      expect(() =>
+        TrackInfo.parse({
+          id: '',
+          name: 'Track Name',
+          artist: 'Artist Name',
+          album: 'Album Name',
+          durationMs: 123000,
+        })
+      ).toThrow()
+
+      expect(() =>
+        TrackInfo.parse({
+          id: 'track_1',
+          name: '',
+          artist: 'Artist Name',
+          album: 'Album Name',
+          durationMs: 123000,
+        })
+      ).toThrow()
+    })
+  })
+
+  describe('Command', () => {
+    it('should accept supported command types', () => {
+      expect(() =>
+        validateCommand({
+          id: 'c_1',
+          ts: Date.now(),
+          source: { kind: 'cli', device: 'linux' },
+          type: 'session.stop',
+        })
+      ).not.toThrow()
+    })
+
+    it('should reject endpoint-specific command types that are not part of the shared command envelope', () => {
+      expect(() =>
+        validateCommand({
+          id: 'c_2',
+          ts: Date.now(),
+          source: { kind: 'cli', device: 'linux' },
+          type: 'device.use',
+          payload: { deviceId: 'abc123' },
+        })
+      ).toThrow()
+
+      expect(() =>
+        validateCommand({
+          id: 'c_3',
+          ts: Date.now(),
+          source: { kind: 'cli', device: 'linux' },
+          type: 'auth.spotify.login',
+        })
+      ).toThrow()
+    })
+  })
+
+  describe('Event', () => {
+    it('should accept emitted daemon event types', () => {
+      expect(() =>
+        Event.parse({
+          id: 'e_1',
+          ts: Date.now(),
+          type: 'track.skipped',
+          payload: { reason: 'manual-skip' },
+        })
+      ).not.toThrow()
+    })
+
+    it('should reject event types that the daemon does not emit', () => {
+      expect(() =>
+        Event.parse({
+          id: 'e_2',
+          ts: Date.now(),
+          type: 'track.ended',
+          payload: {},
+        })
+      ).toThrow()
+    })
+  })
+
+  describe('DaemonStatus', () => {
+    it('should accept provider capability and auth details', () => {
+      expect(() =>
+        DaemonStatus.parse({
+          isRunning: true,
+          version: '0.0.0',
+          spotifyConnected: true,
+          providers: {
+            spotify: {
+              connected: true,
+              status: 'configured',
+              auth: 'oauth',
+              capabilities: {
+                playback: true,
+                search: true,
+              },
+            },
+          },
+        })
+      ).not.toThrow()
     })
   })
 })

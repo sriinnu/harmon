@@ -144,9 +144,10 @@ HARMON_API_TOKEN=your_api_token              # API authentication
 HARMON_ENCRYPTION_SECRET=your_secret         # Token/cookie encryption (min 32 chars) - REQUIRED
 HARMON_CORS_ORIGINS=https://app.example.com  # Comma-separated, no wildcards
 SPOTIFY_CLIENT_ID=your_client_id             # Spotify OAuth
+SPOTIFY_REDIRECT_URI=https://harmon.example/v1/auth/spotify/callback
 ```
 
-**Note**: `HARMON_ENCRYPTION_SECRET` is **mandatory** in production. The daemon will exit with code 1 if this is not set when `NODE_ENV=production`. Generate a secure secret using:
+**Note**: production startup is blocked unless `HARMON_API_TOKEN`, `HARMON_ENCRYPTION_SECRET`, and `SPOTIFY_REDIRECT_URI` are set and `HARMON_CORS_ORIGINS` stays explicit. Generate a secure secret using:
 ```bash
 export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 ```
@@ -164,6 +165,7 @@ Before deploying to production:
 - [ ] Generate and set `HARMON_ENCRYPTION_SECRET` (min 32 chars)
 - [ ] Configure `HARMON_CORS_ORIGINS` (no wildcards)
 - [ ] Set up Spotify OAuth credentials
+- [ ] Set `SPOTIFY_REDIRECT_URI` to the exact production callback URL
 - [ ] Configure logging level (`LOG_LEVEL=info`)
 - [ ] Set up process manager (PM2, systemd)
 - [ ] Configure reverse proxy (nginx, caddy)

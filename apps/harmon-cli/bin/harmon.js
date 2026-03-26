@@ -6,36 +6,30 @@
 import { Command } from 'commander';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createCLI, getDefaultEndpoint } from '../dist/index.js';
+import {
+  classifyCliError,
+  CliUsageError,
+  detectDeviceOS,
+  parseSessionDurationOption,
+  parseTimeoutOption,
+  PLAYBACK_ENGINES,
+  SESSION_MODES,
+  SPOTIFY_SEARCH_TYPES,
+  validateChoice,
+  validateFraction,
+} from './runtime.js';
 
 const program = new Command();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const siloPackagePath = path.join(repoRoot, 'tools', 'harmon-silo');
-
-function parseDuration(value) {
-  if (typeof value !== 'string') return 10000;
-  const match = value.trim().match(/^(\d+)(ms|s|m|h)?$/);
-  if (!match) return 10000;
-  const amount = Number.parseInt(match[1], 10);
-  const unit = match[2] || 's';
-  if (!Number.isFinite(amount)) return 10000;
-  switch (unit) {
-    case 'ms':
-      return amount;
-    case 's':
-      return amount * 1000;
-    case 'm':
-      return amount * 60 * 1000;
-    case 'h':
-      return amount * 60 * 60 * 1000;
-    default:
-      return 10000;
-  }
-}
+const packageVersion =
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '0.0.0';
 
 function resolveOptions(command) {
   const chain = [];
@@ -55,9 +49,18 @@ function createContext(command) {
   const opts = resolveOptions(command);
   const endpoint = getDefaultEndpoint();
   const token = process.env.HARMON_API_TOKEN;
-  const timeoutMs = parseDuration(opts.timeout);
+  const engine = validateChoice(opts.engine, 'engine', PLAYBACK_ENGINES);
+  const timeoutMs = parseTimeoutOption(opts.timeout);
+
+  if (opts.debug) {
+    console.error(`[debug] endpoint: ${endpoint}`);
+    console.error(`[debug] timeout: ${timeoutMs}ms`);
+    console.error(`[debug] auth: ${token ? 'token set' : 'no token'}`);
+    console.error(`[debug] engine: ${engine}`);
+  }
+
   return {
-    opts,
+    opts: { ...opts, engine },
     cli: createCLI({ endpoint, token, timeoutMs }),
   };
 }
@@ -88,7 +91,7 @@ async function readCookieFile(filePath) {
   if (parsed && Array.isArray(parsed.records)) {
     return parsed.records;
   }
-  throw new Error('Unsupported cookie file format.');
+  throw new CliUsageError('Unsupported cookie file format.');
 }
 
 async function runSiloExport(options) {
@@ -215,6 +218,42 @@ function formatPlaylistPlain(playlists) {
     .join('\n');
 }
 
+function formatEpisodeLines(episodes) {
+  if (!Array.isArray(episodes) || episodes.length === 0) return 'No results.';
+  return episodes
+    .map((episode, index) => {
+      const showName = episode.showName ? ` (${episode.showName})` : '';
+      const uri = episode.uri ? ` [${episode.uri}]` : '';
+      return `${index + 1}. ${episode.name}${showName}${uri}`;
+    })
+    .join('\n');
+}
+
+function formatEpisodePlain(episodes) {
+  if (!Array.isArray(episodes) || episodes.length === 0) return '';
+  return episodes
+    .map((episode) => `${episode.name}\t${episode.showName ?? ''}\t${episode.releaseDate ?? ''}\t${episode.uri ?? ''}`)
+    .join('\n');
+}
+
+function formatShowLines(shows) {
+  if (!Array.isArray(shows) || shows.length === 0) return 'No results.';
+  return shows
+    .map((show, index) => {
+      const publisher = show.publisher ? ` (${show.publisher})` : '';
+      const uri = show.uri ? ` [${show.uri}]` : '';
+      return `${index + 1}. ${show.name}${publisher}${uri}`;
+    })
+    .join('\n');
+}
+
+function formatShowPlain(shows) {
+  if (!Array.isArray(shows) || shows.length === 0) return '';
+  return shows
+    .map((show) => `${show.name}\t${show.publisher ?? ''}\t${show.totalEpisodes ?? ''}\t${show.uri ?? ''}`)
+    .join('\n');
+}
+
 function isAppleInput(value) {
   if (!value) return false;
   return value.startsWith('applemusic:') || value.includes('music.apple.com');
@@ -296,27 +335,29 @@ async function applyDeviceIfNeeded(cli, opts) {
   if (!opts.device) return;
   const deviceId = await resolveDevice(cli, opts.device);
   if (!deviceId) {
-    throw new Error(`Unknown device: ${opts.device}`);
+    throw new CliUsageError(`Unknown device: ${opts.device}`);
   }
   await cli.useDevice(deviceId);
 }
 
 program
   .name('harmon')
-  .description('Harmon CLI')
+  .version(packageVersion, '-V, --version')
+  .showHelpAfterError()
+  .exitOverride()
+  .description('Harmon — mood-based music session engine CLI\n\nExamples:\n  harmon status\n  harmon play spotify:track:4cOdK2wGLETKBW3PvgPWqT\n  harmon search track "lofi beats"\n  harmon session start --mode focus\n  harmon auth import --browser chrome')
   .option('--config <path>', 'config file path')
   .option('--profile <name>', 'profile name', 'default')
-  .option('--timeout <dur>', 'request timeout', '10s')
-  .option('--market <cc>', 'market country code')
-  .option('--language <tag>', 'language/locale', 'en')
-  .option('--device <name|id>', 'target device')
-  .option('--engine <auto|web|connect|applescript>', 'API engine', 'connect')
-  .option('--json', 'json output')
-  .option('--plain', 'plain output')
+  .option('--timeout <dur>', 'request timeout (e.g. 5s, 30s, 1m)', '10s')
+  .option('--market <cc>', 'market country code (e.g. US, GB)')
+  .option('--device <name|id>', 'target playback device')
+  .option('--engine <auto|web|connect|applescript>', 'playback engine', 'connect')
+  .option('--json', 'JSON output (machine-readable)')
+  .option('--plain', 'tab-separated output (for piping)')
   .option('--no-color', 'disable color output')
   .option('-q, --quiet', 'suppress output')
   .option('-v, --verbose', 'verbose output')
-  .option('-d, --debug', 'debug output');
+  .option('-d, --debug', 'debug mode — show request/response details');
 
 program
   .command('status')
@@ -398,7 +439,7 @@ auth
     }
 
     if (!Array.isArray(cookies) || cookies.length === 0) {
-      throw new Error('No cookies found. Try a different browser/profile or pass --cookie-path.');
+      throw new CliUsageError('No cookies found. Try a different browser/profile or pass --cookie-path.');
     }
 
     const result = await cli.authImportCookies(cookies);
@@ -443,13 +484,107 @@ function registerSearch(type) {
           human: (data) => formatPlaylistLines(data.playlists),
           plain: (data) => formatPlaylistPlain(data.playlists),
         },
+        episode: {
+          human: (data) => formatEpisodeLines(data.episodes),
+          plain: (data) => formatEpisodePlain(data.episodes),
+        },
+        show: {
+          human: (data) => formatShowLines(data.shows),
+          plain: (data) => formatShowPlain(data.shows),
+        },
       };
       const output = formatters[type] || {};
       outputResult(opts, result, output);
     });
 }
 
-['track', 'album', 'artist', 'playlist'].forEach(registerSearch);
+SPOTIFY_SEARCH_TYPES.forEach(registerSearch);
+
+// ============================================================================
+// Session Commands
+// ============================================================================
+
+const session = program.command('session').description('Session lifecycle commands');
+
+session
+  .command('start')
+  .description('Start a music session with a policy')
+  .option('--mode <mode>', 'session mode: focus, relax, energize, meditate, workout, custom', 'focus')
+  .option('--duration <dur>', 'session duration (e.g. 30m, 1h)', '1h')
+  .option('--energy <n>', 'target energy 0-1', parseFloat)
+  .option('--instrumental', 'no vocals / instrumental only')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const cmdOpts = command.opts();
+
+    const mode = validateChoice(cmdOpts.mode, 'mode', SESSION_MODES);
+    const durationMs = parseSessionDurationOption(cmdOpts.duration);
+    const energy = validateFraction(cmdOpts.energy, 'energy');
+    const policy = {
+      version: 1,
+      mode,
+      durationMs,
+      sources: { likedTracks: true, topTracks: true, recentPlays: true, discovery: { enabled: true, ratio: 0.15 } },
+      hard: {},
+      soft: { weights: {} },
+    };
+    if (energy !== undefined) {
+      policy.soft.weights.energy = energy;
+    }
+    if (cmdOpts.instrumental) {
+      policy.hard.noVocals = true;
+    }
+
+    const result = await cli.command({
+      id: `c_${Date.now().toString(36)}`,
+      ts: Date.now(),
+      source: { kind: 'cli', device: detectDeviceOS() },
+      type: 'session.start',
+      payload: { policy },
+    });
+    outputResult(opts, result, {
+      plain: (data) => data.sessionId || 'ok',
+      human: (data) => `Session started: ${data.sessionId || 'ok'} (mode: ${mode})`,
+    });
+  });
+
+session
+  .command('stop')
+  .description('Stop the active session')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.command({
+      id: `c_${Date.now().toString(36)}`,
+      ts: Date.now(),
+      source: { kind: 'cli', device: detectDeviceOS() },
+      type: 'session.stop',
+      payload: {},
+    });
+    outputResult(opts, result, { plain: () => 'ok', human: () => 'Session stopped.' });
+  });
+
+session
+  .command('nudge <direction>')
+  .description('Nudge session calmer or sharper')
+  .option('--amount <n>', 'adjustment amount 0-1', parseFloat)
+  .action(async (direction, ...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    if (direction !== 'calmer' && direction !== 'sharper') {
+      throw new CliUsageError('Direction must be "calmer" or "sharper".');
+    }
+    const amount = validateFraction(command.opts().amount, 'amount');
+    const result = await cli.command({
+      id: `c_${Date.now().toString(36)}`,
+      ts: Date.now(),
+      source: { kind: 'cli', device: detectDeviceOS() },
+      type: 'session.nudge',
+      payload: { direction, amount },
+    });
+    outputResult(opts, result, { plain: () => 'ok', human: () => `Session nudged ${direction}.` });
+  });
 
 program
   .command('play [idOrUrl]')
@@ -468,7 +603,7 @@ program
       typeOverride &&
       !['track', 'album', 'playlist', 'artist', 'show', 'episode'].includes(typeOverride)
     ) {
-      throw new Error('Invalid type. Use track, album, playlist, artist, show, or episode.');
+      throw new CliUsageError('Invalid type. Use track, album, playlist, artist, show, or episode.');
     }
 
     if (!idOrUrl) {
@@ -491,7 +626,7 @@ program
     if (useAppleScript) {
       const url = normalizeAppleMusicUrl(idOrUrl, opts.market);
       if (!url) {
-        throw new Error('Invalid Apple Music URL or URI.');
+        throw new CliUsageError('Invalid Apple Music URL or URI.');
       }
       const result = await cli.applePlay({ url });
       outputResult(opts, result, {
@@ -503,7 +638,7 @@ program
 
     const spotifyUri = normalizeSpotifyUri(idOrUrl, typeOverride);
     if (!spotifyUri) {
-      throw new Error('Invalid Spotify URI or URL.');
+      throw new CliUsageError('Invalid Spotify URI or URL.');
     }
 
     const type = spotifyUriType(spotifyUri);
@@ -570,12 +705,12 @@ program
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
     if (opts.engine === 'applescript') {
-      throw new Error('Seek is not supported for Apple Music via AppleScript.');
+      throw new CliUsageError('Seek is not supported for Apple Music via AppleScript.');
     }
     await applyDeviceIfNeeded(cli, opts);
     const positionMs = parseSeekValue(position);
     if (positionMs === null) {
-      throw new Error('Invalid seek position.');
+      throw new CliUsageError('Invalid seek position.');
     }
     const result = await cli.spotifySeek(positionMs);
     outputResult(opts, result, { plain: () => String(positionMs), human: () => `Seeked to ${positionMs}ms.` });
@@ -588,12 +723,12 @@ program
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
     if (opts.engine === 'applescript') {
-      throw new Error('Volume control is not supported for Apple Music via AppleScript.');
+      throw new CliUsageError('Volume control is not supported for Apple Music via AppleScript.');
     }
     await applyDeviceIfNeeded(cli, opts);
     const volumePercent = Number.parseInt(percent, 10);
     if (!Number.isFinite(volumePercent) || volumePercent < 0 || volumePercent > 100) {
-      throw new Error('Volume must be 0-100.');
+      throw new CliUsageError('Volume must be 0-100.');
     }
     const result = await cli.spotifyVolume(volumePercent);
     outputResult(opts, result, { plain: () => String(volumePercent), human: () => `Volume ${volumePercent}%.` });
@@ -606,12 +741,12 @@ program
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
     if (opts.engine === 'applescript') {
-      throw new Error('Shuffle is not supported for Apple Music via AppleScript.');
+      throw new CliUsageError('Shuffle is not supported for Apple Music via AppleScript.');
     }
     await applyDeviceIfNeeded(cli, opts);
     const normalized = state === 'on' ? true : state === 'off' ? false : null;
     if (normalized === null) {
-      throw new Error('Shuffle state must be on or off.');
+      throw new CliUsageError('Shuffle state must be on or off.');
     }
     const result = await cli.spotifyShuffle(normalized);
     outputResult(opts, result, { plain: () => (normalized ? 'on' : 'off'), human: () => `Shuffle ${state}.` });
@@ -624,11 +759,11 @@ program
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
     if (opts.engine === 'applescript') {
-      throw new Error('Repeat is not supported for Apple Music via AppleScript.');
+      throw new CliUsageError('Repeat is not supported for Apple Music via AppleScript.');
     }
     await applyDeviceIfNeeded(cli, opts);
     if (!['off', 'track', 'context'].includes(state)) {
-      throw new Error('Repeat state must be off, track, or context.');
+      throw new CliUsageError('Repeat state must be off, track, or context.');
     }
     const result = await cli.spotifyRepeat(state);
     outputResult(opts, result, { plain: () => state, human: () => `Repeat ${state}.` });
@@ -665,7 +800,7 @@ device
     const { cli, opts } = createContext(command);
     const deviceId = await resolveDevice(cli, nameOrId);
     if (!deviceId) {
-      throw new Error(`Unknown device: ${nameOrId}`);
+      throw new CliUsageError(`Unknown device: ${nameOrId}`);
     }
     const result = await cli.useDevice(deviceId);
     outputResult(opts, result, { plain: () => deviceId, human: () => 'Device switched.' });
@@ -680,17 +815,17 @@ queue
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
     if (opts.engine === 'applescript') {
-      throw new Error('Queue management is not supported for Apple Music via AppleScript.');
+      throw new CliUsageError('Queue management is not supported for Apple Music via AppleScript.');
     }
     await applyDeviceIfNeeded(cli, opts);
 
     if (isAppleInput(idOrUrl)) {
-      throw new Error('Apple Music queue is not supported in this build.');
+      throw new CliUsageError('Apple Music queue is not supported in this build.');
     }
 
     const spotifyUri = normalizeSpotifyUri(idOrUrl, 'track');
     if (!spotifyUri) {
-      throw new Error('Invalid Spotify URI or URL.');
+      throw new CliUsageError('Invalid Spotify URI or URL.');
     }
 
     const result = await cli.spotifyQueueAdd(spotifyUri);
@@ -721,9 +856,27 @@ async function main() {
   try {
     await program.parseAsync(process.argv);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
+    const details = classifyCliError(error, process.argv);
+    if (details.exitCode === 0) {
+      process.exitCode = 0;
+      return;
+    }
+    if (details.json) {
+      console.error(JSON.stringify({ error: details.message, exitCode: details.exitCode }));
+    } else {
+      console.error(`Error: ${details.message}`);
+      if (details.exitCode === 4 && details.message.includes('fetch failed')) {
+        console.error('  Start it with: harmond');
+      }
+    }
+    process.exitCode = details.exitCode;
   }
 }
 
-main();
+// Handle signals
+process.on('SIGINT', () => { process.exit(130); });
+
+const isMain = import.meta.url === pathToFileURL(process.argv[1] || '').href;
+if (isMain) {
+  main();
+}

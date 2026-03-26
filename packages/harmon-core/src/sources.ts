@@ -102,7 +102,17 @@ async function enrichWithFeatures(
   }
 
   const trackIds = tracks.map(t => t.id);
-  const featureResults = await provider.getTrackFeatures(trackIds);
+  let featureResults = await provider.getTrackFeatures(trackIds);
+
+  // If the provider breaks positional correspondence, I prefer
+  // a safe full fallback over silently attaching the wrong features
+  // to the wrong tracks.
+  if (featureResults.length !== tracks.length) {
+    console.warn(
+      `Feature result length mismatch: expected ${tracks.length}, received ${featureResults.length}. Falling back to defaults.`
+    );
+    featureResults = Array.from({ length: tracks.length }, () => null);
+  }
 
   // Match features to tracks by position (nulls preserved).
   // Tracks without features get DEFAULT_FEATURES so non-Spotify providers still work.

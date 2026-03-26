@@ -40,4 +40,4 @@ harmon-spotify is the Spotify integration layer. It wraps the Spotify Web API be
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

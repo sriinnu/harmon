@@ -66,10 +66,13 @@ export interface SpotifyAuth {
   refresh(): Promise<void>;
   logout(): Promise<void>;
   getAccessToken(): Promise<string | null>;
+  getAuthMode(): SpotifyAuthMode;
   setCookies(cookies: SpotifyCookieRecord[] | null): Promise<void>;
   isConnected(): boolean;
   loadTokens(): Promise<void>;
 }
+
+export type SpotifyAuthMode = 'none' | 'oauth' | 'cookies';
 
 class SpotifyAuthImpl implements SpotifyAuth {
   private clientId: string;
@@ -101,15 +104,28 @@ class SpotifyAuthImpl implements SpotifyAuth {
   }
 
   async setCookies(cookies: SpotifyCookieRecord[] | null): Promise<void> {
-    this.cookies = cookies;
+    this.cookies = cookies ? sanitizeSpotifyCookies(cookies) : null;
     this.cookiesLoaded = true;
-    await this.cookieStore?.set(cookies);
+    await this.cookieStore?.set(this.cookies);
   }
 
   isConnected(): boolean {
     if (this.tokens !== null) return true;
     if (!this.cookiesLoaded) return false;
     return Array.isArray(this.cookies) && this.cookies.length > 0;
+  }
+
+  getAuthMode(): SpotifyAuthMode {
+    if (this.tokens?.refreshToken) {
+      return 'oauth';
+    }
+    if (Array.isArray(this.cookies) && this.cookies.length > 0) {
+      return 'cookies';
+    }
+    if (this.tokens !== null) {
+      return 'oauth';
+    }
+    return 'none';
   }
 
   getLoginUrl(): string {
@@ -237,8 +253,13 @@ class SpotifyAuthImpl implements SpotifyAuth {
       await this.saveTokens(cookieTokens);
     }
 
+    const tokens = this.tokens;
+    if (!tokens) {
+      return null;
+    }
+
     const now = Date.now();
-    if (this.tokens.expiresAt - now <= 60_000) {
+    if (tokens.expiresAt - now <= 60_000) {
       await this.refresh();
     }
 
@@ -334,9 +355,12 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private buildCookieHeader(records: SpotifyCookieRecord[]): string {
     const now = Date.now();
     const values = new Map<string, string>();
+    const requestPath = '/get_access_token';
 
-    for (const record of records) {
-      if (!record.name) continue;
+    for (const record of sanitizeSpotifyCookies(records)) {
+      if (!isCookiePathApplicable(record.path, requestPath)) {
+        continue;
+      }
       if (record.expires) {
         const expiresAt = Date.parse(record.expires);
         if (Number.isFinite(expiresAt) && expiresAt <= now) {
@@ -366,7 +390,8 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private async ensureCookiesLoaded(force = false): Promise<void> {
     if (this.cookiesLoaded && !force) return;
     this.cookiesLoaded = true;
-    this.cookies = this.cookieStore ? await this.cookieStore.get() : null;
+    const cookies = this.cookieStore ? await this.cookieStore.get() : null;
+    this.cookies = cookies ? sanitizeSpotifyCookies(cookies) : null;
   }
 
   private async saveTokens(tokens: SpotifyTokens): Promise<void> {
@@ -389,6 +414,94 @@ interface SpotifyWebTokenResponse {
   accessTokenExpirationTimestampMs?: number;
   tokenType?: string;
   scope?: string;
+}
+
+const ALLOWED_SPOTIFY_COOKIE_NAMES = new Set(['sp_dc', 'sp_key']);
+
+/**
+ * I keep only the Spotify auth cookies that are safe and relevant for
+ * `open.spotify.com/get_access_token`.
+ */
+export function sanitizeSpotifyCookies(records: unknown[]): SpotifyCookieRecord[] {
+  const sanitized = new Map<string, SpotifyCookieRecord>();
+
+  for (const record of records) {
+    const normalized = normalizeSpotifyCookieRecord(record);
+    if (!normalized) {
+      continue;
+    }
+    sanitized.set(`${normalized.domain}:${normalized.path}:${normalized.name}`, normalized);
+  }
+
+  return Array.from(sanitized.values());
+}
+
+function normalizeSpotifyCookieRecord(record: unknown): SpotifyCookieRecord | null {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+
+  const value = record as Partial<SpotifyCookieRecord>;
+  const name = normalizeCookieName(value.name);
+  const domain = normalizeSpotifyCookieDomain(value.domain);
+  const path = normalizeSpotifyCookiePath(value.path);
+
+  if (!name || !domain || !path || typeof value.value !== 'string') {
+    return null;
+  }
+
+  return {
+    domain,
+    name,
+    path,
+    value: value.value.slice(0, 4096),
+    expires: typeof value.expires === 'string' ? value.expires : null,
+    isSecure: value.isSecure === true,
+    isHTTPOnly: value.isHTTPOnly === true,
+  };
+}
+
+function normalizeCookieName(name: unknown): string | null {
+  if (typeof name !== 'string') {
+    return null;
+  }
+
+  const normalized = name.trim();
+  if (!ALLOWED_SPOTIFY_COOKIE_NAMES.has(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeSpotifyCookieDomain(domain: unknown): string | null {
+  if (typeof domain !== 'string') {
+    return null;
+  }
+
+  const normalized = domain.trim().toLowerCase().replace(/^\.+/, '');
+  if (normalized === 'spotify.com' || normalized === 'open.spotify.com') {
+    return normalized;
+  }
+
+  return null;
+}
+
+function normalizeSpotifyCookiePath(cookiePath: unknown): string | null {
+  if (typeof cookiePath !== 'string') {
+    return '/';
+  }
+
+  const normalized = cookiePath.trim();
+  if (!normalized.startsWith('/')) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function isCookiePathApplicable(cookiePath: string, requestPath: string): boolean {
+  return requestPath === cookiePath || requestPath.startsWith(`${cookiePath.replace(/\/$/, '')}/`) || cookiePath === '/';
 }
 
 function generateCodeVerifier(): string {
@@ -545,6 +658,8 @@ class SpotifyClientImpl implements SpotifyClient {
       albums: (data.albums?.items || []).map(mapAlbum),
       artists: (data.artists?.items || []).map(mapArtist),
       playlists: (data.playlists?.items || []).map(mapPlaylist),
+      episodes: (data.episodes?.items || []).map(mapEpisode),
+      shows: (data.shows?.items || []).map(mapShow),
     };
   }
 
@@ -853,9 +968,11 @@ export interface SpotifySearchResult {
   albums: SpotifyAlbum[];
   artists: SpotifyArtist[];
   playlists: SpotifyPlaylist[];
+  episodes: SpotifyEpisode[];
+  shows: SpotifyShow[];
 }
 
-export type SpotifySearchType = 'track' | 'album' | 'artist' | 'playlist';
+export type SpotifySearchType = 'track' | 'album' | 'artist' | 'playlist' | 'episode' | 'show';
 
 export interface SpotifyListOptions {
   limit?: number;
@@ -883,6 +1000,26 @@ export interface SpotifyPlaylist {
   owner: string;
   totalTracks: number;
   public: boolean | null;
+  uri?: string;
+}
+
+export interface SpotifyEpisode {
+  id: string;
+  name: string;
+  description?: string;
+  releaseDate?: string;
+  durationMs?: number;
+  showName?: string;
+  publisher?: string;
+  uri?: string;
+}
+
+export interface SpotifyShow {
+  id: string;
+  name: string;
+  publisher?: string;
+  description?: string;
+  totalEpisodes?: number;
   uri?: string;
 }
 
@@ -1005,11 +1142,37 @@ interface SpotifyPlaylistRaw {
   tracks?: { total?: number };
 }
 
+interface SpotifyEpisodeRaw {
+  id: string;
+  name: string;
+  uri: string;
+  description?: string;
+  html_description?: string;
+  release_date?: string;
+  duration_ms?: number;
+  show?: {
+    name?: string;
+    publisher?: string;
+  };
+}
+
+interface SpotifyShowRaw {
+  id: string;
+  name: string;
+  uri: string;
+  publisher?: string;
+  description?: string;
+  html_description?: string;
+  total_episodes?: number;
+}
+
 interface SpotifySearchResponse {
   tracks?: { items: SpotifyTrack[] };
   albums?: { items: SpotifyAlbumRaw[] };
   artists?: { items: SpotifyArtistRaw[] };
   playlists?: { items: SpotifyPlaylistRaw[] };
+  episodes?: { items: SpotifyEpisodeRaw[] };
+  shows?: { items: SpotifyShowRaw[] };
 }
 
 interface SpotifyPlaylistsResponse {
@@ -1151,6 +1314,30 @@ function mapPlaylist(playlist: SpotifyPlaylistRaw): SpotifyPlaylist {
   };
 }
 
+function mapEpisode(episode: SpotifyEpisodeRaw): SpotifyEpisode {
+  return {
+    id: episode.id,
+    name: episode.name,
+    description: episode.description || episode.html_description,
+    releaseDate: episode.release_date,
+    durationMs: episode.duration_ms,
+    showName: episode.show?.name,
+    publisher: episode.show?.publisher,
+    uri: episode.uri,
+  };
+}
+
+function mapShow(show: SpotifyShowRaw): SpotifyShow {
+  return {
+    id: show.id,
+    name: show.name,
+    publisher: show.publisher,
+    description: show.description || show.html_description,
+    totalEpisodes: show.total_episodes,
+    uri: show.uri,
+  };
+}
+
 function mapAudioFeatures(raw: SpotifyAudioFeaturesRaw): AudioFeatures {
   return {
     energy: raw.energy,
@@ -1276,6 +1463,8 @@ export class SpotifyMusicProvider implements MusicProvider {
   }
 
   async getRecommendations(options: { seedTrackIds?: string[]; limit?: number }): Promise<TrackInfo[]> {
+    // Guard: Spotify requires at least 1 seed
+    if (!options.seedTrackIds || options.seedTrackIds.length === 0) return [];
     return this.client.getRecommendations({
       seedTracks: options.seedTrackIds,
       limit: options.limit,

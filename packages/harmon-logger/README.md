@@ -39,4 +39,4 @@ harmon-logger is a thin wrapper around Pino that standardizes log formatting acr
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

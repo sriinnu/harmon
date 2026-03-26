@@ -42,4 +42,4 @@ harmon-apple wraps the Apple Music REST API (`api.music.apple.com/v1`). The daem
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

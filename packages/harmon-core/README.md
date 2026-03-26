@@ -42,4 +42,4 @@ harmon-core is the central orchestrator. It consumes a `SessionPolicy` from harm
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

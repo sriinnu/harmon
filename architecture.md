@@ -189,13 +189,15 @@ sequenceDiagram
 `GET /v1/events` - Emits events:
 - `session.started` - Session began
 - `session.stopped` - Session ended
+- `session.nudged` - Session weights were adjusted
 - `track.started` - New track playing
-- `track.ended` - Track finished
+- `track.skipped` - Track was skipped
 - `queue.refilled` - Queue was replenished
-- `user.nudged` - User adjusted preferences
-- `device.discovered` - New Spotify device found
+- `device.changed` - Playback target changed
 - `spotify.connected` - Spotify auth successful
 - `spotify.disconnected` - Spotify auth revoked
+- `connected` - Initial SSE handshake event
+- `heartbeat` - Keepalive ping
 - `error` - Error occurred
 
 ### Envelope Shapes

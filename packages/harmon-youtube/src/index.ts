@@ -1,28 +1,16 @@
 /**
  * Harmon YouTube - YouTube Music integration
  *
- * Uses YouTube Data API v3 for search and the internal YouTube Music API
- * for library, recommendations, and playback features.
- *
- * Note: YouTube Music does not have an official public API for music-specific
- * features. Library and recommendation features use reverse-engineered endpoints
- * that may change without notice.
+ * I only expose the surfaces this package can actually honor today.
+ * Search and song lookup are implemented through YouTube Data API v3.
+ * Reverse-engineered YouTube Music endpoints stay disabled until their
+ * response parsers are covered well enough to ship honestly.
  */
 
 import type { TrackInfo } from '@athena/harmon-protocol';
 import type { MusicProvider, AudioFeatures } from '@athena/harmon-core';
 
 const YT_DATA_API_BASE = 'https://www.googleapis.com/youtube/v3';
-const YTM_API_BASE = 'https://music.youtube.com/youtubei/v1';
-
-const YTM_CLIENT_CONTEXT = {
-  client: {
-    clientName: 'WEB_REMIX',
-    clientVersion: '1.20240101.01.00',
-    hl: 'en',
-    gl: 'US',
-  },
-};
 
 // ============================================================================
 // Types
@@ -33,7 +21,7 @@ export interface YouTubeMusicConfig {
   accessToken?: string;
   /** YouTube Data API key (for search without auth) */
   apiKey?: string;
-  /** Cookie header for authenticated YTM requests */
+  /** Reserved for future YTM-internal coverage; not sufficient on its own today */
   cookies?: string;
 }
 
@@ -106,21 +94,23 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
   private config: YouTubeMusicConfig;
 
   constructor(config: YouTubeMusicConfig) {
-    if (!config.accessToken && !config.apiKey && !config.cookies) {
-      throw new Error('YouTube Music requires an access token, API key, or cookies');
+    if (!config.accessToken && !config.apiKey) {
+      throw new Error('YouTube Music requires an access token or API key. Cookies-only mode is not implemented in this build.');
     }
     this.config = config;
   }
 
   isConnected(): boolean {
-    return !!(this.config.accessToken || this.config.cookies);
+    return !!(this.config.accessToken || this.config.apiKey);
   }
 
   async search(
     query: string,
-    _types: YouTubeMusicSearchType[] = ['songs'],
+    types: YouTubeMusicSearchType[] = ['songs'],
     options: YouTubeMusicListOptions = {}
   ): Promise<YouTubeMusicSearchResult> {
+    this.assertSupportedSearchTypes(types);
+
     const result: YouTubeMusicSearchResult = {
       songs: [], albums: [], artists: [], playlists: [],
     };
@@ -133,7 +123,9 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
         maxResults: (options.limit || 20).toString(),
         part: 'snippet',
       });
-      result.songs = (data.items || []).map(mapYtSearchToSong);
+      result.songs = (data.items || [])
+        .map(mapYtSearchToSong)
+        .filter((song): song is YouTubeMusicSong => song !== null);
     }
 
     return result;
@@ -156,41 +148,36 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
   }
 
   async getLibrarySongs(_options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    if (!this.isConnected()) {
-      throw new Error('YouTube Music authentication required for library access');
-    }
-    const data = await this.ytmRequest('browse', { browseId: 'FEmusic_liked_videos' });
-    return parseLibraryResponse(data);
+    throw new Error('YouTube Music library access is not implemented in this build.');
   }
 
   async getPlaylists(_options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicPlaylist[]> {
-    if (!this.isConnected()) {
-      throw new Error('YouTube Music authentication required for playlists');
-    }
-    const data = await this.ytmRequest('browse', { browseId: 'FEmusic_liked_playlists' });
-    return parsePlaylistsResponse(data);
+    throw new Error('YouTube Music playlist listing is not implemented in this build.');
   }
 
   async getPlaylistTracks(playlistId: string, _options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    const data = await this.ytmRequest('browse', { browseId: `VL${playlistId}` });
-    return parsePlaylistTracksResponse(data);
+    void playlistId;
+    throw new Error('YouTube Music playlist track retrieval is not implemented in this build.');
   }
 
   async getRecommendations(_options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    if (!this.isConnected()) {
-      throw new Error('YouTube Music authentication required for recommendations');
-    }
-    const data = await this.ytmRequest('browse', { browseId: 'FEmusic_home' });
-    return parseRecommendationsResponse(data);
+    throw new Error('YouTube Music recommendations are not implemented in this build.');
   }
 
   async getWatchPlaylist(videoId: string, _options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    const data = await this.ytmRequest('next', {
-      videoId,
-      isAudioOnly: true,
-      enablePersistentPlaylistPanel: true,
-    });
-    return parseWatchPlaylistResponse(data);
+    void videoId;
+    throw new Error('YouTube Music watch playlists are not implemented in this build.');
+  }
+
+  /**
+   * I fail fast on unsupported search modes so callers do not mistake an
+   * empty result set for real album, artist, or playlist coverage.
+   */
+  private assertSupportedSearchTypes(types: YouTubeMusicSearchType[]): void {
+    const unsupported = types.filter((type) => type !== 'songs');
+    if (unsupported.length > 0) {
+      throw new Error(`YouTube Music search types not implemented in this build: ${unsupported.join(', ')}`);
+    }
   }
 
   private async ytDataRequest<T>(path: string, query: Record<string, string>): Promise<T> {
@@ -220,40 +207,6 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
 
     if (!response.ok) {
       throw new Error(`YouTube API error: ${response.status} ${await response.text()}`);
-    }
-
-    return (await response.json()) as T;
-  }
-
-  private async ytmRequest<T = unknown>(endpoint: string, body: Record<string, unknown>): Promise<T> {
-    const url = new URL(`${YTM_API_BASE}/${endpoint}`);
-    url.searchParams.set('prettyPrint', 'false');
-    if (this.config.apiKey) {
-      url.searchParams.set('key', this.config.apiKey);
-    }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      Origin: 'https://music.youtube.com',
-      Referer: 'https://music.youtube.com/',
-    };
-
-    if (this.config.accessToken) {
-      headers.Authorization = `Bearer ${this.config.accessToken}`;
-    }
-    if (this.config.cookies) {
-      headers.Cookie = this.config.cookies;
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ context: YTM_CLIENT_CONTEXT, ...body }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`YouTube Music API error: ${response.status} ${await response.text()}`);
     }
 
     return (await response.json()) as T;
@@ -291,9 +244,13 @@ interface YouTubeVideoResponse {
 // Mappers
 // ============================================================================
 
-function mapYtSearchToSong(item: NonNullable<YouTubeSearchResponse['items']>[0]): YouTubeMusicSong {
+function mapYtSearchToSong(item: NonNullable<YouTubeSearchResponse['items']>[0]): YouTubeMusicSong | null {
+  const videoId = item.id.videoId;
+  if (!videoId || !item.snippet.title || !item.snippet.channelTitle) {
+    return null;
+  }
   return {
-    id: item.id.videoId || '',
+    id: videoId,
     name: item.snippet.title,
     artistName: item.snippet.channelTitle.replace(/ - Topic$/, ''),
     thumbnailUrl: item.snippet.thumbnails?.medium?.url,
@@ -322,13 +279,6 @@ function parseDuration(iso?: string): number | undefined {
   if (!m) return undefined;
   return ((parseInt(m[1] || '0') * 3600) + (parseInt(m[2] || '0') * 60) + parseInt(m[3] || '0')) * 1000;
 }
-
-// Placeholder parsers for internal YTM API responses
-function parseLibraryResponse(_data: unknown): YouTubeMusicSong[] { return []; }
-function parsePlaylistsResponse(_data: unknown): YouTubeMusicPlaylist[] { return []; }
-function parsePlaylistTracksResponse(_data: unknown): YouTubeMusicSong[] { return []; }
-function parseRecommendationsResponse(_data: unknown): YouTubeMusicSong[] { return []; }
-function parseWatchPlaylistResponse(_data: unknown): YouTubeMusicSong[] { return []; }
 
 // ============================================================================
 // Provider Adapter
@@ -360,11 +310,11 @@ export class YouTubeMusicProvider implements MusicProvider {
   }
 
   async getTopTracks(_options?: { limit?: number }): Promise<TrackInfo[]> {
-    return []; // YouTube Music has no top tracks API
+    throw new Error('YouTube Music top tracks are not implemented in this build.');
   }
 
   async getRecentlyPlayed(_options?: { limit?: number }): Promise<TrackInfo[]> {
-    return []; // YouTube Music has no recently played API
+    throw new Error('YouTube Music recently played is not implemented in this build.');
   }
 
   async getPlaylistTracks(playlistId: string, options?: { limit?: number }): Promise<TrackInfo[]> {
@@ -394,6 +344,10 @@ export function createYouTubeMusicProvider(client: YouTubeMusicClient): MusicPro
 // Factory
 // ============================================================================
 
+/**
+ * I create a YouTube Music client for the currently supported Data API
+ * surface: song search and individual song lookup.
+ */
 export function createYouTubeMusicClient(config: YouTubeMusicConfig): YouTubeMusicClient {
   return new YouTubeMusicClientImpl(config);
 }

@@ -2,6 +2,7 @@
   "name": "@athena/harmon-protocol",
   "version": "0.0.0",
   "description": "Command/Event/Policy types + Zod schemas for Harmon",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

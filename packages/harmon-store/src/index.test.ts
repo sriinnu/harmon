@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { HarmonStore } from './index.js';
 
@@ -141,6 +144,24 @@ describe('HarmonStore', () => {
       expect(stats.totalSessions).toBe(0);
       expect(stats.activeSessions).toBe(0);
       expect(stats.eventsLogged).toBe(0);
+    });
+  });
+
+  describe('filesystem hardening', () => {
+    it('creates on-disk database files with owner-only permissions', async () => {
+      const dir = fs.mkdtempSync(path.join(tmpdir(), 'harmon-store-'));
+      const dbPath = path.join(dir, 'store.db');
+      const diskStore = new HarmonStore({ dbPath });
+
+      try {
+        await diskStore.migrate();
+
+        const stats = fs.statSync(dbPath);
+        expect(stats.mode & 0o777).toBe(0o600);
+      } finally {
+        await diskStore.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 });

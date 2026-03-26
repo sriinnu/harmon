@@ -5,7 +5,6 @@
  */
 
 import type { SessionPolicy, TrackInfo } from '@athena/harmon-protocol';
-import type { HarmonStore } from '@athena/harmon-store';
 import type {
   MusicProvider,
   PlaybackController,
@@ -13,6 +12,7 @@ import type {
   EventCallback,
   EngineEvent,
   PlayRecord,
+  SessionStore,
 } from './types.js';
 import { fetchCandidates } from './sources.js';
 import { rankTracks } from './ranking.js';
@@ -32,14 +32,14 @@ export interface SessionEngine {
 export interface EngineConfig {
   provider: MusicProvider;
   playback: PlaybackController;
-  store: HarmonStore;
+  store: SessionStore;
   onEvent?: EventCallback;
 }
 
 class SessionEngineImpl implements SessionEngine {
   private provider: MusicProvider;
   private playback: PlaybackController;
-  private store: HarmonStore;
+  private store: SessionStore;
   private onEvent: EventCallback;
   private state: SessionState | null = null;
   private refillInterval: ReturnType<typeof setInterval> | null = null;
@@ -98,6 +98,8 @@ class SessionEngineImpl implements SessionEngine {
       throw new Error('No active session');
     }
 
+    const elapsedMs = Date.now() - this.state.startedAt;
+
     // Stop monitoring
     this.stopRefillMonitoring();
 
@@ -110,7 +112,9 @@ class SessionEngineImpl implements SessionEngine {
       type: 'session.stopped',
       payload: {
         sessionId: this.state.id,
-        elapsedMs: Date.now() - this.state.startedAt,
+        elapsedMs,
+        duration: elapsedMs,
+        durationMs: elapsedMs,
       },
     });
 

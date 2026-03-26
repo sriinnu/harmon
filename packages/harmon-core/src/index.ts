@@ -23,5 +23,6 @@ export type {
   EngineEvent,
   EventCallback,
   RankedTrack,
+  SessionStore,
   SourcesConfig,
 } from './types.js';

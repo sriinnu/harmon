@@ -50,16 +50,15 @@ export class Encryptor {
     const salt = randomBytes(SALT_LENGTH);
     const key = scryptSync(this.secret, salt, KEY_LENGTH);
     const iv = randomBytes(IV_LENGTH);
-    const cipher = createCipheriv(ALGORITHM, key, iv);
-
-    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const authTag = cipher.getAuthTag();
-
-    // Zero the derived key
-    key.fill(0);
-
-    return `${salt.toString('hex')}:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+    try {
+      const cipher = createCipheriv(ALGORITHM, key, iv);
+      let encrypted = cipher.update(plaintext, 'utf8', 'hex');
+      encrypted += cipher.final('hex');
+      const authTag = cipher.getAuthTag();
+      return `${salt.toString('hex')}:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+    } finally {
+      key.fill(0);
+    }
   }
 
   /**
@@ -98,16 +97,19 @@ export class Encryptor {
     }
 
     const key = scryptSync(this.secret, salt, KEY_LENGTH);
-    const decipher = createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(authTag);
-
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-
-    // Zero the derived key
-    key.fill(0);
-
-    return decrypted;
+    const plaintextChunks: Buffer[] = [];
+    try {
+      const decipher = createDecipheriv(ALGORITHM, key, iv);
+      decipher.setAuthTag(authTag);
+      plaintextChunks.push(decipher.update(encrypted, 'hex'));
+      plaintextChunks.push(decipher.final());
+      return Buffer.concat(plaintextChunks).toString('utf8');
+    } finally {
+      for (const chunk of plaintextChunks) {
+        chunk.fill(0);
+      }
+      key.fill(0);
+    }
   }
 
   /**

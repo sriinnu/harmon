@@ -16,7 +16,13 @@ pnpm add @athena/harmon-protocol
 import { SessionPolicy, validateCommand, Command } from '@athena/harmon-protocol';
 
 const policy = SessionPolicy.parse({ version: 1, mode: 'focus' });
-const cmd = validateCommand({ id: 'c_1', ts: Date.now(), source: { kind: 'cli', device: 'macos' }, type: 'session.start' });
+const cmd = validateCommand({
+  id: 'c_1',
+  ts: Date.now(),
+  source: { kind: 'cli', device: 'macos' },
+  type: 'session.start',
+  payload: { policy },
+});
 ```
 
 ## API
@@ -42,4 +48,4 @@ harmon-protocol is the shared contract layer. Every package imports its types fr
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

@@ -2,14 +2,25 @@
   "name": "@athena/harmon",
   "version": "0.0.0",
   "description": "CLI client for Harmon daemon",
+  "license": "AGPL-3.0-only",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "harmon": "./bin/harmon.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run ./bin/runtime.test.js",
+    "test:run": "vitest run ./bin/runtime.test.js"
   },
   "dependencies": {
     "@athena/harmon-protocol": "workspace:*",

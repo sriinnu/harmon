@@ -2,6 +2,7 @@
   "name": "@athena/harmon-youtube",
   "version": "0.0.0",
   "description": "YouTube Music integration for Harmon",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

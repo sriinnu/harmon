@@ -1,4 +1,4 @@
-# @athena/harmon-cli
+# @athena/harmon
 
 ![logo](./logo.svg)
 
@@ -7,18 +7,24 @@
 ## Install
 
 ```bash
-pnpm add @athena/harmon-cli
+pnpm add @athena/harmon
 ```
 
 ## Quick Start
 
 ```typescript
-import { createCLI, getDefaultEndpoint } from '@athena/harmon-cli';
+import { createCLI, getDefaultEndpoint } from '@athena/harmon';
 
 const cli = createCLI({ endpoint: getDefaultEndpoint() });
 const status = await cli.status();
 await cli.spotifyPlay({ uri: 'spotify:track:...' });
-await cli.command({ id: 'c_1', ts: Date.now(), source: { kind: 'cli', device: 'macos' }, type: 'session.start', payload: {} });
+await cli.command({
+  id: 'c_1',
+  ts: Date.now(),
+  source: { kind: 'cli', device: 'macos' },
+  type: 'session.start',
+  payload: { policy: { version: 1, mode: 'focus' } },
+});
 ```
 
 ## API
@@ -43,4 +49,4 @@ harmon-cli is a stateless HTTP client that sends requests to the harmond daemon.
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

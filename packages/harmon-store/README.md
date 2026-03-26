@@ -41,4 +41,4 @@ harmon-store sits beneath the daemon, providing durable storage via libSQL/SQLit
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 only. See [LICENSE](../../LICENSE).

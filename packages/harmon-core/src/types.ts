@@ -102,6 +102,20 @@ export interface PlayRecord {
 }
 
 /**
+ * Storage contract required by the session engine.
+ * I keep this narrow so harmon-core stays decoupled from any concrete store.
+ */
+export interface SessionStore {
+  createSession(policy: string): Promise<string>;
+  endSession(id: string): Promise<void>;
+  logEvent(
+    type: string,
+    payload: Record<string, unknown>,
+    sessionId?: string
+  ): Promise<string>;
+}
+
+/**
  * Session state managed by engine
  */
 export interface SessionState {
@@ -146,7 +160,7 @@ export interface SourcesConfig {
   seedPlaylists?: string[];
   seedArtists?: string[];
   discovery?: {
-    enabled: boolean;
-    ratio: number;
+    enabled?: boolean;
+    ratio?: number;
   };
 }
