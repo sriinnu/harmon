@@ -52,6 +52,7 @@ import {
   errorHandler,
 } from './errors.js';
 import { validateDaemonEnvironment } from './config.js';
+import { getDaemonVersion } from './version.js';
 
 // ============================================================================
 // Configuration
@@ -65,6 +66,7 @@ const MAX_SSE_CLIENTS = 50;
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const TRACK_POLL_INTERVAL_MS = 5000;
 const execFileAsync = promisify(execFile);
+const DAEMON_VERSION = getDaemonVersion();
 
 interface DaemonConfig {
   port?: number;
@@ -327,7 +329,7 @@ export class Harmond {
 
     // Health check
     this.app.get('/health', (_req: Request, res: Response) => {
-      res.json({ status: 'ok', version: '0.0.0', timestamp: new Date().toISOString() });
+      res.json({ status: 'ok', version: DAEMON_VERSION, timestamp: new Date().toISOString() });
     });
 
     // Status
@@ -950,7 +952,7 @@ export class Harmond {
 
     return {
       isRunning: this.server !== null,
-      version: '0.0.0',
+      version: DAEMON_VERSION,
       spotifyConnected: this.spotifyAuth.isConnected(),
       features: {
         sse: this.enableSSE,

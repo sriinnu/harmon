@@ -13,6 +13,7 @@ import {
 import { MarkdownParser, createFlowParser } from '../parser/index.js';
 import { PatternGraphBuilder, PatternDetector, SuggestionEngine } from '../graph/index.js';
 import type { ToolDefinition, ToolHandler, JournalEntry, PatternGraph } from '../types.js';
+import { getFlowServerVersion } from '../version.js';
 
 interface FlowServerConfig {
   flowDir?: string;
@@ -31,7 +32,7 @@ export class HarmonFlowMCPServer {
   constructor(config: FlowServerConfig = {}) {
     this.server = new Server({
       name: config.name || 'harmon-flow',
-      version: config.version || '0.0.0',
+      version: config.version || getFlowServerVersion(),
     });
 
     this.parser = createFlowParser(config.flowDir);

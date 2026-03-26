@@ -1,6 +1,6 @@
 {
   "name": "@athena/harmon-flow",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Local MCP server for harmon-flow journal with graph-based pattern detection",
   "license": "AGPL-3.0-only",
   "type": "module",

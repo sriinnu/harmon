@@ -175,7 +175,7 @@ describe('harmon-protocol', () => {
       expect(() =>
         DaemonStatus.parse({
           isRunning: true,
-          version: '0.0.0',
+          version: '0.1.0',
           spotifyConnected: true,
           providers: {
             spotify: {
