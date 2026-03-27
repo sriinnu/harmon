@@ -11,7 +11,8 @@ export const EXIT_USAGE = 2;
 export const EXIT_AUTH = 3;
 export const EXIT_NETWORK = 4;
 
-export const PLAYBACK_ENGINES = ['auto', 'web', 'connect', 'applescript'];
+export const PLAYBACK_ENGINES = ['connect', 'applescript'];
+export const SUPPORTED_PROVIDERS = ['spotify', 'apple', 'youtube'];
 export const SESSION_MODES = ['focus', 'relax', 'energize', 'meditate', 'workout', 'custom'];
 export const SPOTIFY_SEARCH_TYPES = ['track', 'album', 'artist', 'playlist', 'episode', 'show'];
 

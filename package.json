@@ -16,6 +16,7 @@
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "verify:pack": "node ./scripts/verify-packages.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml}\""
   },
   "devDependencies": {

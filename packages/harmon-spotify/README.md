@@ -10,14 +10,32 @@
 pnpm add @athena/harmon-spotify
 ```
 
+## Pack Auth
+
+```bash
+npm run auth
+npm run auth:status
+npm run auth:refresh
+```
+
+I keep local auth state in `.chitragupta-ecosystem/auth/spotify.tokens.json` and `.chitragupta-ecosystem/auth/spotify.cookies.json`. I also ship `.chitragupta-ecosystem/.profile.json`, so Chitragupta-style loaders can discover the auth entrypoints, logo, README, and env contract without guessing.
+
+I support two bootstrap paths:
+
+- PKCE OAuth with `SPOTIFY_CLIENT_ID` and an optional `SPOTIFY_REDIRECT_URI`
+- Cookie import with `SPOTIFY_COOKIES_PATH`, `SPOTIFY_COOKIE_JSON`, or direct `SPOTIFY_SP_DC` / `SPOTIFY_SP_KEY`
+
 ## Quick Start
 
 ```typescript
 import { createSpotifyAuth, createSpotifyClient, createSpotifyProvider } from '@athena/harmon-spotify';
 
-const auth = createSpotifyAuth({ clientId: '...', redirectUri: 'http://localhost:17373/callback' });
+const auth = createSpotifyAuth({
+  clientId: '...',
+  redirectUri: 'http://localhost:17373/v1/auth/spotify/callback',
+});
 const url = auth.getLoginUrl(); // redirect user here
-const client = createSpotifyClient(auth);
+const client = createSpotifyClient({ auth });
 const tracks = await client.search('lofi chill', ['track']);
 ```
 
@@ -26,9 +44,9 @@ const tracks = await client.search('lofi chill', ['track']);
 | Export | Description |
 |---|---|
 | `createSpotifyAuth(config)` | OAuth manager with PKCE flow |
-| `createSpotifyClient(auth)` | API client: search, library, playlists, audio features |
+| `createSpotifyClient({ auth })` | API client: search, library, playlists, audio features |
 | `createSpotifyProvider(client)` | Adapter implementing `MusicProvider` interface |
-| `createSpotifyPlayback(auth)` | Playback controller: play, pause, skip, seek, volume |
+| `createSpotifyPlayback(client)` | Playback controller: play, pause, skip, seek, volume |
 | `SpotifyAuth` | Auth lifecycle: login, callback, refresh, logout |
 | `SpotifyClient` | Full Spotify Web API surface |
 | `SpotifyTokens` | Token storage shape |

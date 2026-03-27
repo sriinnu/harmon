@@ -6,6 +6,14 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "bin/harmon.js",
+    "bin/runtime.js",
+    "dist/",
+    "README.md",
+    "SKILL.md",
+    "logo.svg"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

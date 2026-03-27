@@ -1,10 +1,10 @@
 /**
  * Harmon YouTube - YouTube Music integration
  *
- * I only expose the surfaces this package can actually honor today.
- * Search and song lookup are implemented through YouTube Data API v3.
- * Reverse-engineered YouTube Music endpoints stay disabled until their
- * response parsers are covered well enough to ship honestly.
+ * I keep this adapter on the official YouTube Data API.
+ * That means I can support search, owned playlists, liked-library tracks,
+ * playlist tracks, and related-track recommendations without pulling in
+ * private YouTube Music endpoints that would make the runtime brittle.
  */
 
 import type { TrackInfo } from '@athena/harmon-protocol';
@@ -109,13 +109,11 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
     types: YouTubeMusicSearchType[] = ['songs'],
     options: YouTubeMusicListOptions = {}
   ): Promise<YouTubeMusicSearchResult> {
-    this.assertSupportedSearchTypes(types);
-
     const result: YouTubeMusicSearchResult = {
       songs: [], albums: [], artists: [], playlists: [],
     };
 
-    if (this.config.apiKey || this.config.accessToken) {
+    if (types.includes('songs')) {
       const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
         q: query,
         type: 'video',
@@ -126,6 +124,42 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
       result.songs = (data.items || [])
         .map(mapYtSearchToSong)
         .filter((song): song is YouTubeMusicSong => song !== null);
+    }
+
+    if (types.includes('artists')) {
+      const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
+        q: query,
+        type: 'channel',
+        maxResults: (options.limit || 20).toString(),
+        part: 'snippet',
+      });
+      result.artists = (data.items || [])
+        .map(mapYtSearchToArtist)
+        .filter((artist): artist is YouTubeMusicArtist => artist !== null);
+    }
+
+    if (types.includes('playlists')) {
+      const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
+        q: query,
+        type: 'playlist',
+        maxResults: (options.limit || 20).toString(),
+        part: 'snippet',
+      });
+      result.playlists = (data.items || [])
+        .map(mapYtSearchToPlaylist)
+        .filter((playlist): playlist is YouTubeMusicPlaylist => playlist !== null);
+    }
+
+    if (types.includes('albums')) {
+      const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
+        q: `${query} album`,
+        type: 'playlist',
+        maxResults: (options.limit || 20).toString(),
+        part: 'snippet',
+      });
+      result.albums = (data.items || [])
+        .map(mapYtSearchToAlbum)
+        .filter((album): album is YouTubeMusicAlbum => album !== null);
     }
 
     return result;
@@ -148,36 +182,80 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
   }
 
   async getLibrarySongs(_options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    throw new Error('YouTube Music library access is not implemented in this build.');
+    const likesPlaylistId = await this.getLikesPlaylistId();
+    return this.getPlaylistTracks(likesPlaylistId, _options);
   }
 
-  async getPlaylists(_options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicPlaylist[]> {
-    throw new Error('YouTube Music playlist listing is not implemented in this build.');
+  async getPlaylists(options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicPlaylist[]> {
+    this.requireAuthorizedUserSurface('YouTube Music playlist listing');
+
+    const data = await this.ytDataRequest<YouTubePlaylistsResponse>('/playlists', {
+      mine: 'true',
+      maxResults: Math.min(options.limit || 20, 50).toString(),
+      part: 'snippet,contentDetails',
+    });
+
+    return (data.items || [])
+      .map(mapPlaylistListItem)
+      .filter((playlist): playlist is YouTubeMusicPlaylist => playlist !== null);
   }
 
-  async getPlaylistTracks(playlistId: string, _options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    void playlistId;
-    throw new Error('YouTube Music playlist track retrieval is not implemented in this build.');
+  async getPlaylistTracks(playlistId: string, options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
+    const data = await this.ytDataRequest<YouTubePlaylistItemsResponse>('/playlistItems', {
+      playlistId,
+      maxResults: Math.min(options.limit || 20, 50).toString(),
+      part: 'snippet,contentDetails',
+    });
+
+    return (data.items || [])
+      .map(mapPlaylistItemToSong)
+      .filter((song): song is YouTubeMusicSong => song !== null);
   }
 
-  async getRecommendations(_options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    throw new Error('YouTube Music recommendations are not implemented in this build.');
+  async getRecommendations(options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
+    const seedSong = (await this.getLibrarySongs({ limit: 1 }))[0];
+    if (!seedSong) {
+      return [];
+    }
+    return this.getWatchPlaylist(seedSong.id, options);
   }
 
-  async getWatchPlaylist(videoId: string, _options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    void videoId;
-    throw new Error('YouTube Music watch playlists are not implemented in this build.');
+  async getWatchPlaylist(videoId: string, options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
+    const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
+      relatedToVideoId: videoId,
+      type: 'video',
+      videoCategoryId: '10',
+      maxResults: Math.min(options.limit || 20, 50).toString(),
+      part: 'snippet',
+    });
+    return (data.items || [])
+      .map(mapYtSearchToSong)
+      .filter((song): song is YouTubeMusicSong => song !== null && song.id !== videoId);
   }
 
   /**
-   * I fail fast on unsupported search modes so callers do not mistake an
-   * empty result set for real album, artist, or playlist coverage.
+   * I keep user-library surfaces behind OAuth because API-key access cannot
+   * read a signed-in user's playlists or likes.
    */
-  private assertSupportedSearchTypes(types: YouTubeMusicSearchType[]): void {
-    const unsupported = types.filter((type) => type !== 'songs');
-    if (unsupported.length > 0) {
-      throw new Error(`YouTube Music search types not implemented in this build: ${unsupported.join(', ')}`);
+  private requireAuthorizedUserSurface(surface: string): void {
+    if (!this.config.accessToken) {
+      throw new Error(`${surface} requires YOUTUBE_MUSIC_ACCESS_TOKEN or GOOGLE_ACCESS_TOKEN.`);
     }
+  }
+
+  private async getLikesPlaylistId(): Promise<string> {
+    this.requireAuthorizedUserSurface('YouTube Music library access');
+
+    const data = await this.ytDataRequest<YouTubeChannelsResponse>('/channels', {
+      mine: 'true',
+      part: 'contentDetails',
+      maxResults: '1',
+    });
+    const likesPlaylistId = data.items?.[0]?.contentDetails?.relatedPlaylists?.likes;
+    if (!likesPlaylistId) {
+      throw new Error('YouTube Music liked tracks playlist was not available for the authenticated user.');
+    }
+    return likesPlaylistId;
   }
 
   private async ytDataRequest<T>(path: string, query: Record<string, string>): Promise<T> {
@@ -219,11 +297,12 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
 
 interface YouTubeSearchResponse {
   items?: Array<{
-    id: { videoId?: string };
+    id: { videoId?: string; channelId?: string; playlistId?: string };
     snippet: {
       title: string;
       channelTitle: string;
       thumbnails?: { medium?: { url?: string } };
+      description?: string;
     };
   }>;
 }
@@ -237,6 +316,40 @@ interface YouTubeVideoResponse {
       thumbnails?: { medium?: { url?: string } };
     };
     contentDetails?: { duration?: string };
+  }>;
+}
+
+interface YouTubePlaylistItemsResponse {
+  items?: Array<{
+    snippet?: {
+      title?: string;
+      channelTitle?: string;
+      thumbnails?: { medium?: { url?: string } };
+      resourceId?: { videoId?: string };
+    };
+    contentDetails?: { videoId?: string };
+  }>;
+}
+
+interface YouTubePlaylistsResponse {
+  items?: Array<{
+    id?: string;
+    snippet?: {
+      title?: string;
+      channelTitle?: string;
+      thumbnails?: { medium?: { url?: string } };
+    };
+    contentDetails?: { itemCount?: number };
+  }>;
+}
+
+interface YouTubeChannelsResponse {
+  items?: Array<{
+    contentDetails?: {
+      relatedPlaylists?: {
+        likes?: string;
+      };
+    };
   }>;
 }
 
@@ -254,6 +367,76 @@ function mapYtSearchToSong(item: NonNullable<YouTubeSearchResponse['items']>[0])
     name: item.snippet.title,
     artistName: item.snippet.channelTitle.replace(/ - Topic$/, ''),
     thumbnailUrl: item.snippet.thumbnails?.medium?.url,
+  };
+}
+
+function mapYtSearchToArtist(item: NonNullable<YouTubeSearchResponse['items']>[0]): YouTubeMusicArtist | null {
+  const artistId = item.id.channelId;
+  if (!artistId || !item.snippet.title) {
+    return null;
+  }
+  return {
+    id: artistId,
+    name: item.snippet.title,
+    thumbnailUrl: item.snippet.thumbnails?.medium?.url,
+  };
+}
+
+function mapYtSearchToPlaylist(item: NonNullable<YouTubeSearchResponse['items']>[0]): YouTubeMusicPlaylist | null {
+  const playlistId = item.id.playlistId;
+  if (!playlistId || !item.snippet.title) {
+    return null;
+  }
+  return {
+    id: playlistId,
+    name: item.snippet.title,
+    author: item.snippet.channelTitle,
+    thumbnailUrl: item.snippet.thumbnails?.medium?.url,
+  };
+}
+
+function mapYtSearchToAlbum(item: NonNullable<YouTubeSearchResponse['items']>[0]): YouTubeMusicAlbum | null {
+  const playlist = mapYtSearchToPlaylist(item);
+  if (!playlist) {
+    return null;
+  }
+  return {
+    id: playlist.id,
+    name: playlist.name,
+    artistName: playlist.author || 'YouTube Music',
+    thumbnailUrl: playlist.thumbnailUrl,
+  };
+}
+
+function mapPlaylistListItem(item: NonNullable<YouTubePlaylistsResponse['items']>[0]): YouTubeMusicPlaylist | null {
+  if (!item.id || !item.snippet?.title) {
+    return null;
+  }
+  return {
+    id: item.id,
+    name: item.snippet.title,
+    author: item.snippet.channelTitle,
+    trackCount: item.contentDetails?.itemCount,
+    thumbnailUrl: item.snippet.thumbnails?.medium?.url,
+  };
+}
+
+function mapPlaylistItemToSong(
+  item: NonNullable<YouTubePlaylistItemsResponse['items']>[0],
+): YouTubeMusicSong | null {
+  const videoId = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
+  const title = item.snippet?.title;
+  const channelTitle = item.snippet?.channelTitle;
+
+  if (!videoId || !title || !channelTitle || title === 'Deleted video' || title === 'Private video') {
+    return null;
+  }
+
+  return {
+    id: videoId,
+    name: title,
+    artistName: channelTitle.replace(/ - Topic$/, ''),
+    thumbnailUrl: item.snippet?.thumbnails?.medium?.url,
   };
 }
 
@@ -309,12 +492,16 @@ export class YouTubeMusicProvider implements MusicProvider {
     return songs.map(mapSongToTrackInfo);
   }
 
-  async getTopTracks(_options?: { limit?: number }): Promise<TrackInfo[]> {
-    throw new Error('YouTube Music top tracks are not implemented in this build.');
+  /**
+   * I treat liked-library order as the strongest durable affinity signal the
+   * official YouTube Data API exposes to this runtime.
+   */
+  async getTopTracks(options?: { limit?: number }): Promise<TrackInfo[]> {
+    return this.getLibraryTracks(options);
   }
 
-  async getRecentlyPlayed(_options?: { limit?: number }): Promise<TrackInfo[]> {
-    throw new Error('YouTube Music recently played is not implemented in this build.');
+  async getRecentlyPlayed(options?: { limit?: number }): Promise<TrackInfo[]> {
+    return this.getLibraryTracks(options);
   }
 
   async getPlaylistTracks(playlistId: string, options?: { limit?: number }): Promise<TrackInfo[]> {

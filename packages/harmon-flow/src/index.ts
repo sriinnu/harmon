@@ -27,4 +27,10 @@ export { MarkdownParser, createFlowParser } from './parser/index.js';
 export { PatternGraphBuilder, PatternDetector, SuggestionEngine } from './graph/index.js';
 
 // MCP Server
-export { HarmonFlowMCPServer, createMCPServer } from './mcp/index.js';
+export {
+  HarmonAppMCPServer,
+  HarmonFlowMCPServer,
+  createAppMCPServer,
+  createMCPServer,
+} from './mcp/index.js';
+export type { HarmonAppMCPServerConfig, HarmonMcpAuthConfig } from './mcp/index.js';

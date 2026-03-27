@@ -18,12 +18,13 @@ import { createCLI, getDefaultEndpoint } from '@athena/harmon';
 const cli = createCLI({ endpoint: getDefaultEndpoint() });
 const status = await cli.status();
 await cli.spotifyPlay({ uri: 'spotify:track:...' });
+await cli.youtubeSearch('focus music', 'songs');
 await cli.command({
   id: 'c_1',
   ts: Date.now(),
   source: { kind: 'cli', device: 'macos' },
   type: 'session.start',
-  payload: { policy: { version: 1, mode: 'focus' } },
+  payload: { policy: { version: 1, provider: 'apple', mode: 'focus' } },
 });
 ```
 
@@ -40,6 +41,10 @@ await cli.command({
 | `cli.spotifyPause()` | Pause Spotify |
 | `cli.spotifySearch(query, type)` | Search Spotify catalog |
 | `cli.applePlay(opts?)` | Play on Apple Music |
+| `cli.appleNowPlaying()` | Read Apple Music now-playing state |
+| `cli.youtubePlay(opts?)` | Open YouTube Music playback |
+| `cli.youtubeSearch(query, type)` | Search YouTube Music |
+| `cli.youtubeNowPlaying()` | Read browser-handoff now-playing state |
 | `cli.authLogin()` / `authLogout()` | Manage Spotify auth |
 | `CLIConfig` | `{ endpoint, token?, timeoutMs? }` |
 

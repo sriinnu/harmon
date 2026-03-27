@@ -6,10 +6,23 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "scripts/",
+    ".chitragupta-ecosystem/",
+    "README.md",
+    "SKILL.md",
+    "logo.svg"
+  ],
   "scripts": {
+    "auth": "node ./scripts/auth.mjs bootstrap",
+    "auth:refresh": "node ./scripts/auth.mjs refresh",
+    "auth:status": "node ./scripts/auth.mjs status",
     "build": "tsc",
     "dev": "tsc --watch",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@athena/harmon-protocol": "workspace:*",

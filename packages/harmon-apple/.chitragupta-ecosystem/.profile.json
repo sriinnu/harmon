@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "id": "harmon-apple",
+  "name": "Harmon Apple Music",
+  "version": "0.1.0",
+  "versionHashId": "83f0a43ebedfa29e",
+  "status": "production",
+  "kind": "provider-pack",
+  "description": "Standalone Apple Music provider pack for catalog, library, playlists, recent-play signals, and Harmon session seeding.",
+  "packRoot": "..",
+  "author": {
+    "name": "Sriinnu",
+    "email": "hello@srinivas.dev",
+    "github": "sriinnu"
+  },
+  "github": {
+    "repo": "sriinnu/harmon",
+    "url": "https://github.com/sriinnu/harmon",
+    "packagePath": "packages/harmon-apple"
+  },
+  "privacyKey": "harmon.apple-music.local-auth",
+  "privacy": {
+    "localOnly": true,
+    "secretFiles": [
+      "../.chitragupta-ecosystem/auth/apple-music.json"
+    ],
+    "notes": [
+      "I keep the Apple developer token and user token in one local auth file.",
+      "MusicKit bootstrap requires a local browser session and an Apple Music account."
+    ]
+  },
+  "entrypoints": {
+    "module": {
+      "runtime": "node-esm",
+      "path": "../dist/index.js"
+    },
+    "authBootstrap": {
+      "command": "npm",
+      "args": ["run", "auth"],
+      "cwd": ".."
+    },
+    "authRefresh": {
+      "command": "npm",
+      "args": ["run", "auth:refresh"],
+      "cwd": ".."
+    },
+    "authStatus": {
+      "command": "npm",
+      "args": ["run", "auth:status"],
+      "cwd": ".."
+    }
+  },
+  "artifacts": {
+    "packageJson": "../package.json",
+    "skill": "../SKILL.md",
+    "readme": "../README.md",
+    "logo": "../logo.svg"
+  },
+  "env": [
+    {
+      "name": "APPLE_MUSIC_DEVELOPER_TOKEN",
+      "required": false,
+      "secret": true,
+      "description": "Direct Apple Music developer token for catalog access."
+    },
+    {
+      "name": "APPLE_MUSIC_TEAM_ID",
+      "required": false,
+      "secret": true,
+      "description": "Apple team ID used when I generate a developer token locally."
+    },
+    {
+      "name": "APPLE_MUSIC_KEY_ID",
+      "required": false,
+      "secret": true,
+      "description": "Apple Music private key identifier used for ES256 JWT signing."
+    },
+    {
+      "name": "APPLE_MUSIC_PRIVATE_KEY_PATH",
+      "required": false,
+      "secret": true,
+      "description": "Path to the Apple Music private key PEM file."
+    },
+    {
+      "name": "APPLE_MUSIC_STOREFRONT",
+      "required": false,
+      "secret": false,
+      "default": "us",
+      "description": "Default storefront used by the Apple Music API client."
+    },
+    {
+      "name": "APPLE_MUSIC_BOOTSTRAP_URL",
+      "required": false,
+      "secret": false,
+      "default": "http://127.0.0.1:8788/",
+      "description": "Local MusicKit bootstrap page opened by npm run auth."
+    }
+  ],
+  "capabilities": {
+    "authModes": ["developer-token", "musickit-user-token"],
+    "readSurface": ["catalog-search", "library-tracks", "library-playlists", "playlist-tracks", "recently-played"],
+    "playbackSurface": ["daemon-apple-script-local-playback"],
+    "sessionSeedSources": ["search", "library", "playlist", "recently-played"]
+  },
+  "notes": [
+    "I can generate the developer token locally when APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID, and APPLE_MUSIC_PRIVATE_KEY_PATH are present.",
+    "I cannot silently refresh the Apple user token; rerun npm run auth when the MusicKit session expires."
+  ]
+}

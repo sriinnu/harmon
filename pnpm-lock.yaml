@@ -75,6 +75,9 @@ importers:
       '@athena/harmon-store':
         specifier: workspace:*
         version: link:../../packages/harmon-store
+      '@athena/harmon-youtube':
+        specifier: workspace:*
+        version: link:../../packages/harmon-youtube
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -135,6 +138,9 @@ importers:
 
   packages/harmon-flow:
     dependencies:
+      '@athena/harmon-protocol':
+        specifier: workspace:*
+        version: link:../harmon-protocol
       '@modelcontextprotocol/sdk':
         specifier: ^1.25.2
         version: 1.25.2(hono@4.11.4)(zod@4.3.5)
@@ -144,6 +150,9 @@ importers:
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
+      jose:
+        specifier: ^6.1.1
+        version: 6.1.3
       uuid:
         specifier: ^13.0.0
         version: 13.0.0

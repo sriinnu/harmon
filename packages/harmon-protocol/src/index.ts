@@ -23,6 +23,10 @@ export const SourceInfo = z.object({
 });
 export type SourceInfo = z.infer<typeof SourceInfo>;
 
+/** Supported music providers */
+export const MusicProviderName = z.enum(['spotify', 'apple', 'youtube']);
+export type MusicProviderName = z.infer<typeof MusicProviderName>;
+
 // ============================================================================
 // SessionPolicy Schema - The heart of the system
 // ============================================================================
@@ -79,6 +83,7 @@ export const MusicSources = z.object({
   likedTracks: z.boolean().optional(),
   topTracks: z.boolean().optional(),
   recentPlays: z.boolean().optional(),
+  searchQueries: z.array(z.string().min(1)).optional(),
   seedPlaylists: z.array(z.string()).optional(),
   seedArtists: z.array(z.string()).optional(),
   discovery: z
@@ -135,6 +140,7 @@ export type SessionMode = z.infer<typeof SessionMode>;
 export const SessionPolicy = z.object({
   version: z.literal(1),
   mode: SessionMode.optional(),
+  provider: MusicProviderName.optional(),
   durationMs: z.number().int().min(1000).max(86400000).optional(), // 1s to 24h
   device: DevicePreferences.optional(),
   queue: QueuePreferences.optional(),
@@ -218,6 +224,7 @@ export type DeviceInfo = z.infer<typeof DeviceInfo>;
 export const SessionStatus = z.object({
   id: z.string().startsWith('sess_'),
   isActive: z.boolean(),
+  provider: MusicProviderName.optional(),
   policy: SessionPolicy.optional(),
   currentTrack: TrackInfo.nullable(),
   queueDepth: z.number(),
@@ -232,8 +239,9 @@ export const ProviderStatus = z.object({
   name: z.string().optional(),
   status: z.enum(['missing', 'configured', 'ready', 'degraded']).optional(),
   auth: z
-    .enum(['none', 'oauth', 'cookies', 'developer-token', 'developer-and-user-token'])
+    .enum(['none', 'oauth', 'cookies', 'api-key', 'developer-token', 'developer-and-user-token'])
     .optional(),
+  playbackMode: z.enum(['native', 'applescript', 'browser-handoff']).optional(),
   capabilities: z.record(z.string(), z.boolean()).optional(),
 });
 export type ProviderStatus = z.infer<typeof ProviderStatus>;

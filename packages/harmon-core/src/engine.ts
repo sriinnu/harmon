@@ -241,7 +241,7 @@ class SessionEngineImpl implements SessionEngine {
       // Add to playback queue
       for (const { track } of topTracks) {
         if (track.uri) {
-          await this.playback.addToQueue(track.uri);
+          await this.playback.addToQueue(track.uri, track);
         }
       }
 

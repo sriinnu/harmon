@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "id": "harmon-spotify",
+  "name": "Harmon Spotify",
+  "version": "0.1.0",
+  "versionHashId": "c3924e0c51aa20a8",
+  "status": "production",
+  "kind": "provider-pack",
+  "description": "Standalone Spotify provider pack for OAuth, cookie import, catalog reads, device control, and Harmon session seeding.",
+  "packRoot": "..",
+  "author": {
+    "name": "Sriinnu",
+    "email": "hello@srinivas.dev",
+    "github": "sriinnu"
+  },
+  "github": {
+    "repo": "sriinnu/harmon",
+    "url": "https://github.com/sriinnu/harmon",
+    "packagePath": "packages/harmon-spotify"
+  },
+  "privacyKey": "harmon.spotify.local-auth",
+  "privacy": {
+    "localOnly": true,
+    "secretFiles": [
+      "../.chitragupta-ecosystem/auth/spotify.tokens.json",
+      "../.chitragupta-ecosystem/auth/spotify.cookies.json"
+    ],
+    "notes": [
+      "I keep Spotify tokens and imported cookies on the local filesystem.",
+      "I do not sync secret state unless another runtime copies these files."
+    ]
+  },
+  "entrypoints": {
+    "module": {
+      "runtime": "node-esm",
+      "path": "../dist/index.js"
+    },
+    "authBootstrap": {
+      "command": "npm",
+      "args": ["run", "auth"],
+      "cwd": ".."
+    },
+    "authRefresh": {
+      "command": "npm",
+      "args": ["run", "auth:refresh"],
+      "cwd": ".."
+    },
+    "authStatus": {
+      "command": "npm",
+      "args": ["run", "auth:status"],
+      "cwd": ".."
+    }
+  },
+  "artifacts": {
+    "packageJson": "../package.json",
+    "skill": "../SKILL.md",
+    "readme": "../README.md",
+    "logo": "../logo.svg"
+  },
+  "env": [
+    {
+      "name": "SPOTIFY_CLIENT_ID",
+      "required": false,
+      "secret": true,
+      "description": "Spotify OAuth client ID. Required for PKCE login and refresh flows."
+    },
+    {
+      "name": "SPOTIFY_REDIRECT_URI",
+      "required": false,
+      "secret": false,
+      "default": "http://127.0.0.1:8787/callback",
+      "description": "Local PKCE callback URL used by npm run auth."
+    },
+    {
+      "name": "SPOTIFY_OAUTH_SCOPES",
+      "required": false,
+      "secret": false,
+      "default": "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative user-read-recently-played user-library-read user-top-read",
+      "description": "Space-delimited OAuth scopes requested during Spotify login."
+    },
+    {
+      "name": "SPOTIFY_COOKIES_PATH",
+      "required": false,
+      "secret": false,
+      "description": "Path to a JSON cookie export that contains Spotify cookies."
+    },
+    {
+      "name": "SPOTIFY_SP_DC",
+      "required": false,
+      "secret": true,
+      "description": "Optional direct cookie import for web-player auth bootstrap."
+    },
+    {
+      "name": "SPOTIFY_SP_KEY",
+      "required": false,
+      "secret": true,
+      "description": "Optional companion cookie for direct Spotify cookie bootstrap."
+    }
+  ],
+  "capabilities": {
+    "authModes": ["pkce-oauth", "cookie-import"],
+    "readSurface": ["search", "library-tracks", "playlists", "top-tracks", "audio-features"],
+    "playbackSurface": ["devices", "play", "pause", "skip", "seek", "volume", "transfer"],
+    "sessionSeedSources": ["liked", "top", "playlist", "recommendation", "search"]
+  },
+  "notes": [
+    "I support both OAuth tokens and imported web cookies.",
+    "Cookie mode is useful for local automation, but OAuth remains the preferred stable path."
+  ]
+}

@@ -19,6 +19,7 @@ const DEFAULT_SCOPES = [
   'playlist-read-collaborative',
   'user-read-recently-played',
   'user-library-read',
+  'user-top-read',
 ];
 
 // ============================================================================
@@ -614,7 +615,7 @@ class SpotifyClientImpl implements SpotifyClient {
   async transferTo(deviceId: string): Promise<void> {
     await this.request('PUT', '/me/player', {
       device_ids: [deviceId],
-      play: true,
+      play: false,
     });
   }
 
@@ -1559,7 +1560,7 @@ export class SpotifyPlaybackController implements PlaybackController {
     return this.client.getNowPlaying();
   }
 
-  async addToQueue(trackUri: string): Promise<void> {
+  async addToQueue(trackUri: string, _track?: TrackInfo): Promise<void> {
     await this.client.addToQueue(trackUri);
   }
 }

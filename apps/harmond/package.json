@@ -1,11 +1,18 @@
 {
   "name": "@athena/harmond",
   "version": "0.1.0",
-  "description": "Harmon daemon - engine + store + spotify",
+  "description": "Harmon daemon - multi-provider engine, store, and playback runtime",
   "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
+  "files": [
+    "bin/harmond.js",
+    "dist/",
+    "README.md",
+    "SKILL.md",
+    "logo.svg"
+  ],
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -30,6 +37,7 @@
     "@athena/harmon-core": "workspace:*",
     "@athena/harmon-spotify": "workspace:*",
     "@athena/harmon-apple": "workspace:*",
+    "@athena/harmon-youtube": "workspace:*",
     "@athena/harmon-logger": "workspace:*",
     "@athena/harmon-crypto": "workspace:*",
     "express": "^5.2.1",

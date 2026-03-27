@@ -19,6 +19,7 @@ import {
   PLAYBACK_ENGINES,
   SESSION_MODES,
   SPOTIFY_SEARCH_TYPES,
+  SUPPORTED_PROVIDERS,
   validateChoice,
   validateFraction,
 } from './runtime.js';
@@ -50,6 +51,7 @@ function createContext(command) {
   const endpoint = getDefaultEndpoint();
   const token = process.env.HARMON_API_TOKEN;
   const engine = validateChoice(opts.engine, 'engine', PLAYBACK_ENGINES);
+  const provider = resolveProviderOption(opts.provider, engine);
   const timeoutMs = parseTimeoutOption(opts.timeout);
 
   if (opts.debug) {
@@ -57,12 +59,21 @@ function createContext(command) {
     console.error(`[debug] timeout: ${timeoutMs}ms`);
     console.error(`[debug] auth: ${token ? 'token set' : 'no token'}`);
     console.error(`[debug] engine: ${engine}`);
+    console.error(`[debug] provider: ${provider}`);
   }
 
   return {
-    opts: { ...opts, engine },
+    opts: { ...opts, engine, provider },
     cli: createCLI({ endpoint, token, timeoutMs }),
   };
+}
+
+function resolveProviderOption(value, engine) {
+  const provider = validateChoice(value || 'spotify', 'provider', SUPPORTED_PROVIDERS);
+  if (engine === 'applescript' && provider !== 'apple') {
+    throw new CliUsageError('--engine applescript requires --provider apple.');
+  }
+  return provider;
 }
 
 function outputResult(opts, data, formatters = {}) {
@@ -264,9 +275,252 @@ function formatShowPlain(shows) {
     .join('\n');
 }
 
+async function fetchNowPlaying(cli, provider) {
+  if (provider === 'apple') {
+    return cli.appleNowPlaying();
+  }
+  if (provider === 'youtube') {
+    return cli.youtubeNowPlaying();
+  }
+  return cli.spotifyNowPlaying();
+}
+
+async function searchCatalog(cli, provider, type, query, options) {
+  if (provider === 'apple') {
+    const appleType = mapAppleSearchType(type);
+    const result = await cli.appleSearch(query, appleType, options);
+    return normalizeAppleSearchResult(type, result);
+  }
+
+  if (provider === 'youtube') {
+    const youtubeType = mapYouTubeSearchType(type);
+    const result = await cli.youtubeSearch(query, youtubeType, { limit: options?.limit });
+    return normalizeYouTubeSearchResult(type, result);
+  }
+
+  return cli.spotifySearch(query, type, options);
+}
+
+function mapAppleSearchType(type) {
+  if (type === 'track') return 'songs';
+  if (type === 'album') return 'albums';
+  if (type === 'artist') return 'artists';
+  if (type === 'playlist') return 'playlists';
+  throw new CliUsageError('Apple Music search supports track, album, artist, and playlist.');
+}
+
+function mapYouTubeSearchType(type) {
+  if (type === 'track') return 'songs';
+  if (type === 'album') return 'albums';
+  if (type === 'artist') return 'artists';
+  if (type === 'playlist') return 'playlists';
+  throw new CliUsageError('YouTube Music search supports track, album, artist, and playlist.');
+}
+
+function normalizeAppleSearchResult(type, result) {
+  if (type === 'track') {
+    return {
+      tracks: (result.songs || []).map((song) => ({
+        name: song.name,
+        artist: song.artistName,
+        album: song.albumName || '',
+        uri: song.url || `apple:song:${song.id}`,
+      })),
+    };
+  }
+
+  if (type === 'album') {
+    return {
+      albums: (result.albums || []).map((album) => ({
+        name: album.name,
+        artists: [album.artistName],
+        uri: album.url || `apple:album:${album.id}`,
+      })),
+    };
+  }
+
+  if (type === 'artist') {
+    return {
+      artists: (result.artists || []).map((artist) => ({
+        name: artist.name,
+        uri: artist.url || `apple:artist:${artist.id}`,
+      })),
+    };
+  }
+
+  return {
+    playlists: (result.playlists || []).map((playlist) => ({
+      name: playlist.name,
+      owner: playlist.curatorName || 'Apple Music',
+      totalTracks: playlist.trackCount || 0,
+      uri: playlist.url || `apple:playlist:${playlist.id}`,
+    })),
+  };
+}
+
+function normalizeYouTubeSearchResult(type, result) {
+  if (type === 'track') {
+    return {
+      tracks: (result.songs || []).map((song) => ({
+        name: song.name,
+        artist: song.artistName,
+        album: song.albumName || '',
+        uri: `youtube:video:${song.id}`,
+      })),
+    };
+  }
+
+  if (type === 'album') {
+    return {
+      albums: (result.albums || []).map((album) => ({
+        name: album.name,
+        artists: [album.artistName],
+        uri: `youtube:playlist:${album.id}`,
+      })),
+    };
+  }
+
+  if (type === 'artist') {
+    return {
+      artists: (result.artists || []).map((artist) => ({
+        name: artist.name,
+        uri: `youtube:artist:${artist.id}`,
+      })),
+    };
+  }
+
+  return {
+    playlists: (result.playlists || []).map((playlist) => ({
+      name: playlist.name,
+      owner: playlist.author || 'YouTube Music',
+      totalTracks: playlist.trackCount || 0,
+      uri: `youtube:playlist:${playlist.id}`,
+    })),
+  };
+}
+
+function searchOutputFormatters(type) {
+  return {
+    track: { human: (data) => formatTrackLines(data.tracks), plain: (data) => formatTrackPlain(data.tracks) },
+    album: { human: (data) => formatAlbumLines(data.albums), plain: (data) => formatAlbumPlain(data.albums) },
+    artist: { human: (data) => formatArtistLines(data.artists), plain: (data) => formatArtistPlain(data.artists) },
+    playlist: {
+      human: (data) => formatPlaylistLines(data.playlists),
+      plain: (data) => formatPlaylistPlain(data.playlists),
+    },
+    episode: {
+      human: (data) => formatEpisodeLines(data.episodes),
+      plain: (data) => formatEpisodePlain(data.episodes),
+    },
+    show: {
+      human: (data) => formatShowLines(data.shows),
+      plain: (data) => formatShowPlain(data.shows),
+    },
+  }[type] || {};
+}
+
+function normalizeTrackCollection(provider, tracks) {
+  if (!Array.isArray(tracks)) {
+    return [];
+  }
+
+  return tracks.map((track) => ({
+    name: track.name,
+    artist: track.artist ?? track.artistName ?? '',
+    album: track.album ?? track.albumName ?? '',
+    uri:
+      track.uri ||
+      track.url ||
+      (provider === 'apple'
+        ? `apple:song:${track.id}`
+        : provider === 'youtube'
+          ? `youtube:video:${track.id}`
+          : track.uri),
+  }));
+}
+
+function normalizePlaylistCollection(provider, playlists) {
+  if (!Array.isArray(playlists)) {
+    return [];
+  }
+
+  return playlists.map((playlist) => ({
+    name: playlist.name,
+    owner:
+      playlist.owner ||
+      playlist.curatorName ||
+      playlist.author ||
+      (provider === 'apple' ? 'Apple Music' : provider === 'youtube' ? 'YouTube Music' : ''),
+    totalTracks: playlist.totalTracks ?? playlist.trackCount ?? 0,
+    uri:
+      playlist.uri ||
+      playlist.url ||
+      (provider === 'apple'
+        ? `apple:playlist:${playlist.id}`
+        : provider === 'youtube'
+          ? `youtube:playlist:${playlist.id}`
+          : playlist.uri),
+  }));
+}
+
+function defaultSessionSources(provider, mode) {
+  const query =
+    mode === 'relax' ? 'calm instrumental music' :
+    mode === 'energize' ? 'high energy workout music' :
+    mode === 'meditate' ? 'meditation ambient music' :
+    mode === 'workout' ? 'workout mix' :
+    'focus instrumental music';
+
+  if (provider === 'apple') {
+    return {
+      likedTracks: true,
+      recentPlays: true,
+      discovery: { enabled: true, ratio: 0.15 },
+      searchQueries: [query],
+    };
+  }
+
+  if (provider === 'youtube') {
+    return {
+      likedTracks: true,
+      discovery: { enabled: true, ratio: 0.15 },
+      searchQueries: [query],
+    };
+  }
+
+  return {
+    likedTracks: true,
+    topTracks: true,
+    recentPlays: true,
+    discovery: { enabled: true, ratio: 0.15 },
+  };
+}
+
 function isAppleInput(value) {
   if (!value) return false;
   return value.startsWith('applemusic:') || value.includes('music.apple.com');
+}
+
+function isYouTubeInput(value) {
+  if (!value) return false;
+  return (
+    value.startsWith('youtube:video:') ||
+    value.startsWith('youtube:playlist:') ||
+    value.includes('youtube.com/watch') ||
+    value.includes('music.youtube.com/watch') ||
+    value.includes('youtube.com/playlist') ||
+    value.includes('music.youtube.com/playlist')
+  );
+}
+
+function resolvePlaybackProvider(opts, value) {
+  if (isAppleInput(value)) {
+    return 'apple';
+  }
+  if (isYouTubeInput(value)) {
+    return 'youtube';
+  }
+  return opts.provider;
 }
 
 function normalizeAppleMusicUrl(value, market) {
@@ -308,6 +562,67 @@ function normalizeSpotifyUri(value, typeOverride) {
   return `spotify:track:${value}`;
 }
 
+function normalizeYouTubeUri(value) {
+  if (!value) return null;
+  if (value.startsWith('youtube:video:')) return value;
+  if (value.startsWith('youtube:playlist:')) {
+    return `https://music.youtube.com/playlist?list=${value.split(':').pop()}`;
+  }
+  if (value.startsWith('http://') || value.startsWith('https://')) {
+    try {
+      const url = new URL(value);
+      const playlistId = url.searchParams.get('list');
+      if (playlistId && !url.searchParams.get('v')) {
+        return `https://music.youtube.com/playlist?list=${playlistId}`;
+      }
+      const id =
+        url.hostname === 'youtu.be'
+          ? url.pathname.split('/').filter(Boolean)[0]
+          : url.searchParams.get('v');
+      if (id) {
+        return `youtube:video:${id}`;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return /^[a-zA-Z0-9_-]{6,}$/.test(value) ? `youtube:video:${value}` : null;
+}
+
+function extractPlaylistId(provider, value) {
+  if (!value) return null;
+
+  if (provider === 'spotify') {
+    const uri = normalizeSpotifyUri(value, 'playlist');
+    return uri?.split(':').pop() || null;
+  }
+
+  if (provider === 'apple') {
+    if (value.startsWith('applemusic:playlist:')) {
+      return value.split(':').slice(2).join(':') || null;
+    }
+    try {
+      const url = new URL(value);
+      if (url.hostname.includes('music.apple.com')) {
+        return url.pathname.split('/').filter(Boolean).pop() || null;
+      }
+    } catch {
+      return value;
+    }
+    return value;
+  }
+
+  if (value.startsWith('youtube:playlist:')) {
+    return value.split(':').pop() || null;
+  }
+  try {
+    const url = new URL(value);
+    return url.searchParams.get('list') || value;
+  } catch {
+    return value;
+  }
+}
+
 function spotifyUriType(uri) {
   if (!uri || !uri.startsWith('spotify:')) return null;
   const parts = uri.split(':');
@@ -343,6 +658,9 @@ async function resolveDevice(cli, device) {
 
 async function applyDeviceIfNeeded(cli, opts) {
   if (!opts.device) return;
+  if (opts.provider !== 'spotify') {
+    throw new CliUsageError('Device selection is only supported for Spotify Connect.');
+  }
   const deviceId = await resolveDevice(cli, opts.device);
   if (!deviceId) {
     throw new CliUsageError(`Unknown device: ${opts.device}`);
@@ -356,12 +674,11 @@ program
   .showHelpAfterError()
   .exitOverride()
   .description('Harmon — mood-based music session engine CLI\n\nExamples:\n  harmon status\n  harmon play spotify:track:4cOdK2wGLETKBW3PvgPWqT\n  harmon search track "lofi beats"\n  harmon session start --mode focus\n  harmon auth import --browser chrome')
-  .option('--config <path>', 'config file path')
-  .option('--profile <name>', 'profile name', 'default')
   .option('--timeout <dur>', 'request timeout (e.g. 5s, 30s, 1m)', '10s')
   .option('--market <cc>', 'market country code (e.g. US, GB)')
+  .option('--provider <name>', 'provider: spotify, apple, youtube', 'spotify')
   .option('--device <name|id>', 'target playback device')
-  .option('--engine <auto|web|connect|applescript>', 'playback engine', 'connect')
+  .option('--engine <connect|applescript>', 'playback engine', 'connect')
   .option('--json', 'JSON output (machine-readable)')
   .option('--plain', 'tab-separated output (for piping)')
   .option('--no-color', 'disable color output')
@@ -376,9 +693,11 @@ program
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
     const status = await cli.status();
+    const sessionProvider = status.session?.provider;
+    const activeProvider = sessionProvider || opts.provider;
     let nowPlaying = null;
     try {
-      nowPlaying = await cli.spotifyNowPlaying();
+      nowPlaying = await fetchNowPlaying(cli, activeProvider);
     } catch {
       nowPlaying = null;
     }
@@ -391,6 +710,7 @@ program
       human: (data) => {
         const spotifyProvider = data.status.providers?.spotify;
         const appleProvider = data.status.providers?.apple;
+        const youtubeProvider = data.status.providers?.youtube;
         const lines = [
           `daemon: ${data.status.isRunning ? 'running' : 'stopped'}`,
           spotifyProvider
@@ -400,8 +720,12 @@ program
         if (appleProvider) {
           lines.push(formatProviderStatusLine('apple', appleProvider));
         }
+        if (youtubeProvider) {
+          lines.push(formatProviderStatusLine('youtube', youtubeProvider));
+        }
         if (data.status.session) {
-          lines.push(`session: ${data.status.session.id} (${data.status.session.isActive ? 'active' : 'idle'})`);
+          const providerSuffix = data.status.session.provider ? `, provider: ${data.status.session.provider}` : '';
+          lines.push(`session: ${data.status.session.id} (${data.status.session.isActive ? 'active' : 'idle'}${providerSuffix})`);
         }
         if (data.nowPlaying && data.nowPlaying.name) {
           lines.push(`now playing: ${data.nowPlaying.artist} - ${data.nowPlaying.name}`);
@@ -435,6 +759,9 @@ auth
         ];
         if (data.providers?.apple) {
           lines.push(formatProviderStatusLine('apple', data.providers.apple));
+        }
+        if (data.providers?.youtube) {
+          lines.push(formatProviderStatusLine('youtube', data.providers.youtube));
         }
         return lines.join('\n');
       },
@@ -497,33 +824,99 @@ function registerSearch(type) {
     .action(async (query, ...args) => {
       const command = args[args.length - 1];
       const { cli, opts } = createContext(command);
-      const result = await cli.spotifySearch(query, type, {
+      const result = await searchCatalog(cli, opts.provider, type, query, {
         limit: command.opts().limit,
         offset: command.opts().offset,
       });
-      const formatters = {
-        track: { human: (data) => formatTrackLines(data.tracks), plain: (data) => formatTrackPlain(data.tracks) },
-        album: { human: (data) => formatAlbumLines(data.albums), plain: (data) => formatAlbumPlain(data.albums) },
-        artist: { human: (data) => formatArtistLines(data.artists), plain: (data) => formatArtistPlain(data.artists) },
-        playlist: {
-          human: (data) => formatPlaylistLines(data.playlists),
-          plain: (data) => formatPlaylistPlain(data.playlists),
-        },
-        episode: {
-          human: (data) => formatEpisodeLines(data.episodes),
-          plain: (data) => formatEpisodePlain(data.episodes),
-        },
-        show: {
-          human: (data) => formatShowLines(data.shows),
-          plain: (data) => formatShowPlain(data.shows),
-        },
-      };
-      const output = formatters[type] || {};
-      outputResult(opts, result, output);
+      outputResult(opts, result, searchOutputFormatters(type));
     });
 }
 
 SPOTIFY_SEARCH_TYPES.forEach(registerSearch);
+
+const library = program.command('library').description('Browse provider library');
+
+library
+  .command('tracks')
+  .description('List library or liked tracks')
+  .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const limit = command.opts().limit;
+    const tracks =
+      opts.provider === 'apple' ? await cli.appleLibraryTracks({ limit }) :
+      opts.provider === 'youtube' ? await cli.youtubeLibraryTracks({ limit }) :
+      await cli.spotifyLibraryTracks({ limit });
+    const normalized = normalizeTrackCollection(opts.provider, tracks);
+    outputResult(opts, normalized, {
+      human: (data) => formatTrackLines(data),
+      plain: (data) => formatTrackPlain(data),
+    });
+  });
+
+const playlist = program.command('playlist').description('Browse provider playlists');
+
+playlist
+  .command('list')
+  .description('List playlists for the selected provider')
+  .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const limit = command.opts().limit;
+    const playlists =
+      opts.provider === 'apple' ? await cli.applePlaylists({ limit }) :
+      opts.provider === 'youtube' ? await cli.youtubePlaylists({ limit }) :
+      await cli.spotifyPlaylists({ limit });
+    const normalized = normalizePlaylistCollection(opts.provider, playlists);
+    outputResult(opts, normalized, {
+      human: (data) => formatPlaylistLines(data),
+      plain: (data) => formatPlaylistPlain(data),
+    });
+  });
+
+playlist
+  .command('tracks <idOrUrl>')
+  .description('List tracks from a playlist')
+  .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
+  .action(async (idOrUrl, ...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const limit = command.opts().limit;
+    const playlistId = extractPlaylistId(opts.provider, idOrUrl);
+    if (!playlistId) {
+      throw new CliUsageError('Invalid playlist identifier.');
+    }
+    const tracks =
+      opts.provider === 'apple' ? await cli.applePlaylistTracks(playlistId, { limit }) :
+      opts.provider === 'youtube' ? await cli.youtubePlaylistTracks(playlistId, { limit }) :
+      await cli.spotifyPlaylistTracks(playlistId, { limit });
+    const normalized = normalizeTrackCollection(opts.provider, tracks);
+    outputResult(opts, normalized, {
+      human: (data) => formatTrackLines(data),
+      plain: (data) => formatTrackPlain(data),
+    });
+  });
+
+program
+  .command('recommend [seed]')
+  .description('Fetch recommended tracks for the selected provider')
+  .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
+  .action(async (seed, ...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const limit = command.opts().limit;
+    const tracks =
+      opts.provider === 'apple' ? await cli.appleRecommendations({ limit, seed }) :
+      opts.provider === 'youtube' ? await cli.youtubeRecommendations({ limit, seed }) :
+      [];
+    const normalized = normalizeTrackCollection(opts.provider, tracks);
+    outputResult(opts, normalized, {
+      human: (data) => formatTrackLines(data),
+      plain: (data) => formatTrackPlain(data),
+    });
+  });
 
 // ============================================================================
 // Session Commands
@@ -548,9 +941,10 @@ session
     const energy = validateFraction(cmdOpts.energy, 'energy');
     const policy = {
       version: 1,
+      provider: opts.provider,
       mode,
       durationMs,
-      sources: { likedTracks: true, topTracks: true, recentPlays: true, discovery: { enabled: true, ratio: 0.15 } },
+      sources: defaultSessionSources(opts.provider, mode),
       hard: {},
       soft: { weights: {} },
     };
@@ -570,7 +964,7 @@ session
     });
     outputResult(opts, result, {
       plain: (data) => data.sessionId || 'ok',
-      human: (data) => `Session started: ${data.sessionId || 'ok'} (mode: ${mode})`,
+      human: (data) => `Session started: ${data.sessionId || 'ok'} (mode: ${mode}, provider: ${opts.provider})`,
     });
   });
 
@@ -618,8 +1012,8 @@ program
   .action(async (idOrUrl, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    const useAppleScript = opts.engine === 'applescript' || isAppleInput(idOrUrl);
-    if (!useAppleScript) {
+    const provider = resolvePlaybackProvider(opts, idOrUrl);
+    if (provider === 'spotify') {
       await applyDeviceIfNeeded(cli, opts);
     }
 
@@ -632,11 +1026,19 @@ program
     }
 
     if (!idOrUrl) {
-      if (opts.engine === 'applescript') {
+      if (provider === 'apple') {
         const result = await cli.applePlay();
         outputResult(opts, result, {
           plain: () => 'ok',
           human: () => 'Resumed Apple Music playback.',
+        });
+        return;
+      }
+      if (provider === 'youtube') {
+        const result = await cli.youtubePlay();
+        outputResult(opts, result, {
+          plain: () => 'ok',
+          human: () => 'Opened queued YouTube Music track.',
         });
         return;
       }
@@ -648,7 +1050,7 @@ program
       return;
     }
 
-    if (useAppleScript) {
+    if (provider === 'apple') {
       const url = normalizeAppleMusicUrl(idOrUrl, opts.market);
       if (!url) {
         throw new CliUsageError('Invalid Apple Music URL or URI.');
@@ -657,6 +1059,19 @@ program
       outputResult(opts, result, {
         plain: () => url,
         human: () => `Playing Apple Music ${url}`,
+      });
+      return;
+    }
+
+    if (provider === 'youtube') {
+      const youtubeUri = normalizeYouTubeUri(idOrUrl);
+      if (!youtubeUri) {
+        throw new CliUsageError('Invalid YouTube Music URL or URI.');
+      }
+      const result = await cli.youtubePlay({ uri: youtubeUri });
+      outputResult(opts, result, {
+        plain: () => youtubeUri,
+        human: () => `Opening ${youtubeUri}`,
       });
       return;
     }
@@ -681,13 +1096,21 @@ program
   .action(async (...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    if (opts.engine !== 'applescript') {
+    if (opts.provider === 'youtube') {
+      throw new CliUsageError('YouTube Music pause is not supported in browser-handoff mode.');
+    }
+    if (opts.provider === 'spotify') {
       await applyDeviceIfNeeded(cli, opts);
     }
-    const result = opts.engine === 'applescript' ? await cli.applePause() : await cli.spotifyPause();
+    const result =
+      opts.provider === 'apple' ? await cli.applePause() :
+      await cli.spotifyPause();
     outputResult(opts, result, {
       plain: () => 'ok',
-      human: () => (opts.engine === 'applescript' ? 'Apple Music paused.' : 'Paused.'),
+      human: () =>
+        opts.provider === 'apple'
+          ? 'Apple Music paused.'
+          : 'Paused.',
     });
   });
 
@@ -697,13 +1120,21 @@ program
   .action(async (...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    if (opts.engine !== 'applescript') {
+    if (opts.provider === 'spotify') {
       await applyDeviceIfNeeded(cli, opts);
     }
-    const result = opts.engine === 'applescript' ? await cli.appleNext() : await cli.spotifyNext();
+    const result =
+      opts.provider === 'apple' ? await cli.appleNext() :
+      opts.provider === 'youtube' ? await cli.youtubeNext() :
+      await cli.spotifyNext();
     outputResult(opts, result, {
       plain: () => 'ok',
-      human: () => (opts.engine === 'applescript' ? 'Apple Music next.' : 'Skipped.'),
+      human: () =>
+        opts.provider === 'apple'
+          ? 'Apple Music next.'
+          : opts.provider === 'youtube'
+            ? 'YouTube Music next.'
+            : 'Skipped.',
     });
   });
 
@@ -713,13 +1144,21 @@ program
   .action(async (...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    if (opts.engine !== 'applescript') {
+    if (opts.provider === 'spotify') {
       await applyDeviceIfNeeded(cli, opts);
     }
-    const result = opts.engine === 'applescript' ? await cli.applePrev() : await cli.spotifyPrev();
+    const result =
+      opts.provider === 'apple' ? await cli.applePrev() :
+      opts.provider === 'youtube' ? await cli.youtubePrev() :
+      await cli.spotifyPrev();
     outputResult(opts, result, {
       plain: () => 'ok',
-      human: () => (opts.engine === 'applescript' ? 'Apple Music previous.' : 'Previous track.'),
+      human: () =>
+        opts.provider === 'apple'
+          ? 'Apple Music previous.'
+          : opts.provider === 'youtube'
+            ? 'YouTube Music previous.'
+            : 'Previous track.',
     });
   });
 
@@ -729,8 +1168,8 @@ program
   .action(async (position, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    if (opts.engine === 'applescript') {
-      throw new CliUsageError('Seek is not supported for Apple Music via AppleScript.');
+    if (opts.provider !== 'spotify') {
+      throw new CliUsageError('Seek is supported only for Spotify.');
     }
     await applyDeviceIfNeeded(cli, opts);
     const positionMs = parseSeekValue(position);
@@ -747,8 +1186,8 @@ program
   .action(async (percent, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    if (opts.engine === 'applescript') {
-      throw new CliUsageError('Volume control is not supported for Apple Music via AppleScript.');
+    if (opts.provider !== 'spotify') {
+      throw new CliUsageError('Volume control is supported only for Spotify.');
     }
     await applyDeviceIfNeeded(cli, opts);
     const volumePercent = Number.parseInt(percent, 10);
@@ -765,8 +1204,8 @@ program
   .action(async (state, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    if (opts.engine === 'applescript') {
-      throw new CliUsageError('Shuffle is not supported for Apple Music via AppleScript.');
+    if (opts.provider !== 'spotify') {
+      throw new CliUsageError('Shuffle is supported only for Spotify.');
     }
     await applyDeviceIfNeeded(cli, opts);
     const normalized = state === 'on' ? true : state === 'off' ? false : null;
@@ -783,8 +1222,8 @@ program
   .action(async (state, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    if (opts.engine === 'applescript') {
-      throw new CliUsageError('Repeat is not supported for Apple Music via AppleScript.');
+    if (opts.provider !== 'spotify') {
+      throw new CliUsageError('Repeat is supported only for Spotify.');
     }
     await applyDeviceIfNeeded(cli, opts);
     if (!['off', 'track', 'context'].includes(state)) {
@@ -802,6 +1241,9 @@ device
   .action(async (...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
+    if (opts.provider !== 'spotify') {
+      throw new CliUsageError('Device listing is only supported for Spotify Connect.');
+    }
     const devices = await cli.devices();
     outputResult(opts, devices, {
       plain: (data) =>
@@ -823,6 +1265,9 @@ device
   .action(async (nameOrId, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
+    if (opts.provider !== 'spotify') {
+      throw new CliUsageError('Device selection is only supported for Spotify Connect.');
+    }
     const deviceId = await resolveDevice(cli, nameOrId);
     if (!deviceId) {
       throw new CliUsageError(`Unknown device: ${nameOrId}`);
@@ -839,13 +1284,22 @@ queue
   .action(async (idOrUrl, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
-    if (opts.engine === 'applescript') {
-      throw new CliUsageError('Queue management is not supported for Apple Music via AppleScript.');
+    if (opts.provider === 'apple') {
+      throw new CliUsageError('Queue management is not supported for Apple Music in this build.');
     }
-    await applyDeviceIfNeeded(cli, opts);
 
-    if (isAppleInput(idOrUrl)) {
-      throw new CliUsageError('Apple Music queue is not supported in this build.');
+    if (opts.provider === 'spotify') {
+      await applyDeviceIfNeeded(cli, opts);
+    }
+
+    if (opts.provider === 'youtube') {
+      const youtubeUri = normalizeYouTubeUri(idOrUrl);
+      if (!youtubeUri) {
+        throw new CliUsageError('Invalid YouTube Music URL or URI.');
+      }
+      const result = await cli.youtubeQueueAdd(youtubeUri);
+      outputResult(opts, result, { plain: () => youtubeUri, human: () => `Queued ${youtubeUri}` });
+      return;
     }
 
     const spotifyUri = normalizeSpotifyUri(idOrUrl, 'track');
@@ -863,6 +1317,9 @@ program
   .action(async (...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
+    if (opts.provider !== 'spotify') {
+      throw new CliUsageError('Device listing is only supported for Spotify Connect.');
+    }
     const devices = await cli.devices();
     outputResult(opts, devices);
   });
@@ -873,6 +1330,9 @@ program
   .action(async (deviceId, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
+    if (opts.provider !== 'spotify') {
+      throw new CliUsageError('Device selection is only supported for Spotify Connect.');
+    }
     const result = await cli.useDevice(deviceId);
     outputResult(opts, result, { plain: () => deviceId, human: () => 'Device switched.' });
   });

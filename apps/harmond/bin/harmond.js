@@ -34,10 +34,11 @@ const shutdown = async () => {
   console.log('\nShutting down...');
   try {
     await daemon.stop();
+    process.exit(0);
   } catch (err) {
     console.error('Shutdown error:', err);
+    process.exit(1);
   }
-  process.exit(0);
 };
 
 process.on('SIGINT', shutdown);

@@ -85,7 +85,7 @@ export interface PlaybackController {
   setShuffle?(state: boolean): Promise<void>;
   setRepeat?(state: 'off' | 'track' | 'context'): Promise<void>;
   getNowPlaying(): Promise<TrackInfo | null>;
-  addToQueue(trackUri: string): Promise<void>;
+  addToQueue(trackUri: string, track?: TrackInfo): Promise<void>;
 }
 
 // ============================================================================
@@ -157,6 +157,7 @@ export interface SourcesConfig {
   likedTracks?: boolean;
   topTracks?: boolean;
   recentPlays?: boolean;
+  searchQueries?: string[];
   seedPlaylists?: string[];
   seedArtists?: string[];
   discovery?: {

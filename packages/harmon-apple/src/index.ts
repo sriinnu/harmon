@@ -85,6 +85,8 @@ export interface AppleMusicClient {
   getAlbum(id: string): Promise<AppleMusicAlbum | null>;
   getArtist(id: string): Promise<AppleMusicArtist | null>;
   getPlaylist(id: string): Promise<AppleMusicPlaylist | null>;
+  getPlaylistTracks(id: string, options?: AppleListOptions): Promise<AppleMusicSong[]>;
+  getRecentlyPlayedTracks(options?: AppleListOptions): Promise<AppleMusicSong[]>;
   getLibrarySongs(options?: AppleListOptions): Promise<AppleMusicLibrarySong[]>;
   getLibraryAlbums(options?: AppleListOptions): Promise<AppleMusicLibraryAlbum[]>;
   getLibraryPlaylists(options?: AppleListOptions): Promise<AppleMusicLibraryPlaylist[]>;
@@ -152,6 +154,38 @@ class AppleMusicClientImpl implements AppleMusicClient {
       `/catalog/${this.storefront}/playlists/${id}`
     );
     return data.data?.[0] ? mapPlaylist(data.data[0]) : null;
+  }
+
+  async getPlaylistTracks(id: string, options: AppleListOptions = {}): Promise<AppleMusicSong[]> {
+    if (this.userToken) {
+      try {
+        const libraryTracks = await this.request<AppleCatalogResponse<AppleLibrarySongAttributes>>(
+          `/me/library/playlists/${id}/tracks`,
+          listQuery(options),
+          true,
+        );
+        return (libraryTracks.data || []).map(mapLibrarySongToAppleMusicSong);
+      } catch (error) {
+        if (!isAppleNotFoundError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    const data = await this.request<AppleCatalogResponse<AppleSongAttributes>>(
+      `/catalog/${this.storefront}/playlists/${id}/tracks`,
+      listQuery(options),
+    );
+    return (data.data || []).map(mapSong);
+  }
+
+  async getRecentlyPlayedTracks(options: AppleListOptions = {}): Promise<AppleMusicSong[]> {
+    const data = await this.request<AppleCatalogResponse<AppleSongAttributes>>(
+      '/me/recent/played/tracks',
+      listQuery(options),
+      true,
+    );
+    return (data.data || []).map(mapSong);
   }
 
   async getLibrarySongs(options: AppleListOptions = {}): Promise<AppleMusicLibrarySong[]> {
@@ -337,6 +371,17 @@ function mapLibrarySong(resource: AppleCatalogResource<AppleLibrarySongAttribute
   };
 }
 
+function mapLibrarySongToAppleMusicSong(
+  resource: AppleCatalogResource<AppleLibrarySongAttributes>,
+): AppleMusicSong {
+  return {
+    id: resource.id,
+    name: resource.attributes.name,
+    artistName: resource.attributes.artistName,
+    albumName: resource.attributes.albumName,
+  };
+}
+
 function mapLibraryAlbum(resource: AppleCatalogResource<AppleLibraryAlbumAttributes>): AppleMusicLibraryAlbum {
   return {
     id: resource.id,
@@ -406,29 +451,79 @@ export class AppleMusicProvider implements MusicProvider {
     return songs.map(mapLibrarySongToTrackInfo);
   }
 
-  async getTopTracks(_options?: { limit?: number }): Promise<TrackInfo[]> {
-    // Apple Music API has no "top tracks" — return empty
-    return [];
+  /**
+   * I use recent-play history as the strongest personal-ranking signal Apple
+   * exposes consistently to this runtime.
+   */
+  async getTopTracks(options?: { limit?: number }): Promise<TrackInfo[]> {
+    return this.getRecentlyPlayed(options);
   }
 
-  async getRecentlyPlayed(_options?: { limit?: number }): Promise<TrackInfo[]> {
-    // Apple Music API /me/recent/played/tracks not yet implemented in client
-    return [];
+  async getRecentlyPlayed(options?: { limit?: number }): Promise<TrackInfo[]> {
+    const songs = await this.client.getRecentlyPlayedTracks(options);
+    return songs.map(mapSongToTrackInfo);
   }
 
-  async getPlaylistTracks(_playlistId: string, _options?: { limit?: number }): Promise<TrackInfo[]> {
-    // Would need playlist tracks endpoint — not in current client
-    return [];
+  async getPlaylistTracks(playlistId: string, options?: { limit?: number }): Promise<TrackInfo[]> {
+    const songs = await this.client.getPlaylistTracks(playlistId, options);
+    return songs.map(mapSongToTrackInfo);
   }
 
-  async getRecommendations(_options: { seedTrackIds?: string[]; limit?: number }): Promise<TrackInfo[]> {
-    // Apple Music has recommendations but not exposed in current client
-    return [];
+  /**
+   * I build Apple recommendations from the user's recent plays plus catalog
+   * artist searches because Apple does not expose a simple seed-track
+   * recommendations endpoint that matches the shared provider contract.
+   */
+  async getRecommendations(options: { seedTrackIds?: string[]; limit?: number }): Promise<TrackInfo[]> {
+    const limit = Math.max(1, Math.min(options.limit ?? 20, 50));
+    const seeds = await this.resolveRecommendationSeeds(options.seedTrackIds);
+    if (seeds.length === 0) {
+      return [];
+    }
+
+    const perSeed = Math.max(2, Math.ceil(limit / seeds.length));
+    const excludedIds = new Set(seeds.map((seed) => seed.id));
+    const recommendations: TrackInfo[] = [];
+    const seen = new Set<string>();
+
+    for (const seed of seeds) {
+      const searchTerm = [seed.artistName, seed.albumName].filter(Boolean).join(' ').trim() || seed.name;
+      const result = await this.client.search(searchTerm, ['songs'], { limit: perSeed + 4 });
+      for (const song of result.songs) {
+        if (excludedIds.has(song.id) || seen.has(song.id)) {
+          continue;
+        }
+        seen.add(song.id);
+        recommendations.push(mapSongToTrackInfo(song));
+        if (recommendations.length >= limit) {
+          return recommendations;
+        }
+      }
+    }
+
+    return recommendations;
   }
 
   async getTrackFeatures(trackIds: string[]): Promise<(AudioFeatures | null)[]> {
     // Apple Music has no audio features API — return nulls
     return trackIds.map(() => null);
+  }
+
+  /**
+   * I prefer explicit seed tracks and fall back to recent listening history so
+   * recommendation discovery remains provider-aware for Apple sessions.
+   */
+  private async resolveRecommendationSeeds(seedTrackIds?: string[]): Promise<AppleMusicSong[]> {
+    const explicitSeeds = await Promise.all(
+      (seedTrackIds || [])
+        .slice(0, 3)
+        .map(async (trackId) => this.client.getSong(trackId)),
+    );
+    const resolvedSeeds = explicitSeeds.filter((song): song is AppleMusicSong => Boolean(song));
+    if (resolvedSeeds.length > 0) {
+      return resolvedSeeds;
+    }
+    return this.client.getRecentlyPlayedTracks({ limit: 3 });
   }
 }
 
@@ -438,4 +533,8 @@ export function createAppleMusicProvider(client: AppleMusicClient): MusicProvide
 
 export function createAppleMusicClient(config: AppleMusicConfig): AppleMusicClient {
   return new AppleMusicClientImpl(config);
+}
+
+function isAppleNotFoundError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Apple Music API error: 404');
 }

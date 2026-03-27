@@ -1,146 +1,105 @@
-# HARMON CLI spec (v0.2.0)
+# HARMON CLI spec (v0.1.0)
 
-One-liner: Spotify power CLI using web cookies; search + playback control.
-Parser: Kong.
-Cookies: https://github.com/sriinnu/Silo
-Output: human by default; `--plain` or `--json`.
-Color: on by default; respects `NO_COLOR`, `TERM=dumb`, `--no-color`.
-Platforms: macOS, Linux, Windows.
+One-liner: daemon-first music control CLI for harmon.
+Parser: Commander.
+Output: human by default; `--plain` or `--json` for machine use.
+Platforms: macOS, Linux, Windows. AppleScript playback is macOS-only.
 
 ## Usage
 
-```
-HARMON [global flags] <command> [args]
+```bash
+harmon [global flags] <command> [args]
 ```
 
 ## Global flags
 
 - `-h, --help`
-- `--version`
+- `-V, --version`
 - `-q, --quiet`
 - `-v, --verbose`
 - `-d, --debug`
 - `--json`
 - `--plain`
 - `--no-color`
-- `--config <path>` default: `os.UserConfigDir()/HARMON/config.toml`
-- `--profile <name>` default: `default`
 - `--timeout <dur>` default: `10s`
-- `--market <cc>` default: account market or `US`
-- `--language <tag>` default: `en`
-- `--device <name|id>` default: active device
-- `--engine <auto|web|connect|applescript>` default: `connect` (`applescript` is macOS-only)
-- `--no-input`
+- `--market <cc>`
+- `--provider <spotify|apple|youtube>` default: `spotify`
+- `--device <name|id>`
+- `--engine <connect|applescript>` default: `connect`
 
 ## Commands
 
+### status
+
+- `harmon status`
+
 ### auth
 
-- `HARMON auth status`
-- `HARMON auth import`
+- `harmon auth status`
+- `harmon auth import`
   - flags: `--browser <chrome|brave|edge|firefox|safari>` default: `chrome`
   - `--browser-profile <name>`
   - `--cookie-path <file>`
-  - `--domain <host>` default `spotify.com`
-- `HARMON auth clear`
+  - `--domain <host>` default: `spotify.com`
+- `harmon auth clear`
 
 ### search
 
-- `HARMON search track <query> [--limit N] [--offset N]`
-- `HARMON search album <query> [--limit N] [--offset N]`
-- `HARMON search artist <query> [--limit N] [--offset N]`
-- `HARMON search playlist <query> [--limit N] [--offset N]`
-- `HARMON search episode <query> [--limit N] [--offset N]`
-- `HARMON search show <query> [--limit N] [--offset N]`
+- `harmon search track <query> [--limit N] [--offset N]`
+- `harmon search album <query> [--limit N] [--offset N]`
+- `harmon search artist <query> [--limit N] [--offset N]`
+- `harmon search playlist <query> [--limit N] [--offset N]`
+- `harmon search episode <query> [--limit N] [--offset N]`
+- `harmon search show <query> [--limit N] [--offset N]`
 
-### info
+### session
 
-- `HARMON track info <id|url>`
-- `HARMON album info <id|url>`
-- `HARMON artist info <id|url>`
-- `HARMON playlist info <id|url>`
-- `HARMON show info <id|url>`
-- `HARMON episode info <id|url>`
+- `harmon session start [--mode <mode>] [--duration <dur>] [--energy <n>] [--instrumental]`
+  - session policy now carries the selected provider and provider-aware source defaults
+- `harmon session stop`
+- `harmon session nudge <calmer|sharper> [--amount <n>]`
 
 ### playback
 
-- `HARMON play [<id|url>]` (track/album/playlist/show)
-  - optional: `--type <track|album|playlist|show|episode>` for raw IDs
-  - artist URIs play top tracks (starts with the first)
-- `HARMON pause`
-- `HARMON next`
-- `HARMON prev`
-- `HARMON seek <ms|mm:ss>`
-- `HARMON volume <0-100>`
-- `HARMON shuffle <on|off>`
-- `HARMON repeat <off|track|context>`
-- `HARMON status`
-
-### queue
-
-- `HARMON queue add <id|url>`
-- `HARMON queue show`
-- `HARMON queue clear` (not supported by Spotify API yet)
-
-### library
-
-- `HARMON library tracks list [--limit N]`
-- `HARMON library tracks add <id|url...>`
-- `HARMON library tracks remove <id|url...>`
-- `HARMON library albums list [--limit N]`
-- `HARMON library albums add <id|url...>`
-- `HARMON library albums remove <id|url...>`
-- `HARMON library artists list [--limit N] [--after <artist-id>]`
-- `HARMON library artists follow <id|url...>`
-- `HARMON library artists unfollow <id|url...>`
-- `HARMON library playlists list [--limit N]`
-
-### playlists
-
-- `HARMON playlist create <name> [--public] [--collab]`
-- `HARMON playlist add <playlist> <track...>`
-- `HARMON playlist remove <playlist> <track...>`
-- `HARMON playlist tracks <playlist> [--limit N]`
+- `harmon play [<idOrUrl>] [--type <track|album|playlist|artist|show|episode>]`
+- `harmon pause`
+- `harmon next`
+- `harmon prev`
+- `harmon seek <ms|mm:ss>`
+- `harmon volume <0-100>`
+- `harmon shuffle <on|off>`
+- `harmon repeat <off|track|context>`
 
 ### devices
 
-- `HARMON device list`
-- `HARMON device set <name|id>`
+- `harmon device list`
+- `harmon device set <nameOrId>`
+- `harmon devices` legacy alias for `device list`
+- `harmon use <device-id>` legacy alias for `device set`
+
+### queue
+
+- `harmon queue add <idOrUrl>`
+
+## Playback engine contract
+
+- `connect`: uses the daemon's Spotify playback/device surface.
+- `applescript`: routes playback control to the macOS Music app.
+- `--provider apple`: routes session and playback control through the Apple Music runtime; local playback is macOS-only.
+- `--provider youtube`: routes playback through the daemon's browser-handoff YouTube runtime.
+- Apple Music URLs and URIs auto-route to Apple playback for `play`.
 
 ## Output contract
 
-- stdout: primary results; human or machine modes.
-- stderr: warnings/errors/logs.
-- `--plain`: stable, line-oriented, tab-separated fields.
-- `--json`: stable, documented keys per command.
-
-## Engines
-
-- `auto`: connect first; fall back to web for unsupported features or rate limits.
-- `connect`: internal connect-state endpoints for playback; GraphQL for search/info.
-- `web`: Web API endpoints; search/info/playback auto-fallback to connect when rate limited.
+- stdout carries primary command results.
+- stderr carries errors and diagnostic output.
+- `--plain` uses stable tab-separated fields.
+- `--json` returns stable JSON payloads from the daemon or CLI wrapper.
 
 ## Exit codes
 
 - `0` success
-- `1` generic failure
-- `2` invalid usage/validation
-- `3` auth/cookies missing or invalid
-- `4` network/timeouts
-
-## Config / env
-
-- Env prefix: `HARMON_`
-- Precedence: flags > env > config
-- Secrets: never via flags; use browser cookies only.
-- Overrides:
-  - `HARMON_TOTP_SECRET_URL` (http(s) or `file://...`)
-  - `HARMON_CONNECT_VERSION` (connect playback client version)
-
-## Examples
-
-- ` auth import --browser chrome`
-- `HARMON search track "weezer" --limit 5 --plain`
-- `HARMON play spotify:track:7hQJA50XrCWABAu5v6QZ4i`
-- `HARMON device list --json`
-- `HARMON playlist create "Road Trip" --public`
+- `1` generic runtime failure
+- `2` usage or validation error
+- `3` authentication failure
+- `4` network or daemon reachability failure

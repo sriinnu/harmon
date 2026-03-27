@@ -6,6 +6,12 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "SKILL.md",
+    "logo.svg"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -14,6 +14,9 @@ import { MarkdownParser, createFlowParser } from '../parser/index.js';
 import { PatternGraphBuilder, PatternDetector, SuggestionEngine } from '../graph/index.js';
 import type { ToolDefinition, ToolHandler, JournalEntry, PatternGraph } from '../types.js';
 import { getFlowServerVersion } from '../version.js';
+export { HarmonAppMCPServer, createAppMCPServer } from './app-server.js';
+export type { HarmonAppMCPServerConfig } from './app-server.js';
+export type { HarmonMcpAuthConfig } from './auth.js';
 
 interface FlowServerConfig {
   flowDir?: string;

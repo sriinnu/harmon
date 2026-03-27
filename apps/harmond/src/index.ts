@@ -13,11 +13,11 @@ import { createEngine, type SessionEngine, type EngineEvent } from '@athena/harm
 import { createLogger, type Logger } from '@athena/harmon-logger';
 import { createEncryptor, type Encryptor } from '@athena/harmon-crypto';
 import { v4 as uuidv4 } from 'uuid';
-import { execFile } from 'node:child_process';
+import type { Socket } from 'node:net';
 import { pathToFileURL } from 'node:url';
-import { promisify } from 'node:util';
 import {
   parseCommandSafe,
+  MusicProviderName,
   SessionStartCommand,
   SessionNudgeCommand,
   SessionPolicy,
@@ -39,8 +39,16 @@ import {
   type CookieStore,
   type SpotifyCookieRecord,
 } from '@athena/harmon-spotify';
-import type { MusicProvider, PlaybackController } from '@athena/harmon-core';
-import { createAppleMusicClient, type AppleMusicClient } from '@athena/harmon-apple';
+import {
+  createAppleMusicClient,
+  createAppleMusicProvider,
+  type AppleMusicClient,
+} from '@athena/harmon-apple';
+import {
+  createYouTubeMusicClient,
+  createYouTubeMusicProvider,
+  type YouTubeMusicClient,
+} from '@athena/harmon-youtube';
 import {
   ApiError,
   ConfigurationError,
@@ -53,6 +61,12 @@ import {
 } from './errors.js';
 import { validateDaemonEnvironment } from './config.js';
 import { getDaemonVersion } from './version.js';
+import {
+  createAppleMusicPlaybackController,
+  createRuntimePlaybackController,
+  createYouTubeMusicPlaybackController,
+  type ProviderRuntime,
+} from './provider-runtime.js';
 
 // ============================================================================
 // Configuration
@@ -65,7 +79,6 @@ const SSE_HEARTBEAT_MS = 30000;
 const MAX_SSE_CLIENTS = 50;
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const TRACK_POLL_INTERVAL_MS = 5000;
-const execFileAsync = promisify(execFile);
 const DAEMON_VERSION = getDaemonVersion();
 
 interface DaemonConfig {
@@ -92,7 +105,8 @@ interface ProviderStatusDetails {
   connected: boolean;
   name?: string;
   status?: 'missing' | 'configured' | 'ready' | 'degraded';
-  auth?: 'none' | 'oauth' | 'cookies' | 'developer-token' | 'developer-and-user-token';
+  auth?: 'none' | 'oauth' | 'cookies' | 'api-key' | 'developer-token' | 'developer-and-user-token';
+  playbackMode?: 'native' | 'applescript' | 'browser-handoff';
   capabilities?: Record<string, boolean>;
 }
 
@@ -121,10 +135,13 @@ export class Harmond {
   private store: HarmonStore;
   private spotifyAuth: SpotifyAuth;
   private spotifyClient: SpotifyClient;
-  private provider: MusicProvider;
-  private playback: PlaybackController;
+  private spotifyRuntime: ProviderRuntime;
+  private appleRuntime?: ProviderRuntime;
+  private youtubeRuntime?: ProviderRuntime;
   private appleMusicClient?: AppleMusicClient;
-  private engine: SessionEngine;
+  private youtubeMusicClient?: YouTubeMusicClient;
+  private engines = new Map<MusicProviderName, SessionEngine>();
+  private activeProvider: MusicProviderName | null = null;
   private encryptor?: Encryptor;
   private port: number;
   private host: string;
@@ -136,11 +153,16 @@ export class Harmond {
   private appleCatalogEnabled = false;
   private appleLibraryEnabled = false;
   private applePlaybackEnabled = process.platform === 'darwin';
+  private openSockets: Set<Socket> = new Set();
   private sseClients: Set<Response> = new Set();
   private server: ReturnType<express.Application['listen']> | null = null;
   private sseHeartbeat: ReturnType<typeof setInterval> | null = null;
   private trackPollInterval: ReturnType<typeof setInterval> | null = null;
   private lastTrackId: string | null = null;
+  private spotifyTokenLoadFailure = false;
+  private spotifyCookieLoadFailure = false;
+  private youtubeAccessToken?: string;
+  private youtubeApiKey?: string;
 
   constructor(config: DaemonConfig = {}) {
     const envPort = parsePort(process.env.HARMON_PORT);
@@ -196,10 +218,14 @@ export class Harmond {
       cookieStore,
     });
     this.spotifyClient = createSpotifyClient({ auth: this.spotifyAuth });
-
-    // Create MusicProvider and PlaybackController adapters
-    this.provider = createSpotifyProvider(this.spotifyClient);
-    this.playback = createSpotifyPlayback(this.spotifyClient);
+    this.spotifyRuntime = {
+      name: 'spotify',
+      provider: createSpotifyProvider(this.spotifyClient),
+      playback: createRuntimePlaybackController(createSpotifyPlayback(this.spotifyClient)),
+      playbackMode: 'native',
+      autoStartSession: true,
+    };
+    this.registerRuntime(this.spotifyRuntime);
 
     const appleDeveloperToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
     const appleUserToken = process.env.APPLE_MUSIC_USER_TOKEN;
@@ -213,15 +239,35 @@ export class Harmond {
         userToken: appleUserToken,
         storefront: process.env.APPLE_MUSIC_STOREFRONT || 'us',
       });
+
+      if (this.applePlaybackEnabled) {
+        this.appleRuntime = {
+          name: 'apple',
+          provider: createAppleMusicProvider(this.appleMusicClient),
+          playback: createAppleMusicPlaybackController(this.appleMusicClient),
+          playbackMode: 'applescript',
+          autoStartSession: true,
+        };
+        this.registerRuntime(this.appleRuntime);
+      }
     }
 
-    // Create engine with proper MusicProvider + PlaybackController
-    this.engine = createEngine({
-      provider: this.provider,
-      playback: this.playback,
-      store: this.store,
-      onEvent: this.handleEngineEvent.bind(this),
-    });
+    this.youtubeAccessToken = process.env.YOUTUBE_MUSIC_ACCESS_TOKEN || process.env.GOOGLE_ACCESS_TOKEN;
+    this.youtubeApiKey = process.env.YOUTUBE_MUSIC_API_KEY || process.env.YT_API_KEY;
+    if (this.youtubeAccessToken || this.youtubeApiKey) {
+      this.youtubeMusicClient = createYouTubeMusicClient({
+        accessToken: this.youtubeAccessToken,
+        apiKey: this.youtubeApiKey,
+      });
+      this.youtubeRuntime = {
+        name: 'youtube',
+        provider: createYouTubeMusicProvider(this.youtubeMusicClient),
+        playback: createYouTubeMusicPlaybackController(),
+        playbackMode: 'browser-handoff',
+        autoStartSession: true,
+      };
+      this.registerRuntime(this.youtubeRuntime);
+    }
 
     this.logger.info({ port: this.port, host: this.host }, 'Daemon initializing');
 
@@ -229,8 +275,22 @@ export class Harmond {
     this.setupRoutes();
   }
 
+  /**
+   * I register one playback-capable provider runtime and bind a dedicated
+   * session engine to it.
+   */
+  private registerRuntime(runtime: ProviderRuntime): void {
+    this.engines.set(runtime.name, createEngine({
+      provider: runtime.provider,
+      playback: runtime.playback,
+      store: this.store,
+      onEvent: this.handleEngineEvent.bind(this),
+    }));
+  }
+
   private handleEngineEvent(event: EngineEvent): void {
-    this.broadcastEvent(event.type, event.payload);
+    const provider = this.getActiveProvider();
+    this.broadcastEvent(event.type, provider ? { provider, ...event.payload } : event.payload);
   }
 
   private setupMiddleware(): void {
@@ -624,7 +684,10 @@ export class Harmond {
         const query = req.query.q;
         if (typeof query !== 'string' || !query.trim()) { res.status(400).json({ success: false, error: 'Missing query (q)' }); return; }
         const types = this.parseAppleSearchTypes(typeof req.query.type === 'string' ? req.query.type : 'songs');
-        res.json(await client.search(query, types, { limit: this.clampNumber(req.query.limit, 1, 25) }));
+        res.json(await client.search(query, types, {
+          limit: this.clampNumber(req.query.limit, 1, 25),
+          offset: this.clampNumber(req.query.offset, 0, 10000),
+        }));
       } catch (error) { this.handleRouteError(res, error); }
     });
 
@@ -660,6 +723,14 @@ export class Harmond {
       } catch (error) { this.handleRouteError(res, error); }
     });
 
+    this.app.get('/v1/apple/playlists/:id/tracks', async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!id || !/^[a-zA-Z0-9.]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
+        res.json(await this.getAppleMusicClient().getPlaylistTracks(id, { limit: this.clampNumber(req.query.limit, 1, 100) }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
     this.app.get('/v1/apple/library/songs', async (req, res) => {
       try { res.json(await this.getAppleMusicClient().getLibrarySongs({ limit: this.clampNumber(req.query.limit, 1, 100) })); }
       catch (error) { this.handleRouteError(res, error); }
@@ -675,28 +746,160 @@ export class Harmond {
       catch (error) { this.handleRouteError(res, error); }
     });
 
-    // Apple Music playback via AppleScript — with injection protection
+    this.app.get('/v1/apple/history', async (req, res) => {
+      try {
+        res.json(await this.getAppleMusicClient().getRecentlyPlayedTracks({ limit: this.clampNumber(req.query.limit, 1, 100) }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/apple/recommendations', async (req, res) => {
+      try {
+        const provider = this.getRuntime('apple')?.provider;
+        if (!provider) {
+          throw new ProviderUnavailableError('Apple Music playback is not available on this daemon instance.');
+        }
+        const seedTrackIds = typeof req.query.seed === 'string'
+          ? req.query.seed.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+          : [];
+        res.json(await provider.getRecommendations({
+          seedTrackIds,
+          limit: this.clampNumber(req.query.limit, 1, 50),
+        }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/apple/now-playing', async (_req, res) => {
+      try {
+        const playback = this.getPlaybackRuntime('apple').playback;
+        res.json(await playback.getNowPlaying());
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    // Apple Music playback
     this.app.post('/v1/apple/play', async (req, res) => {
       try {
         const url = this.parseBodyString(req.body?.url);
-        await this.playAppleMusic(url);
+        const playback = this.getPlaybackRuntime('apple').playback;
+        await playback.play(url ? { uri: url } : undefined);
         res.json({ success: true });
       } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/apple/pause', async (_req, res) => {
-      try { await this.runAppleScriptCommand('pause'); res.json({ success: true }); }
+      try { await this.getPlaybackRuntime('apple').playback.pause(); res.json({ success: true }); }
       catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/apple/next', async (_req, res) => {
-      try { await this.runAppleScriptCommand('next track'); res.json({ success: true }); }
+      try { await this.getPlaybackRuntime('apple').playback.next(); res.json({ success: true }); }
       catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/apple/prev', async (_req, res) => {
-      try { await this.runAppleScriptCommand('previous track'); res.json({ success: true }); }
+      try { await this.getPlaybackRuntime('apple').playback.previous(); res.json({ success: true }); }
       catch (error) { this.handleRouteError(res, error); }
+    });
+
+    // YouTube Music
+    this.app.get('/v1/youtube/search', async (req, res) => {
+      try {
+        const client = this.getYouTubeMusicClient();
+        const query = req.query.q;
+        if (typeof query !== 'string' || !query.trim()) { res.status(400).json({ success: false, error: 'Missing query (q)' }); return; }
+        const type = typeof req.query.type === 'string' ? req.query.type : 'songs';
+        const types = this.parseYouTubeSearchTypes(type);
+        res.json(await client.search(query, types, { limit: this.clampNumber(req.query.limit, 1, 25) }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/youtube/songs/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
+        res.json(await this.getYouTubeMusicClient().getSong(id));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/youtube/playlists/:id/tracks', async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) { res.status(400).json({ success: false, error: 'Invalid id' }); return; }
+        res.json(await this.getYouTubeMusicClient().getPlaylistTracks(id, { limit: this.clampNumber(req.query.limit, 1, 100) }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/youtube/playlists', async (req, res) => {
+      try {
+        res.json(await this.getYouTubeMusicClient().getPlaylists({ limit: this.clampNumber(req.query.limit, 1, 50) }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/youtube/library/tracks', async (req, res) => {
+      try {
+        res.json(await this.getYouTubeMusicClient().getLibrarySongs({ limit: this.clampNumber(req.query.limit, 1, 100) }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/youtube/recommendations', async (req, res) => {
+      try {
+        const provider = this.getRuntime('youtube')?.provider;
+        if (!provider) {
+          throw new ProviderUnavailableError('YouTube Music playback is not available on this daemon instance.');
+        }
+        const seedTrackIds = typeof req.query.seed === 'string'
+          ? req.query.seed.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+          : [];
+        res.json(await provider.getRecommendations({
+          seedTrackIds,
+          limit: this.clampNumber(req.query.limit, 1, 50),
+        }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/youtube/now-playing', async (_req, res) => {
+      try {
+        const playback = this.getPlaybackRuntime('youtube').playback;
+        res.json(await playback.getNowPlaying());
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.post('/v1/youtube/play', async (req, res) => {
+      try {
+        const uri = this.parseBodyString(req.body?.uri);
+        const playback = this.getPlaybackRuntime('youtube').playback;
+        await playback.play(uri ? { uri } : undefined);
+        res.json({ success: true });
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.post('/v1/youtube/pause', async (_req, res) => {
+      try {
+        await this.getPlaybackRuntime('youtube').playback.pause();
+        res.json({ success: true });
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.post('/v1/youtube/next', async (_req, res) => {
+      try {
+        await this.getPlaybackRuntime('youtube').playback.next();
+        res.json({ success: true });
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.post('/v1/youtube/prev', async (_req, res) => {
+      try {
+        await this.getPlaybackRuntime('youtube').playback.previous();
+        res.json({ success: true });
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.post('/v1/youtube/queue', async (req, res) => {
+      try {
+        const uri = this.parseBodyString(req.body?.uri);
+        if (!uri) { res.status(400).json({ success: false, error: 'Missing uri' }); return; }
+        await this.getPlaybackRuntime('youtube').playback.addToQueue(uri);
+        res.json({ success: true });
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     // Error handler
@@ -773,6 +976,261 @@ export class Harmond {
     };
   }
 
+  /**
+   * I return the currently active provider if a session engine has claimed one.
+   */
+  private getActiveProvider(): MusicProviderName | null {
+    if (this.activeProvider) {
+      return this.activeProvider;
+    }
+
+    for (const [provider, engine] of this.engines.entries()) {
+      if (engine.getState()) {
+        this.activeProvider = provider;
+        return provider;
+      }
+    }
+
+    return null;
+  }
+
+  private getActiveEngine(): SessionEngine | null {
+    const provider = this.getActiveProvider();
+    return provider ? this.engines.get(provider) ?? null : null;
+  }
+
+  private getActiveRuntime(): ProviderRuntime | null {
+    const provider = this.getActiveProvider();
+    return provider ? this.getRuntime(provider) : null;
+  }
+
+  private getRuntime(provider: MusicProviderName): ProviderRuntime | null {
+    if (provider === 'spotify') {
+      return this.spotifyRuntime;
+    }
+    if (provider === 'apple') {
+      return this.appleRuntime ?? null;
+    }
+    return this.youtubeRuntime ?? null;
+  }
+
+  private getPlaybackRuntime(provider: MusicProviderName): ProviderRuntime {
+    const runtime = this.getRuntime(provider);
+    if (!runtime) {
+      throw new ProviderUnavailableError(
+        `${provider === 'apple' ? 'Apple Music' : 'YouTube Music'} playback is not available on this daemon instance.`,
+      );
+    }
+    return runtime;
+  }
+
+  /**
+   * I clear daemon-owned playback state between sessions so queue and history do
+   * not leak across session boundaries or nudges.
+   */
+  private async resetRuntimeState(
+    provider: MusicProviderName,
+    options?: { preserveCurrentTrack?: boolean; preserveHistory?: boolean },
+  ): Promise<void> {
+    const runtime = this.getRuntime(provider);
+    if (!runtime) {
+      return;
+    }
+    await runtime.playback.resetSessionState(options);
+  }
+
+  /**
+   * I reject provider/policy combinations the current runtime cannot honor,
+   * rather than silently degrading them into empty sessions.
+   */
+  private validateSessionPolicyForProvider(policy: SessionPolicy): void {
+    const provider = policy.provider ?? 'spotify';
+    const sources = policy.sources ?? {};
+
+    if (sources.seedArtists && sources.seedArtists.length > 0) {
+      throw new ValidationError('Session policy source seedArtists is not implemented in this build.');
+    }
+
+    if (provider === 'spotify') {
+      return;
+    }
+
+    if (this.hasFeatureDependentPolicy(policy)) {
+      throw new ValidationError(
+        `${provider === 'apple' ? 'Apple Music' : 'YouTube Music'} sessions do not support audio-feature hard constraints or soft weights in this build.`,
+      );
+    }
+
+    if (provider === 'apple') {
+      if ((sources.topTracks || sources.recentPlays || sources.discovery?.enabled) && !this.appleLibraryEnabled) {
+        throw new ValidationError(
+          'Apple Music topTracks, recentPlays, and discovery require APPLE_MUSIC_USER_TOKEN for personal playback history.',
+        );
+      }
+
+      if (sources.likedTracks && !this.appleLibraryEnabled) {
+        throw new ProviderUnavailableError(
+          'Apple Music likedTracks sessions require APPLE_MUSIC_USER_TOKEN to enable the library surface.',
+        );
+      }
+
+      return;
+    }
+
+    if ((sources.likedTracks || sources.topTracks || sources.recentPlays) && !this.youtubeAccessToken) {
+      throw new ProviderUnavailableError(
+        'YouTube Music likedTracks, topTracks, and recentPlays require YOUTUBE_MUSIC_ACCESS_TOKEN.',
+      );
+    }
+  }
+
+  private hasFeatureDependentPolicy(policy: SessionPolicy): boolean {
+    const hard = policy.hard;
+    const weights = policy.soft?.weights;
+
+    return Boolean(
+      hard?.noVocals ||
+      hard?.tempo ||
+      hard?.energy ||
+      hard?.instrumentalnessMin !== undefined ||
+      typeof weights?.energy === 'number' ||
+      typeof weights?.instrumentalness === 'number' ||
+      typeof weights?.speechiness === 'number' ||
+      typeof weights?.valence === 'number' ||
+      typeof weights?.acousticness === 'number' ||
+      typeof weights?.tempo === 'number',
+    );
+  }
+
+  private async probeSessionProvider(
+    provider: MusicProviderName,
+    policy: SessionPolicy,
+  ): Promise<void> {
+    const sources = policy.sources ?? {};
+
+    if (provider === 'apple') {
+      const client = this.getAppleMusicClient();
+      if (sources.seedPlaylists?.length) {
+        await client.getPlaylistTracks(this.extractSessionSourceId(sources.seedPlaylists[0]), { limit: 1 });
+        return;
+      }
+      if (sources.topTracks || sources.recentPlays) {
+        await client.getRecentlyPlayedTracks({ limit: 1 });
+        return;
+      }
+      if (sources.likedTracks) {
+        await client.getLibrarySongs({ limit: 1 });
+        return;
+      }
+
+      const query = sources.searchQueries?.find((value) => typeof value === 'string' && value.trim().length > 0)
+        ?? this.modeSearchQuery(policy.mode);
+      await client.search(query, ['songs'], { limit: 1 });
+      return;
+    }
+
+    if (provider === 'youtube') {
+      const client = this.getYouTubeMusicClient();
+      if (sources.seedPlaylists?.length) {
+        await client.getPlaylistTracks(this.extractSessionSourceId(sources.seedPlaylists[0]), { limit: 1 });
+        return;
+      }
+      if (sources.likedTracks || sources.topTracks || sources.recentPlays) {
+        await client.getLibrarySongs({ limit: 1 });
+        return;
+      }
+      const query = sources.searchQueries?.find((value) => typeof value === 'string' && value.trim().length > 0)
+        ?? this.modeSearchQuery(policy.mode);
+      await client.search(query, ['songs'], { limit: 1 });
+    }
+  }
+
+  private extractSessionSourceId(value: string): string {
+    if (value.startsWith('spotify:') || value.startsWith('youtube:playlist:') || value.startsWith('apple:playlist:')) {
+      return value.split(':').pop() || value;
+    }
+
+    if (value.startsWith('http://') || value.startsWith('https://')) {
+      try {
+        const url = new URL(value);
+        const playlistId = url.searchParams.get('list');
+        if (playlistId) {
+          return playlistId;
+        }
+        const segments = url.pathname.split('/').filter(Boolean);
+        return segments[segments.length - 1] || value;
+      } catch {
+        return value;
+      }
+    }
+
+    return value;
+  }
+
+  /**
+   * I fill in provider-aware source defaults so API callers do not need to know
+   * each provider's partial surface to get a working session.
+   */
+  private normalizeSessionPolicy(policy: SessionPolicy): SessionPolicy {
+    const provider = policy.provider ?? 'spotify';
+    const sources = policy.sources && Object.keys(policy.sources).length > 0
+      ? policy.sources
+      : this.defaultSourcesForProvider(provider, policy.mode);
+
+    return {
+      ...policy,
+      provider,
+      sources,
+    };
+  }
+
+  private defaultSourcesForProvider(
+    provider: MusicProviderName,
+    mode: SessionPolicy['mode'],
+  ): NonNullable<SessionPolicy['sources']> {
+    const modeQuery = this.modeSearchQuery(mode);
+
+    if (provider === 'apple') {
+      return {
+        likedTracks: true,
+        recentPlays: this.appleLibraryEnabled,
+        searchQueries: [modeQuery],
+      };
+    }
+
+    if (provider === 'youtube') {
+      return {
+        likedTracks: Boolean(this.youtubeAccessToken),
+        searchQueries: [modeQuery],
+      };
+    }
+
+    return {
+      likedTracks: true,
+      topTracks: true,
+      recentPlays: true,
+      discovery: { enabled: true, ratio: 0.15 },
+    };
+  }
+
+  private modeSearchQuery(mode?: SessionPolicy['mode']): string {
+    switch (mode) {
+      case 'relax':
+        return 'calm instrumental music';
+      case 'energize':
+        return 'high energy workout music';
+      case 'meditate':
+        return 'meditation ambient music';
+      case 'workout':
+        return 'workout mix';
+      case 'custom':
+        return 'focus music';
+      case 'focus':
+      default:
+        return 'focus instrumental music';
+    }
+  }
+
   // ============================================================================
   // Command Handlers — with per-type payload validation
   // ============================================================================
@@ -817,29 +1275,67 @@ export class Harmond {
 
   // Wire to ENGINE — the real session management
   private async startSession(policy: SessionPolicy): Promise<{ success: boolean; sessionId: string }> {
-    this.assertProviderConnected('starting a session');
+    if (this.getActiveEngine()) {
+      throw new ValidationError('Session already active. Stop current session first.');
+    }
 
-    // Delegate to the engine
-    await this.engine.start(policy);
+    const normalizedPolicy = this.normalizeSessionPolicy(policy);
+    const provider = normalizedPolicy.provider ?? 'spotify';
+    const engine = this.engines.get(provider);
+    const runtime = this.getRuntime(provider);
+    if (!engine || !runtime) {
+      throw new ProviderUnavailableError(
+        `${provider === 'apple' ? 'Apple Music' : 'YouTube Music'} playback is not available on this daemon instance.`,
+      );
+    }
 
-    const state = this.engine.getState();
+    this.validateSessionPolicyForProvider(normalizedPolicy);
+    await this.assertProviderReady(provider, 'starting a session', normalizedPolicy);
+    await this.resetRuntimeState(provider);
+    await engine.start(normalizedPolicy);
+
+    const state = engine.getState();
+    if (!state || state.queuedTracks.length === 0) {
+      await engine.stop().catch(() => undefined);
+      await this.resetRuntimeState(provider).catch(() => undefined);
+      this.activeProvider = null;
+      throw new ProviderUnavailableError(
+        `No tracks were available from ${provider} for this session policy. Adjust the policy sources and try again.`,
+      );
+    }
+
     const sessionId = state?.id || 'unknown';
 
-    // Engine emits 'session.started' via onEvent → handleEngineEvent → broadcastEvent
-    // Start track change polling
-    this.startTrackPolling();
+    try {
+      if (runtime.autoStartSession) {
+        await runtime.playback.play();
+      }
+    } catch (error) {
+      await engine.stop().catch(() => undefined);
+      await this.resetRuntimeState(provider).catch(() => undefined);
+      this.activeProvider = null;
+      this.stopTrackPolling();
+      throw error;
+    }
 
+    this.activeProvider = provider;
+    this.startTrackPolling();
     return { success: true, sessionId };
   }
 
   private async stopSession(): Promise<{ success: boolean }> {
-    const state = this.engine.getState();
-    if (!state) throw new SessionNotFoundError();
+    const provider = this.getActiveProvider();
+    const runtime = provider ? this.getRuntime(provider) : null;
+    const engine = this.getActiveEngine();
+    const state = engine?.getState();
+    if (!state || !engine) throw new SessionNotFoundError();
 
-    await this.engine.stop();
+    await engine.stop();
+    if (provider && runtime) {
+      await runtime.playback.resetSessionState();
+    }
     this.stopTrackPolling();
-
-    // Engine emits 'session.stopped' via onEvent → handleEngineEvent → broadcastEvent
+    this.activeProvider = null;
 
     return { success: true };
   }
@@ -848,25 +1344,37 @@ export class Harmond {
     direction: 'calmer' | 'sharper',
     amount?: number
   ): Promise<{ success: boolean; newWeights?: Record<string, number | undefined> }> {
-    this.assertProviderConnected('nudging a session');
-    await this.engine.nudge(direction, amount);
+    const provider = this.getActiveProvider();
+    const runtime = this.getActiveRuntime();
+    const engine = this.getActiveEngine();
+    const state = engine?.getState();
+    if (!state || !engine || !provider || !runtime) throw new SessionNotFoundError();
 
-    const state = this.engine.getState();
+    await this.assertProviderReady(provider, 'nudging a session');
+    await runtime.playback.resetSessionState({
+      preserveCurrentTrack: true,
+      preserveHistory: true,
+    });
+    await engine.nudge(direction, amount);
+
     this.broadcastEvent('session.nudged', {
-      sessionId: state?.id,
+      sessionId: state.id,
       direction,
       amount: amount || 0.1,
     });
 
-    return { success: true, newWeights: state?.policy.soft?.weights };
+    return { success: true, newWeights: engine.getState()?.policy.soft?.weights };
   }
 
   private async skipTrack(reason?: string): Promise<{ success: boolean }> {
-    const state = this.engine.getState();
-    if (!state) throw new SessionNotFoundError();
-    this.assertProviderConnected('skipping a track');
+    const provider = this.getActiveProvider();
+    const runtime = this.getActiveRuntime();
+    const engine = this.getActiveEngine();
+    const state = engine?.getState();
+    if (!state || !engine || !provider || !runtime) throw new SessionNotFoundError();
 
-    await this.spotifyClient.next();
+    await this.assertProviderReady(provider, 'skipping a track');
+    await runtime.playback.next();
     this.broadcastEvent('track.skipped', { sessionId: state.id, reason });
 
     return { success: true };
@@ -880,10 +1388,15 @@ export class Harmond {
     if (this.trackPollInterval) return;
     this.trackPollInterval = setInterval(async () => {
       try {
-        const track = await this.playback.getNowPlaying();
+        const playback = this.getActiveRuntime()?.playback;
+        if (!playback) {
+          return;
+        }
+
+        const track = await playback.getNowPlaying();
         if (track && track.id !== this.lastTrackId) {
           this.lastTrackId = track.id;
-          await this.engine.recordPlay(track);
+          await this.getActiveEngine()?.recordPlay(track);
           this.broadcastEvent('track.started', { track });
         }
       } catch { /* polling failure is non-fatal */ }
@@ -899,63 +1412,19 @@ export class Harmond {
   }
 
   // ============================================================================
-  // Apple Music (AppleScript) — injection-safe
-  // ============================================================================
-
-  private ensureAppleScriptAvailable(): void {
-    if (process.platform !== 'darwin') {
-      throw new UnsupportedPlatformError('AppleScript playback is only supported on macOS.');
-    }
-  }
-
-  /** Escape a string for safe embedding in AppleScript double-quoted strings.
-   *  Strips control characters (newlines, tabs, etc.) that can break out of string context. */
-  private escapeAppleScriptString(value: string): string {
-    // Strip ALL control characters (prevents \n, \r, \t injection)
-    const sanitized = value.replace(/[\x00-\x1f\x7f]/g, '');
-    // Escape backslashes and quotes
-    return sanitized.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  }
-
-  private async runAppleScript(script: string): Promise<void> {
-    this.ensureAppleScriptAvailable();
-    await execFileAsync('osascript', ['-e', script]);
-  }
-
-  private async runAppleScriptCommand(command: string): Promise<void> {
-    await this.runAppleScript(`tell application "Music" to ${command}`);
-  }
-
-  private async playAppleMusic(url?: string): Promise<void> {
-    if (url) {
-      // Validate URL protocol — only allow music-related URLs
-      try {
-        const parsed = new URL(url);
-        if (!['https:', 'http:', 'music:'].includes(parsed.protocol)) {
-          throw new Error('URL must use https, http, or music protocol');
-        }
-      } catch (e) {
-        if (e instanceof TypeError) throw new Error('Invalid URL');
-        throw e;
-      }
-      const escaped = this.escapeAppleScriptString(url);
-      await this.runAppleScript(`tell application "Music"\n  activate\n  open location "${escaped}"\nend tell`);
-      return;
-    }
-    await this.runAppleScriptCommand('play');
-  }
-
-  // ============================================================================
   // Status
   // ============================================================================
 
   private async getStatus(): Promise<DaemonStatus> {
-    const engineState = this.engine.getState();
+    const engineState = this.getActiveEngine()?.getState() ?? null;
+    const activeProvider = this.getActiveProvider();
     const spotify = await this.getSpotifyProviderStatus();
     const apple = this.getAppleProviderStatus();
+    const youtube = this.getYouTubeProviderStatus();
     const providers = {
       spotify,
       apple,
+      youtube,
     } as DaemonStatus['providers'];
 
     return {
@@ -970,6 +1439,7 @@ export class Harmond {
         ? {
             id: engineState.id,
             isActive: engineState.status === 'running',
+            provider: activeProvider ?? undefined,
             currentTrack: engineState.currentTrack || null,
             queueDepth: engineState.queuedTracks.length,
             policy: engineState.policy,
@@ -1003,6 +1473,9 @@ export class Harmond {
         this.logger.info({ port: this.port, host: this.host }, 'Harmond listening');
         resolve();
       });
+      this.server.on('connection', (socket: Socket) => {
+        this.trackServerSocket(socket);
+      });
 
       this.server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
@@ -1015,12 +1488,24 @@ export class Harmond {
 
   async stop(): Promise<void> {
     this.logger.info('Shutting down...');
+    let shutdownError: unknown = null;
 
     // Stop track polling
     this.stopTrackPolling();
 
     // Stop engine (clears refill interval)
-    try { await this.engine.stop(); } catch { /* no session active is fine */ }
+    for (const [provider, engine] of this.engines.entries()) {
+      try {
+        await engine.stop();
+        if (this.activeProvider === provider) {
+          this.activeProvider = null;
+        }
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'No active session') {
+          shutdownError = error;
+        }
+      }
+    }
 
     // Close SSE clients
     for (const client of this.sseClients) {
@@ -1034,21 +1519,26 @@ export class Harmond {
 
     // Stop server with timeout
     if (this.server) {
-      await Promise.race([
-        new Promise<void>((resolve) => { this.server!.close(() => resolve()); }),
-        new Promise<void>((resolve) => setTimeout(() => {
-          this.logger.warn('Shutdown timeout — forcing close');
-          resolve();
-        }, SHUTDOWN_TIMEOUT_MS)),
-      ]);
-      this.server = null;
+      try {
+        await this.closeServer();
+      } catch (error) {
+        shutdownError ??= error;
+      }
     }
 
     // Close store
-    await this.store.close();
+    try {
+      await this.store.close();
+    } catch (error) {
+      shutdownError ??= error;
+    }
 
     // Destroy encryptor (zero sensitive state)
     this.encryptor?.destroy();
+
+    if (shutdownError) {
+      throw shutdownError;
+    }
   }
 
   // ============================================================================
@@ -1087,13 +1577,26 @@ export class Harmond {
         if (!raw) return null;
         try {
           const decrypted = this.encryptor ? this.encryptor.decrypt(raw) : raw;
+          this.spotifyTokenLoadFailure = false;
           return JSON.parse(decrypted) as SpotifyTokens;
-        } catch { return null; }
+        } catch (error) {
+          this.spotifyTokenLoadFailure = true;
+          this.logger.warn(
+            { error: error instanceof Error ? error.message : String(error) },
+            'Stored Spotify tokens are unreadable; treating them as degraded auth state',
+          );
+          return null;
+        }
       },
       set: async (tokens) => {
-        if (!tokens) { await this.store.deleteSetting('spotify.tokens'); return; }
+        if (!tokens) {
+          this.spotifyTokenLoadFailure = false;
+          await this.store.deleteSetting('spotify.tokens');
+          return;
+        }
         const json = JSON.stringify(tokens);
         const value = this.encryptor ? this.encryptor.encrypt(json) : json;
+        this.spotifyTokenLoadFailure = false;
         await this.store.setSetting('spotify.tokens', value);
       },
     };
@@ -1106,13 +1609,26 @@ export class Harmond {
         if (!raw) return null;
         try {
           const decrypted = this.encryptor ? this.encryptor.decrypt(raw) : raw;
+          this.spotifyCookieLoadFailure = false;
           return JSON.parse(decrypted) as SpotifyCookieRecord[];
-        } catch { return null; }
+        } catch (error) {
+          this.spotifyCookieLoadFailure = true;
+          this.logger.warn(
+            { error: error instanceof Error ? error.message : String(error) },
+            'Stored Spotify cookies are unreadable; treating them as degraded auth state',
+          );
+          return null;
+        }
       },
       set: async (cookies) => {
-        if (!cookies || cookies.length === 0) { await this.store.deleteSetting('spotify.cookies'); return; }
+        if (!cookies || cookies.length === 0) {
+          this.spotifyCookieLoadFailure = false;
+          await this.store.deleteSetting('spotify.cookies');
+          return;
+        }
         const json = JSON.stringify(cookies);
         const value = this.encryptor ? this.encryptor.encrypt(json) : json;
+        this.spotifyCookieLoadFailure = false;
         await this.store.setSetting('spotify.cookies', value);
       },
     };
@@ -1172,7 +1688,8 @@ export class Harmond {
       message.includes('not connected') ||
       message.includes('session expired') ||
       message.includes('No refresh token available') ||
-      message.includes('user token required')
+      message.includes('user token required') ||
+      message.includes('requires YOUTUBE_MUSIC_ACCESS_TOKEN')
     ) {
       return new ProviderUnavailableError(message);
     }
@@ -1181,8 +1698,12 @@ export class Harmond {
       return new SessionNotFoundError();
     }
 
-    if (message === 'AppleScript playback is only supported on macOS.') {
+    if (message === 'Apple Music local playback is only supported on macOS.') {
       return new UnsupportedPlatformError(message);
+    }
+
+    if (message.includes('not supported in browser-handoff mode')) {
+      return new ApiError(501, message, 'UNSUPPORTED_OPERATION');
     }
 
     if (
@@ -1191,6 +1712,9 @@ export class Harmond {
       message.includes('Login flow expired') ||
       message.includes('must be one of') ||
       message.includes('must use') ||
+      message.includes('queue is empty') ||
+      message.includes('playback history is empty') ||
+      message.includes('could not be resolved to a playable URL') ||
       message.includes('Maximum 5 total seeds allowed') ||
       message.includes('At least one seed')
     ) {
@@ -1205,7 +1729,7 @@ export class Harmond {
    */
   private extractUpstreamStatusCode(message: string): number | undefined {
     const match = message.match(
-      /^(Spotify API error|Spotify token refresh failed|Spotify token exchange failed|Spotify cookie token failed|Apple Music API error): (\d+)/
+      /^(Spotify API error|Spotify token refresh failed|Spotify token exchange failed|Spotify cookie token failed|Apple Music API error|YouTube API error): (\d+)/
     );
 
     if (!match) {
@@ -1277,14 +1801,49 @@ export class Harmond {
     return undefined;
   }
 
-  private assertProviderConnected(operation: string): void {
-    if (this.provider.isConnected()) {
+  private async assertProviderReady(
+    provider: MusicProviderName,
+    operation: string,
+    policy?: SessionPolicy,
+  ): Promise<void> {
+    if (provider === 'spotify') {
+      const spotify = await this.getSpotifyProviderStatus();
+      if (spotify.connected) {
+        return;
+      }
+
+      const message =
+        spotify.auth === 'none'
+          ? `Spotify is not connected. Complete authentication before ${operation}.`
+          : `Spotify is not ready. Refresh authentication before ${operation}.`;
+      throw new ProviderUnavailableError(message);
+    }
+
+    if (provider === 'apple') {
+      const apple = this.getAppleProviderStatus();
+      if (policy) {
+        if (apple.capabilities?.sessionControl) {
+          await this.probeSessionProvider(provider, policy);
+          return;
+        }
+      } else if (apple.capabilities?.playback) {
+        return;
+      }
+      throw new ProviderUnavailableError(`Apple Music is not ready. Complete setup before ${operation}.`);
+    }
+
+    const youtube = this.getYouTubeProviderStatus();
+    if (policy) {
+      if (youtube.capabilities?.sessionControl) {
+        await this.probeSessionProvider(provider, policy);
+        return;
+      }
+    } else if (youtube.capabilities?.playback) {
       return;
     }
 
-    const providerName = `${this.provider.name.slice(0, 1).toUpperCase()}${this.provider.name.slice(1)}`;
     throw new ProviderUnavailableError(
-      `${providerName} is not connected. Complete authentication before ${operation}.`,
+      `YouTube Music is not ready. Complete setup before ${operation}.`,
     );
   }
 
@@ -1366,11 +1925,35 @@ export class Harmond {
     return requested as Array<'songs' | 'albums' | 'artists' | 'playlists'>;
   }
 
+  private parseYouTubeSearchTypes(value: string): Array<'songs' | 'albums' | 'artists' | 'playlists'> {
+    const requested = value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+    const normalized = requested.map((entry) => {
+      if (entry === 'song' || entry === 'songs' || entry === 'track' || entry === 'tracks') return 'songs';
+      if (entry === 'album' || entry === 'albums') return 'albums';
+      if (entry === 'artist' || entry === 'artists') return 'artists';
+      if (entry === 'playlist' || entry === 'playlists') return 'playlists';
+      return null;
+    });
+    if (normalized.length === 0 || normalized.some((entry) => entry === null)) {
+      throw new ValidationError('YouTube search type must be one of: song, songs, track, tracks, album, albums, artist, artists, playlist, playlists');
+    }
+    return Array.from(new Set(normalized.filter((entry): entry is 'songs' | 'albums' | 'artists' | 'playlists' => entry !== null)));
+  }
+
   private getAppleMusicClient(): AppleMusicClient {
     if (!this.appleMusicClient) {
       throw new ConfigurationError('Apple Music not configured (set APPLE_MUSIC_DEVELOPER_TOKEN).');
     }
     return this.appleMusicClient;
+  }
+
+  private getYouTubeMusicClient(): YouTubeMusicClient {
+    if (!this.youtubeMusicClient) {
+      throw new ConfigurationError(
+        'YouTube Music not configured (set YOUTUBE_MUSIC_API_KEY, YT_API_KEY, or YOUTUBE_MUSIC_ACCESS_TOKEN).',
+      );
+    }
+    return this.youtubeMusicClient;
   }
 
   /**
@@ -1379,10 +1962,13 @@ export class Harmond {
    */
   private async getSpotifyProviderStatus(): Promise<ProviderStatusDetails> {
     const authMode = this.getSpotifyAuthMode();
+    const loadFailure = this.spotifyTokenLoadFailure || this.spotifyCookieLoadFailure;
     const capabilities = {
       cookieImport: true,
+      deviceTransfer: true,
       library: true,
       playback: true,
+      queue: true,
       search: true,
       sessionControl: true,
     };
@@ -1391,8 +1977,9 @@ export class Harmond {
       return {
         connected: false,
         name: 'Spotify',
-        status: 'missing',
+        status: loadFailure ? 'degraded' : 'missing',
         auth: authMode,
+        playbackMode: 'native',
         capabilities,
       };
     }
@@ -1406,6 +1993,7 @@ export class Harmond {
         name: 'Spotify',
         status: isReady ? 'ready' : 'degraded',
         auth: authMode,
+        playbackMode: 'native',
         capabilities,
       };
     } catch {
@@ -1414,6 +2002,7 @@ export class Harmond {
         name: 'Spotify',
         status: 'degraded',
         auth: authMode,
+        playbackMode: 'native',
         capabilities,
       };
     }
@@ -1424,6 +2013,7 @@ export class Harmond {
    * status stays truthful about which subset of the Apple surface is usable.
    */
   private getAppleProviderStatus(): ProviderStatusDetails {
+    const playbackRuntime = this.appleRuntime;
     const auth =
       this.appleLibraryEnabled
         ? 'developer-and-user-token'
@@ -1433,18 +2023,54 @@ export class Harmond {
     const hasAppleCapability =
       this.appleCatalogEnabled ||
       this.appleLibraryEnabled ||
-      this.applePlaybackEnabled;
+      !!playbackRuntime;
 
     return {
       connected: hasAppleCapability,
       name: 'Apple Music',
-      status: hasAppleCapability ? 'ready' : 'missing',
+      status: hasAppleCapability ? 'configured' : 'missing',
       auth,
+      playbackMode: playbackRuntime ? 'applescript' : undefined,
       capabilities: {
         catalog: this.appleCatalogEnabled,
         library: this.appleLibraryEnabled,
-        playback: this.applePlaybackEnabled,
+        next: !!playbackRuntime,
+        pause: !!playbackRuntime,
+        previous: !!playbackRuntime,
+        playback: !!playbackRuntime,
+        recommendations: this.appleLibraryEnabled,
+        recentPlays: this.appleLibraryEnabled,
         search: this.appleCatalogEnabled,
+        sessionControl: !!playbackRuntime && (this.appleCatalogEnabled || this.appleLibraryEnabled),
+      },
+    };
+  }
+
+  private getYouTubeProviderStatus(): ProviderStatusDetails {
+    const configured = !!this.youtubeMusicClient;
+    const runtime = !!this.youtubeRuntime;
+    const auth: ProviderStatusDetails['auth'] =
+      this.youtubeAccessToken ? 'oauth' : this.youtubeApiKey ? 'api-key' : 'none';
+
+    return {
+      connected: configured,
+      name: 'YouTube Music',
+      status: configured ? 'configured' : 'missing',
+      auth,
+      playbackMode: runtime ? 'browser-handoff' : undefined,
+      capabilities: {
+        library: Boolean(this.youtubeAccessToken),
+        playback: runtime,
+        pause: false,
+        playlists: Boolean(this.youtubeAccessToken),
+        previous: runtime,
+        queue: runtime,
+        recommendations: configured,
+        search: configured,
+        sessionControl: runtime && configured,
+        songLookup: configured,
+        topTracks: Boolean(this.youtubeAccessToken),
+        recentPlays: Boolean(this.youtubeAccessToken),
       },
     };
   }
@@ -1538,6 +2164,59 @@ export class Harmond {
   getStore(): HarmonStore {
     return this.store;
   }
+
+  /**
+   * I track live sockets so shutdown can destroy keep-alive connections if the
+   * HTTP server does not drain on its own before the timeout.
+   */
+  private trackServerSocket(socket: Socket): void {
+    this.openSockets.add(socket);
+    socket.on('close', () => {
+      this.openSockets.delete(socket);
+    });
+  }
+
+  /**
+   * I close the HTTP server and destroy lingering sockets if it misses the
+   * graceful shutdown deadline.
+   */
+  private async closeServer(): Promise<void> {
+    if (!this.server) {
+      return;
+    }
+
+    const server = this.server;
+    this.server = null;
+
+    const closePromise = new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    const timedOut = await Promise.race([
+      closePromise.then(() => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(true), SHUTDOWN_TIMEOUT_MS)),
+    ]);
+
+    if (timedOut) {
+      this.logger.warn('Shutdown timeout — destroying remaining sockets');
+      for (const socket of this.openSockets) {
+        try {
+          socket.destroy();
+        } catch {
+          // I ignore destroy failures because the shutdown deadline already elapsed.
+        }
+      }
+    }
+
+    await closePromise;
+    this.openSockets.clear();
+  }
 }
 
 export function createDaemon(config?: DaemonConfig): Harmond {
@@ -1573,8 +2252,13 @@ if (isMain) {
   });
 
   const shutdown = async () => {
-    await daemon.stop();
-    process.exit(0);
+    try {
+      await daemon.stop();
+      process.exit(0);
+    } catch (error) {
+      console.error('Shutdown failed:', error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

@@ -144,4 +144,16 @@ describe('SpotifyAuth', () => {
     await expect(auth.handleCallback('code-two', secondState ?? undefined)).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it('includes the scopes required by the exported top-tracks surface', () => {
+    const auth = createSpotifyAuth({
+      clientId: 'client-id',
+      redirectUri: 'http://localhost:17373/v1/auth/spotify/callback',
+    });
+
+    const loginUrl = new URL(auth.getLoginUrl());
+    const scopes = (loginUrl.searchParams.get('scope') || '').split(' ');
+
+    expect(scopes).toContain('user-top-read');
+  });
 });

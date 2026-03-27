@@ -38,7 +38,5 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Smoke published entrypoints
-        run: |
-          node --input-type=module -e "const cli = await import('./apps/harmon-cli/dist/index.js'); if (typeof cli.createCLI !== 'function') throw new Error('Missing CLI export');"
-          node --input-type=module -e "const daemon = await import('./apps/harmond/dist/src/index.js'); if (typeof daemon.createDaemon !== 'function') throw new Error('Missing daemon export');"
+      - name: Verify packed publish surfaces
+        run: pnpm verify:pack
