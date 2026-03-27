@@ -8,16 +8,15 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist/",
-    "scripts/",
     ".chitragupta-ecosystem/",
     "README.md",
     "SKILL.md",
     "logo.svg"
   ],
   "scripts": {
-    "auth": "node ./scripts/auth.mjs bootstrap",
-    "auth:refresh": "node ./scripts/auth.mjs refresh",
-    "auth:status": "node ./scripts/auth.mjs status",
+    "auth": "node ./dist/auth-cli.js bootstrap",
+    "auth:refresh": "node ./dist/auth-cli.js refresh",
+    "auth:status": "node ./dist/auth-cli.js status",
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
