@@ -1,4 +1,4 @@
-# @athena/harmon-logger
+# @sriinnu/harmon-logger
 
 ![logo](./logo.svg)
 
@@ -7,13 +7,13 @@
 ## Install
 
 ```bash
-pnpm add @athena/harmon-logger
+pnpm add @sriinnu/harmon-logger
 ```
 
 ## Quick Start
 
 ```typescript
-import { createLogger } from '@athena/harmon-logger';
+import { createLogger } from '@sriinnu/harmon-logger';
 
 const log = createLogger({ name: 'harmond', level: 'debug' });
 log.info({ sessionId: 'sess_abc' }, 'Session started');

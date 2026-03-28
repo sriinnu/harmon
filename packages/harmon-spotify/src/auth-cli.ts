@@ -3,11 +3,11 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import {
   createSpotifyAuth,
   createSpotifyClient,
@@ -29,11 +29,20 @@ interface CookiePayload {
   cookies: SpotifyCookieRecord[];
 }
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const packageRoot = path.resolve(scriptDir, '..');
-const authDir = path.join(packageRoot, '.chitragupta-ecosystem', 'auth');
-const tokensPath = path.join(authDir, 'spotify.tokens.json');
-const cookiesPath = path.join(authDir, 'spotify.cookies.json');
+const tokensPath = resolveAuthPath('spotify.tokens.json');
+const cookiesPath = resolveAuthPath('spotify.cookies.json');
+
+/**
+ * I keep auth state under user-local Chitragupta storage instead of the
+ * package tree so packed installs never accumulate live credentials.
+ */
+function resolveAuthPath(fileName: string): string {
+  const overrideRoot = process.env.HARMON_PACK_STATE_DIR?.trim();
+  const stateRoot = overrideRoot && overrideRoot.length > 0
+    ? overrideRoot
+    : path.join(os.homedir(), '.chitragupta', 'harmon', 'provider-packs');
+  return path.join(stateRoot, 'harmon-spotify', fileName);
+}
 
 /**
  * I load JSON state from disk when it exists.
@@ -53,12 +62,13 @@ async function readJson<T>(filePath: string): Promise<T | null> {
  * I persist JSON state and remove the file when the value is null.
  */
 async function writeJson(filePath: string, value: JsonValue | null): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
+  await mkdir(path.dirname(filePath), { mode: 0o700, recursive: true });
   if (value == null) {
     await rm(filePath, { force: true });
     return;
   }
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await chmod(filePath, 0o600);
 }
 
 /**

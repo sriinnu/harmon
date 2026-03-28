@@ -2,7 +2,7 @@
  * Two-phase track ranking algorithm
  */
 
-import type { SessionPolicy } from '@athena/harmon-protocol';
+import type { SessionPolicy } from '@sriinnu/harmon-protocol';
 import type { TrackWithFeatures, PlayRecord, RankedTrack } from './types.js';
 import { calculateArcModulation } from './arc.js';
 import { checkRecencyPenalty } from './history.js';

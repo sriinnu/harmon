@@ -5,10 +5,7 @@
     "rootDir": ".",
     "tsBuildInfoFile": "./tsconfig.tsbuildinfo",
     "outDir": "./dist",
-    "composite": true,
-    "paths": {
-      "@athena/*": ["packages/*/src/index.ts"]
-    }
+    "composite": true
   },
   "references": [
     { "path": "../../packages/harmon-protocol" },

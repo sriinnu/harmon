@@ -49,8 +49,12 @@ harmon [global flags] <command> [args]
 - `harmon search album <query> [--limit N] [--offset N]`
 - `harmon search artist <query> [--limit N] [--offset N]`
 - `harmon search playlist <query> [--limit N] [--offset N]`
-- `harmon search episode <query> [--limit N] [--offset N]`
-- `harmon search show <query> [--limit N] [--offset N]`
+- `harmon search episode <query> [--limit N] [--offset N]` Spotify only
+- `harmon search show <query> [--limit N] [--offset N]` Spotify only
+
+Provider notes:
+- Apple Music and YouTube Music support `track`, `album`, `artist`, and `playlist` search only.
+- YouTube Music does not support `--offset`; Spotify and Apple Music do.
 
 ### session
 

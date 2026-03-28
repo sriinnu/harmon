@@ -2,8 +2,8 @@
  * Harmon Apple - Apple Music API client
  */
 
-import type { TrackInfo } from '@athena/harmon-protocol';
-import type { MusicProvider, PlaybackController, AudioFeatures } from '@athena/harmon-core';
+import type { TrackInfo } from '@sriinnu/harmon-protocol';
+import type { MusicProvider, PlaybackController, AudioFeatures } from '@sriinnu/harmon-core';
 
 const APPLE_MUSIC_API_BASE = 'https://api.music.apple.com/v1';
 
@@ -452,11 +452,12 @@ export class AppleMusicProvider implements MusicProvider {
   }
 
   /**
-   * I use recent-play history as the strongest personal-ranking signal Apple
-   * exposes consistently to this runtime.
+   * I reject synthetic top-track semantics so the Apple provider stays honest
+   * about the personal-history surface it actually implements.
    */
   async getTopTracks(options?: { limit?: number }): Promise<TrackInfo[]> {
-    return this.getRecentlyPlayed(options);
+    void options;
+    throw new Error('Apple Music top tracks are not available from the current provider contract. Use recently played tracks instead.');
   }
 
   async getRecentlyPlayed(options?: { limit?: number }): Promise<TrackInfo[]> {

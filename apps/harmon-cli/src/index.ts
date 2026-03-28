@@ -2,7 +2,7 @@
  * Harmon CLI - Thin client that calls the daemon
  */
 
-import type { Command } from '@athena/harmon-protocol';
+import type { Command } from '@sriinnu/harmon-protocol';
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:17373';
 
@@ -22,6 +22,10 @@ export interface CookieRecord {
   expires?: string | null;
   isSecure: boolean;
   isHTTPOnly: boolean;
+}
+
+interface SpotifyPagedResponse<T> {
+  items?: T[];
 }
 
 export function createCLI(config: CLIConfig) {
@@ -181,18 +185,26 @@ export function createCLI(config: CLIConfig) {
       return requestJson('/v1/spotify/play', { method: 'POST', body: payload ?? {} });
     },
     async spotifyPlaylists(options?: { limit?: number; offset?: number }) {
-      return requestJson('/v1/spotify/playlists', {
+      const result = await requestJson<SpotifyPagedResponse<unknown>>('/v1/spotify/playlists', {
         query: { limit: options?.limit, offset: options?.offset },
       });
+      return result.items ?? [];
     },
     async spotifyPlaylistTracks(playlistId: string, options?: { limit?: number; offset?: number }) {
-      return requestJson(`/v1/spotify/playlists/${encodeURIComponent(playlistId)}/tracks`, {
+      const result = await requestJson<SpotifyPagedResponse<unknown>>(`/v1/spotify/playlists/${encodeURIComponent(playlistId)}/tracks`, {
         query: { limit: options?.limit, offset: options?.offset },
       });
+      return result.items ?? [];
     },
     async spotifyLibraryTracks(options?: { limit?: number; offset?: number }) {
-      return requestJson('/v1/spotify/library/tracks', {
+      const result = await requestJson<SpotifyPagedResponse<unknown>>('/v1/spotify/library/tracks', {
         query: { limit: options?.limit, offset: options?.offset },
+      });
+      return result.items ?? [];
+    },
+    async spotifyRecommendations(options?: { limit?: number; seed?: string }) {
+      return requestJson('/v1/spotify/recommendations', {
+        query: { limit: options?.limit, seed: options?.seed },
       });
     },
     async spotifyPause() {

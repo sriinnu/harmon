@@ -38,7 +38,7 @@ importers:
 
   apps/harmon-cli:
     dependencies:
-      '@athena/harmon-protocol':
+      '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../../packages/harmon-protocol
       commander:
@@ -52,30 +52,36 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  apps/harmon-web:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   apps/harmond:
     dependencies:
-      '@athena/harmon-apple':
+      '@sriinnu/harmon-apple':
         specifier: workspace:*
         version: link:../../packages/harmon-apple
-      '@athena/harmon-core':
+      '@sriinnu/harmon-core':
         specifier: workspace:*
         version: link:../../packages/harmon-core
-      '@athena/harmon-crypto':
+      '@sriinnu/harmon-crypto':
         specifier: workspace:*
         version: link:../../packages/harmon-crypto
-      '@athena/harmon-logger':
+      '@sriinnu/harmon-logger':
         specifier: workspace:*
         version: link:../../packages/harmon-logger
-      '@athena/harmon-protocol':
+      '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../../packages/harmon-protocol
-      '@athena/harmon-spotify':
+      '@sriinnu/harmon-spotify':
         specifier: workspace:*
         version: link:../../packages/harmon-spotify
-      '@athena/harmon-store':
+      '@sriinnu/harmon-store':
         specifier: workspace:*
         version: link:../../packages/harmon-store
-      '@athena/harmon-youtube':
+      '@sriinnu/harmon-youtube':
         specifier: workspace:*
         version: link:../../packages/harmon-youtube
       express:
@@ -103,10 +109,10 @@ importers:
 
   packages/harmon-apple:
     dependencies:
-      '@athena/harmon-core':
+      '@sriinnu/harmon-core':
         specifier: workspace:*
         version: link:../harmon-core
-      '@athena/harmon-protocol':
+      '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol
     devDependencies:
@@ -119,7 +125,7 @@ importers:
 
   packages/harmon-core:
     dependencies:
-      '@athena/harmon-protocol':
+      '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol
     devDependencies:
@@ -138,12 +144,12 @@ importers:
 
   packages/harmon-flow:
     dependencies:
-      '@athena/harmon-protocol':
-        specifier: workspace:*
-        version: link:../harmon-protocol
       '@modelcontextprotocol/sdk':
         specifier: ^1.25.2
         version: 1.25.2(hono@4.11.4)(zod@4.3.5)
+      '@sriinnu/harmon-protocol':
+        specifier: workspace:*
+        version: link:../harmon-protocol
       d3-dag:
         specifier: ^1.1.0
         version: 1.1.0
@@ -198,10 +204,10 @@ importers:
 
   packages/harmon-spotify:
     dependencies:
-      '@athena/harmon-core':
+      '@sriinnu/harmon-core':
         specifier: workspace:*
         version: link:../harmon-core
-      '@athena/harmon-protocol':
+      '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol
     devDependencies:
@@ -230,10 +236,10 @@ importers:
 
   packages/harmon-youtube:
     dependencies:
-      '@athena/harmon-core':
+      '@sriinnu/harmon-core':
         specifier: workspace:*
         version: link:../harmon-core
-      '@athena/harmon-protocol':
+      '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol
     devDependencies:

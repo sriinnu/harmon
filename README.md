@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Production-grade, multi-provider music session manager with daemon-first architecture</strong>
+  <strong>Multi-provider music runtime for Spotify, Apple Music, and YouTube Music.</strong>
 </p>
 
 <p align="center">
@@ -21,30 +21,36 @@
 
 ## Overview
 
-Harmon is a **production-grade, multi-provider music session runtime** that runs as a background service and exposes a **HTTP+SSE API** for controlling policy-driven playback sessions. It keeps contracts shared through a provider-agnostic protocol layer and ships first-class provider packages for Spotify, Apple Music, and YouTube Music.
+Harmon is a **daemon-first music runtime** that lets a human, a local app, or an AI assistant ask for music in one contract and route it to the right provider surface.
 
-At runtime, Harmon is explicitly provider-aware:
+What Harmon gives you on day one:
 
-- **Spotify** uses native Spotify Connect playback and full daemon-backed session orchestration
-- **Apple Music** uses catalog/library APIs, recent-play signals, playlist browsing, and macOS AppleScript local playback
-- **YouTube Music** uses official Data API search, liked-library tracks, playlist browsing, related-track recommendations, and browser handoff playback
+- **One control plane** for Spotify, Apple Music, and YouTube Music
+- **One runtime contract** across CLI, web, companion, and MCP surfaces
+- **One policy model** for focus, calm, energy shaping, and queue refill
+- **One local system** with encrypted credentials, rate limits, and explicit provider truth
+
+At runtime, Harmon stays honest about each provider:
+
+- **Spotify** is the strongest end-to-end path with native Connect playback, queue control, device selection, and feature-aware sessions.
+- **Apple Music** supports catalog and library seeding plus either local macOS playback or an iOS remote companion playback target.
+- **YouTube Music** supports search, playlists, library-like liked-video flows, and browser handoff playback with daemon-managed state.
 
 ### Core Philosophy
 
-- **🎯 Policy-Driven**: AI preferences compile to deterministic JSON policies
-- **🔒 Daemon-First**: Runs as a background service, always ready to respond
-- **⚡ Event-Streaming**: Real-time updates via Server-Sent Events (SSE)
-- **🛡️ Production-Ready**: Rate limiting, encryption, structured logging, comprehensive error handling
-- **🔐 Privacy-First**: All data stays local, journal entries in Markdown
-- **🎵 Intelligent Queue**: Two-phase ranking (hard constraints + soft scoring) with energy arc modulation
+- **Policy-driven**: I compile mood and intent into deterministic session policies.
+- **Daemon-first**: I keep a long-lived runtime ready for CLI, web, MCP, and companion surfaces.
+- **Provider-aware**: I do not pretend every provider has identical playback or data surfaces.
+- **Production-shaped**: I keep auth, encryption, rate limiting, and error handling in the runtime, not in the UI.
+- **Local-first**: I keep state and journal data on your machine.
 
 ### Provider Matrix
 
 | Provider | Session Runtime | Playback Mode | Notes |
 |---------|------------------|---------------|-------|
 | Spotify | Full daemon-backed orchestration | Native Spotify Connect | Best support for queueing, device control, and feature-driven policy constraints |
-| Apple Music | Provider-aware session orchestration | macOS AppleScript local playback | Catalog/library, playlist browse, recent-play signals, and local playback; playback requires macOS and Apple tokens |
-| YouTube Music | Provider-aware session orchestration | Browser handoff | Search, liked-library tracks, playlist browse, related-track recommendations, and local queue control; pause remains intentionally unsupported |
+| Apple Music | Provider-aware session orchestration | macOS AppleScript local playback or iOS remote companion | Catalog/library, playlist browse, recent-play signals, local-history-backed top tracks, and Apple playback that can target either the local macOS Music app or a connected iOS companion; the companion expands playback targets, but Apple browse/session seeding still depends on daemon-side Apple catalog or library auth |
+| YouTube Music | Provider-aware session orchestration | Browser handoff | Search, liked-video derived tracks, owned playlist browse, related-track recommendations, local-history-backed recent/top tracks, and local queue control; pause remains intentionally unsupported |
 
 ## Features
 
@@ -60,13 +66,13 @@ At runtime, Harmon is explicitly provider-aware:
 - ✅ **Two-phase ranking algorithm**: Binary filtering + weighted scoring
 - ✅ **Audio feature analysis**: Energy, instrumentalness, tempo, valence, acousticness
 - ✅ **Recency penalties**: Prevent track/artist repetition
-- ✅ **Multi-source candidates**: Liked tracks, top tracks, playlists, recommendations, discovery
+- ✅ **Multi-source candidates**: Liked tracks, playlists, recommendations, discovery, and provider-specific recent-play signals
 - ✅ **Provider adapters**: Shared contract layer for Spotify, Apple Music, and YouTube Music packages
 
 ### Current Provider Notes
 - Spotify is the strongest end-to-end path for full playback, queue, device, and audio-feature policy control.
-- Apple Music sessions can seed from catalog search, library tracks, playlists, and recent-play-derived personal signals when a user token is configured.
-- YouTube Music sessions can seed from search, liked-library tracks, playlists, and related-track discovery when an access token is configured; they still do not provide native remote pause.
+- Apple Music sessions can seed from catalog search, library tracks, playlists, recent provider history, and Harmon-local top-track history when the daemon has Apple catalog or library auth; playback can run through either local macOS AppleScript or a connected iOS remote companion, and macOS local playback remains the fallback when no companion is connected.
+- YouTube Music sessions can seed from search, liked-video derived tracks, playlists, related-track discovery, and Harmon-local recent/top-track history; browser handoff still reports daemon-managed playback state rather than browser-verified truth.
 
 ### Security & Production Features
 - 🔒 **Rate limiting**: Global (120/min), Auth (5/15min), Commands (30/min)
@@ -117,76 +123,124 @@ At runtime, Harmon is explicitly provider-aware:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Packages
+### Packages And App Verticals
 
-| Package | Description | Status |
+| Surface | Description | Status |
 |---------|-------------|--------|
-| `@athena/harmon-protocol` | Zod schemas for Command, Event, and Policy types | ✅ Production |
-| `@athena/harmon-store` | SQLite persistence layer with migrations | ✅ Production |
-| `@athena/harmon-core` | Core session engine with track ranking & queue management | ✅ Production |
-| `@athena/harmon` | CLI client and terminal interface for harmond | ✅ Production |
-| `@athena/harmon-spotify` | Spotify Web API integration (OAuth, playback, recommendations) | ✅ Production |
-| `@athena/harmon-apple` | Apple Music integration (catalog, playlist tracks, library, provider sessions, macOS local playback routes) | ✅ Production |
-| `@athena/harmon-youtube` | YouTube Music adapter for search, playlist tracks, provider sessions, browser-handoff playback, and session seeding | ✅ Production |
-| `@athena/harmon-logger` | Structured logging with Pino | ✅ Production |
-| `@athena/harmon-crypto` | AES-256-GCM encryption utilities | ✅ Production |
-| `@athena/harmon-flow` | MCP servers for journal analysis and remote OpenAI/ChatGPT app integration | ✅ Production |
-| `@athena/harmond` | Daemon with HTTP+SSE API, rate limiting, auth | ✅ Production |
+| `@sriinnu/harmon-protocol` | Zod schemas for Command, Event, and Policy types | ✅ Production |
+| `@sriinnu/harmon-store` | SQLite persistence layer with migrations | ✅ Production |
+| `@sriinnu/harmon-core` | Core session engine with track ranking & queue management | ✅ Production |
+| `@sriinnu/harmon` | CLI client and terminal interface for harmond | ✅ Production |
+| `@sriinnu/harmon-spotify` | Spotify Web API integration (OAuth, playback, recommendations) | ✅ Production |
+| `@sriinnu/harmon-apple` | Apple Music integration (catalog, playlist tracks, library, provider sessions, and daemon-backed Apple playback modes) | ✅ Production |
+| `@sriinnu/harmon-youtube` | YouTube Music adapter for search, playlist tracks, provider sessions, browser-handoff playback, and session seeding | ✅ Production |
+| `@sriinnu/harmon-logger` | Structured logging with Pino | ✅ Production |
+| `@sriinnu/harmon-crypto` | AES-256-GCM encryption utilities | ✅ Production |
+| `@sriinnu/harmon-flow` | MCP servers for journal analysis and remote OpenAI/ChatGPT app integration | ✅ Production |
+| `@sriinnu/harmond` | Daemon with HTTP+SSE API, rate limiting, auth | ✅ Production |
+| `apps/harmon-companion` | Swift companion vertical with Apple remote bridge, provider-aware daemon browser, and SwiftUI shell for Spotify, Apple Music, and YouTube Music | 🚧 New vertical |
+| `apps/harmon-web` | Small static web app for provider browse, playlists, and playback handoff or daemon-side play | 🚧 New vertical |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Node.js 18+
-- pnpm 8+
+- Node.js 22+
+- pnpm 10+
 - Provider credentials for the providers you want to enable
 
-### Installation
+### 1. Install And Build
 
 ```bash
-# Clone the repository
-git clone https://github.com/athena/harmon.git
+git clone https://github.com/sriinnu/harmon.git
 cd harmon
 
-# Install dependencies
 pnpm install
-
-# Build all packages
 pnpm build
-
-# Start the daemon
-pnpm --filter @athena/harmond start
 ```
 
-### Running harmond
+### 2. Configure The Daemon
 
 ```bash
-# Default configuration (port 17373)
-harmond
-
-# Custom configuration
-harmond --port 8080 --db-path /path/to/harmon.db
-
-# With environment variables
 export HARMON_API_TOKEN=$(openssl rand -base64 32)
 export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-export SPOTIFY_CLIENT_ID="your_client_id"
-export APPLE_MUSIC_DEVELOPER_TOKEN="your_apple_token"
-export YOUTUBE_MUSIC_API_KEY="your_youtube_key"
-harmond
 ```
 
-### Quick Test
+Then add only the providers you actually want:
 
 ```bash
-# Health check
+# Spotify OAuth
+export SPOTIFY_CLIENT_ID="your_client_id"
+export SPOTIFY_REDIRECT_URI="http://127.0.0.1:17373/v1/auth/spotify/callback"
+
+# Apple Music browse and session seeding
+export APPLE_MUSIC_DEVELOPER_TOKEN="your_apple_token"
+
+# Optional Apple iPhone/iPad remote playback companion
+export APPLE_MUSIC_REMOTE_TOKEN="your_remote_companion_token"
+
+# YouTube Music browse and search
+export YOUTUBE_MUSIC_API_KEY="your_youtube_key"
+```
+
+### 3. Authenticate Providers
+
+These commands bootstrap provider auth from the repo root:
+
+```bash
+pnpm auth:spotify
+pnpm auth:apple
+pnpm auth:youtube
+```
+
+I keep provider-pack auth state under `~/.chitragupta/harmon/provider-packs/<pack-id>/` by default. Set `HARMON_PACK_STATE_DIR` if you need a different local root.
+
+### 4. Start The Runtime
+
+```bash
+pnpm start:daemon
+```
+
+### 5. Verify The Runtime
+
+```bash
 curl http://localhost:17373/health
 
-# Get daemon status (requires auth token if set)
 curl -H "Authorization: Bearer $HARMON_API_TOKEN" \
   http://localhost:17373/v1/status
+```
 
-# Start a focus session
+### 6. Pick A Control Surface
+
+```bash
+# Web app
+pnpm start:web
+
+# MCP / remote app surface
+pnpm start:mcp:http
+
+# CLI from the repo checkout
+pnpm --filter @sriinnu/harmon exec harmon --help
+```
+
+### 7. Play Music
+
+```bash
+# Spotify
+pnpm --filter @sriinnu/harmon exec harmon --provider spotify session start --mode focus
+
+# Apple Music
+pnpm --filter @sriinnu/harmon exec harmon --provider apple session start --mode relax
+
+# YouTube Music
+pnpm --filter @sriinnu/harmon exec harmon --provider youtube session start --mode energize
+```
+
+### 8. Raw API Example
+
+```bash
+# Start a focus session over HTTP
+
 curl -X POST http://localhost:17373/v1/command \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $HARMON_API_TOKEN" \
@@ -214,35 +268,20 @@ curl -H "Authorization: Bearer $HARMON_API_TOKEN" \
   http://localhost:17373/v1/events
 ```
 
-### Quick Provider Examples
+### Root Scripts
 
 ```bash
-# Spotify
-harmon --provider spotify session start --mode focus
-
-# Apple Music on macOS
-harmon --provider apple session start --mode relax
-
-# YouTube Music browser-handoff
-harmon --provider youtube session start --mode energize
+pnpm start:daemon
+pnpm start:web
+pnpm start:mcp
+pnpm start:mcp:http
+pnpm auth:spotify
+pnpm auth:apple
+pnpm auth:youtube
+pnpm test:web
+pnpm test:companion
+pnpm check
 ```
-
-### Standalone Provider Pack Auth
-
-Each first-class provider package now ships a local Chitragupta ecosystem profile plus package-scoped auth commands:
-
-```bash
-# Spotify pack
-npm --prefix packages/harmon-spotify run auth
-
-# Apple Music pack
-npm --prefix packages/harmon-apple run auth
-
-# YouTube Music pack
-npm --prefix packages/harmon-youtube run auth
-```
-
-I keep provider-pack auth state under each package’s `.chitragupta-ecosystem/auth/` directory, and each package ships `.chitragupta-ecosystem/.profile.json` so external loaders can discover the auth bootstrap, refresh, status, logo, README, and skill artifacts directly.
 
 ## Security
 
@@ -316,6 +355,7 @@ SPOTIFY_CLIENT_SECRET=your_secret            # Optional for server-side OAuth
 APPLE_MUSIC_DEVELOPER_TOKEN=your_token       # Apple Music developer token
 APPLE_MUSIC_USER_TOKEN=your_token            # Apple Music user token
 APPLE_MUSIC_STOREFRONT=us                    # Storefront (default: us)
+APPLE_MUSIC_REMOTE_TOKEN=your_remote_token   # Optional iOS companion playback token
 
 # YouTube Music Configuration
 YOUTUBE_MUSIC_API_KEY=your_key               # YouTube Data API key
@@ -376,8 +416,8 @@ interface SessionPolicy {
   // Track sources
   sources?: {
     likedTracks?: boolean;        // User's saved tracks
-    topTracks?: boolean;          // User's top tracks
-    recentPlays?: boolean;        // Recently played tracks
+    topTracks?: boolean;          // Spotify provider history or Harmon-local history for Apple/YouTube
+    recentPlays?: boolean;        // Provider recent history or Harmon-local playback history
     searchQueries?: string[];     // Search-seeded candidate collection
     seedPlaylists?: string[];     // Playlist URIs (Spotify, Apple Music, YouTube Music)
     seedArtists?: string[];       // Artist URIs
@@ -440,7 +480,7 @@ interface SessionPolicy {
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/v1/apple/search` | Search Apple Music |
-| GET | `/v1/apple/now-playing` | Current Apple Music track |
+| GET | `/v1/apple/now-playing` | Current Apple Music track from the active Apple playback runtime |
 | GET | `/v1/apple/songs/:id` | Song details |
 | GET | `/v1/apple/albums/:id` | Album details |
 | GET | `/v1/apple/artists/:id` | Artist details |
@@ -449,10 +489,21 @@ interface SessionPolicy {
 | GET | `/v1/apple/library/*` | Library access (songs/albums/playlists) |
 | GET | `/v1/apple/history` | Recent Apple Music tracks |
 | GET | `/v1/apple/recommendations` | Apple recommendations from recent/seed signals |
-| POST | `/v1/apple/play` | Play (AppleScript on macOS, Apple runtime required) |
-| POST | `/v1/apple/pause` | Pause (AppleScript on macOS) |
-| POST | `/v1/apple/next` | Next track (AppleScript on macOS) |
-| POST | `/v1/apple/prev` | Previous track (AppleScript on macOS) |
+| POST | `/v1/apple/play` | Play on the active Apple playback runtime (macOS local or iOS remote companion) |
+| POST | `/v1/apple/pause` | Pause on the active Apple playback runtime |
+| POST | `/v1/apple/next` | Next track on the active Apple playback runtime |
+| POST | `/v1/apple/prev` | Previous track on the active Apple playback runtime |
+| GET | `/v1/apple/remote/status` | Read companion connectivity, pending command count, and remote playback state |
+| POST | `/v1/apple/remote/connect` | Register the active iOS Apple companion |
+| GET | `/v1/apple/remote/commands` | Poll queued Apple remote commands for the companion |
+| POST | `/v1/apple/remote/commands/:id/ack` | Acknowledge one Apple remote command after the companion applies it |
+| POST | `/v1/apple/remote/state` | Push verified Apple remote playback state back into harmond |
+
+Apple remote companion notes:
+- `/v1/apple/remote/*` is authenticated with `APPLE_MUSIC_REMOTE_TOKEN`, not the general daemon API token, when a remote token is configured.
+- Companion polling and state updates act as the remote heartbeat; if they stop for too long, Harmon drops companion-verified playback truth until the device reconnects.
+- This workspace now ships the daemon-side Apple remote bridge and the SwiftUI companion shell in `apps/harmon-companion`. It still does not ship a signed Xcode/iOS app bundle.
+- The companion extends Apple playback targets; it does not replace daemon-side Apple catalog or library auth for Apple browse routes or session seeding.
 
 #### YouTube Music
 | Method | Endpoint | Description |
@@ -463,7 +514,7 @@ interface SessionPolicy {
 | GET | `/v1/youtube/playlists/:id/tracks` | Playlist tracks |
 | GET | `/v1/youtube/library/tracks` | Liked-library tracks (OAuth required) |
 | GET | `/v1/youtube/recommendations` | Related-track recommendations |
-| GET | `/v1/youtube/now-playing` | Current browser-handoff track |
+| GET | `/v1/youtube/now-playing` | Returns the daemon-managed track state with `playbackTruth: "daemon-managed"` |
 | POST | `/v1/youtube/play` | Open/start YouTube Music playback |
 | POST | `/v1/youtube/pause` | Returns `501` in browser-handoff mode |
 | POST | `/v1/youtube/next` | Advance to next queued YouTube track |
@@ -533,7 +584,9 @@ pnpm format
 harmon/
 ├── apps/
 │   ├── harmon-cli/           # CLI package and terminal entrypoint
-│   └── harmond/              # Main daemon application
+│   ├── harmond/              # Main daemon application
+│   ├── harmon-companion/       # Swift iOS companion vertical for Apple remote and multi-provider browse/play
+│   └── harmon-web/             # Small static web app for all three providers
 ├── packages/
 │   ├── harmon-protocol/      # Shared command, event, and policy schemas
 │   ├── harmon-store/         # SQLite persistence and migrations
@@ -554,10 +607,10 @@ Harmon includes MCP (Model Context Protocol) servers for both local stdio toolin
 
 ```bash
 # Start the local stdio server for journal-analysis tools
-pnpm --filter @athena/harmon-flow start
+pnpm --filter @sriinnu/harmon-flow start
 
 # Start the remote streamable HTTP server for ChatGPT/OpenAI app use
-pnpm --filter @athena/harmon-flow start:http
+pnpm --filter @sriinnu/harmon-flow start:http
 ```
 
 ### Stdio MCP Tools
@@ -588,7 +641,7 @@ These tools are exposed by the streamable HTTP server and are the app-facing sur
 | `get_playlist_tracks` | Fetch tracks from a playlist |
 | `get_now_playing` | Read the active track for a provider runtime |
 | `play_music` | Play a track immediately or search and play the first match |
-| `pause_music` | Pause provider playback |
+| `pause_music` | Pause provider playback; YouTube browser-handoff is intentionally unsupported |
 | `next_track` | Skip to the next track |
 | `previous_track` | Return to the previous track |
 | `start_session` | Start a session using the shared `SessionPolicy` contract |
@@ -603,7 +656,7 @@ OpenAI's MCP guidance for ChatGPT apps and API integrations expects a remote MCP
 # Required for daemon-backed tools
 export HARMON_API_TOKEN="your_daemon_token"
 
-# Optional: protect the remote MCP server itself
+# Protect the remote MCP server itself
 export HARMON_MCP_BEARER_TOKEN="your_mcp_token"
 
 # Optional: advertise OAuth metadata for app-review-friendly protected servers
@@ -617,10 +670,12 @@ export HARMON_MCP_PUBLIC_URL="https://harmon.example.com/mcp"
 export HARMON_ENDPOINT="http://127.0.0.1:17373"
 
 # Start remote MCP app server
-pnpm --filter @athena/harmon-flow start:http
+pnpm --filter @sriinnu/harmon-flow start:http
 ```
 
 By default the remote MCP server listens on `http://127.0.0.1:17400/mcp`.
+Without MCP auth, the remote server stays read-only by default. Write tools require OAuth or a bearer token with `harmon.write`, unless you explicitly opt into local-only unauthenticated writes with `HARMON_MCP_ALLOW_UNAUTHENTICATED_WRITES=1`.
+If you enable OAuth JWT mode, `HARMON_MCP_PUBLIC_URL` is required so the protected-resource metadata advertises the real public MCP URL instead of a local bind address.
 Set `HARMON_MCP_HOST`, `HARMON_MCP_PORT`, `HARMON_MCP_PATH`, or `HARMON_MCP_TRANSPORT` to override the runtime contract.
 Set `HARMON_MCP_READ_SCOPES` and `HARMON_MCP_WRITE_SCOPES` if you want different tool-scope boundaries than the defaults (`harmon.read` and `harmon.write`).
 
@@ -633,7 +688,7 @@ Set `HARMON_MCP_READ_SCOPES` and `HARMON_MCP_WRITE_SCOPES` if you want different
    export SPOTIFY_CLIENT_ID="your_client_id"
    export SPOTIFY_CLIENT_SECRET="your_client_secret"  # Optional
    ```
-4. **Start Daemon**: `harmond`
+4. **Start Daemon**: `pnpm start:daemon`
 5. **Get Login URL**: `POST /v1/auth/spotify/login`
 6. **Open in Browser**: Approve access
 7. **Verify**: `GET /v1/status` shows `providers.spotify.status: "ready"`

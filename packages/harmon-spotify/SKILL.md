@@ -38,7 +38,7 @@ harmon-spotify wraps the Spotify Web API behind typed clients for authentication
 
 ## Example
 ```typescript
-import { createSpotifyAuth, createSpotifyClient } from '@athena/harmon-spotify';
+import { createSpotifyAuth, createSpotifyClient } from '@sriinnu/harmon-spotify';
 
 const auth = createSpotifyAuth({ clientId, redirectUri, tokenStore });
 const url = auth.getLoginUrl();

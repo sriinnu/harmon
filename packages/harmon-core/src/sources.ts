@@ -2,7 +2,7 @@
  * Candidate fetching from music providers (provider-agnostic)
  */
 
-import type { TrackInfo } from '@athena/harmon-protocol';
+import type { TrackInfo } from '@sriinnu/harmon-protocol';
 import type { MusicProvider, SourcesConfig, TrackWithFeatures, AudioFeatures } from './types.js';
 
 /** Default features for tracks from providers without audio analysis (Apple Music, YouTube Music) */
@@ -136,7 +136,7 @@ function isExplicitlyUnsupportedSourceError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  return /not implemented/i.test(error.message);
+  return /not implemented|not available/i.test(error.message);
 }
 
 /**

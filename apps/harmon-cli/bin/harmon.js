@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createCLI, getDefaultEndpoint } from '../dist/index.js';
 import {
+  assertSafeAuthImportEndpoint,
   classifyCliError,
   CliUsageError,
   detectDeviceOS,
@@ -65,6 +66,7 @@ function createContext(command) {
   return {
     opts: { ...opts, engine, provider },
     cli: createCLI({ endpoint, token, timeoutMs }),
+    endpoint,
   };
 }
 
@@ -155,6 +157,20 @@ async function runSiloExport(options) {
       }
     });
   });
+}
+
+async function ensureSiloHelperAvailable() {
+  if (process.env.HARMON_SILO_HELPER) {
+    return;
+  }
+
+  try {
+    await fs.access(path.join(siloPackagePath, 'Package.swift'));
+  } catch {
+    throw new CliUsageError(
+      'Browser cookie import without --cookie-path only works from a repo checkout with tools/harmon-silo or when HARMON_SILO_HELPER points to an installed helper.'
+    );
+  }
 }
 
 function normalizeCookies(records) {
@@ -293,6 +309,9 @@ async function searchCatalog(cli, provider, type, query, options) {
   }
 
   if (provider === 'youtube') {
+    if (options?.offset && options.offset > 0) {
+      throw new CliUsageError('YouTube Music search does not support --offset.');
+    }
     const youtubeType = mapYouTubeSearchType(type);
     const result = await cli.youtubeSearch(query, youtubeType, { limit: options?.limit });
     return normalizeYouTubeSearchResult(type, result);
@@ -420,11 +439,12 @@ function searchOutputFormatters(type) {
 }
 
 function normalizeTrackCollection(provider, tracks) {
-  if (!Array.isArray(tracks)) {
+  const collection = Array.isArray(tracks) ? tracks : Array.isArray(tracks?.items) ? tracks.items : [];
+  if (!Array.isArray(collection)) {
     return [];
   }
 
-  return tracks.map((track) => ({
+  return collection.map((track) => ({
     name: track.name,
     artist: track.artist ?? track.artistName ?? '',
     album: track.album ?? track.albumName ?? '',
@@ -440,11 +460,12 @@ function normalizeTrackCollection(provider, tracks) {
 }
 
 function normalizePlaylistCollection(provider, playlists) {
-  if (!Array.isArray(playlists)) {
+  const collection = Array.isArray(playlists) ? playlists : Array.isArray(playlists?.items) ? playlists.items : [];
+  if (!Array.isArray(collection)) {
     return [];
   }
 
-  return playlists.map((playlist) => ({
+  return collection.map((playlist) => ({
     name: playlist.name,
     owner:
       playlist.owner ||
@@ -461,39 +482,6 @@ function normalizePlaylistCollection(provider, playlists) {
           ? `youtube:playlist:${playlist.id}`
           : playlist.uri),
   }));
-}
-
-function defaultSessionSources(provider, mode) {
-  const query =
-    mode === 'relax' ? 'calm instrumental music' :
-    mode === 'energize' ? 'high energy workout music' :
-    mode === 'meditate' ? 'meditation ambient music' :
-    mode === 'workout' ? 'workout mix' :
-    'focus instrumental music';
-
-  if (provider === 'apple') {
-    return {
-      likedTracks: true,
-      recentPlays: true,
-      discovery: { enabled: true, ratio: 0.15 },
-      searchQueries: [query],
-    };
-  }
-
-  if (provider === 'youtube') {
-    return {
-      likedTracks: true,
-      discovery: { enabled: true, ratio: 0.15 },
-      searchQueries: [query],
-    };
-  }
-
-  return {
-    likedTracks: true,
-    topTracks: true,
-    recentPlays: true,
-    discovery: { enabled: true, ratio: 0.15 },
-  };
 }
 
 function isAppleInput(value) {
@@ -777,11 +765,13 @@ auth
   .option('--domain <host>', 'cookie domain', 'spotify.com')
   .action(async (...args) => {
     const command = args[args.length - 1];
-    const { cli, opts } = createContext(command);
+    const { cli, opts, endpoint } = createContext(command);
+    assertSafeAuthImportEndpoint(endpoint);
     let cookies = [];
     if (command.opts().cookiePath) {
       cookies = normalizeCookies(await readCookieFile(command.opts().cookiePath));
     } else {
+      await ensureSiloHelperAvailable();
       const exportResult = await runSiloExport({
         browser: command.opts().browser,
         browserProfile: command.opts().browserProfile,
@@ -910,7 +900,7 @@ program
     const tracks =
       opts.provider === 'apple' ? await cli.appleRecommendations({ limit, seed }) :
       opts.provider === 'youtube' ? await cli.youtubeRecommendations({ limit, seed }) :
-      [];
+      await cli.spotifyRecommendations({ limit, seed });
     const normalized = normalizeTrackCollection(opts.provider, tracks);
     outputResult(opts, normalized, {
       human: (data) => formatTrackLines(data),
@@ -944,7 +934,6 @@ session
       provider: opts.provider,
       mode,
       durationMs,
-      sources: defaultSessionSources(opts.provider, mode),
       hard: {},
       soft: { weights: {} },
     };
@@ -1008,7 +997,7 @@ session
 program
   .command('play [idOrUrl]')
   .description('Play a track/album/playlist')
-  .option('--type <type>', 'type for raw IDs (track|album|playlist|artist|show|episode)')
+  .option('--type <type>', 'type for raw Spotify IDs (track|album|playlist|artist|show|episode)')
   .action(async (idOrUrl, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
@@ -1023,6 +1012,10 @@ program
       !['track', 'album', 'playlist', 'artist', 'show', 'episode'].includes(typeOverride)
     ) {
       throw new CliUsageError('Invalid type. Use track, album, playlist, artist, show, or episode.');
+    }
+
+    if (typeOverride && provider !== 'spotify') {
+      throw new CliUsageError('--type is only supported for raw Spotify IDs in this build.');
     }
 
     if (!idOrUrl) {

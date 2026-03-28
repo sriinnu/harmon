@@ -1,4 +1,4 @@
-# @athena/harmon-crypto
+# @sriinnu/harmon-crypto
 
 ![logo](./logo.svg)
 
@@ -7,13 +7,13 @@
 ## Install
 
 ```bash
-pnpm add @athena/harmon-crypto
+pnpm add @sriinnu/harmon-crypto
 ```
 
 ## Quick Start
 
 ```typescript
-import { createEncryptor } from '@athena/harmon-crypto';
+import { createEncryptor } from '@sriinnu/harmon-crypto';
 
 const enc = createEncryptor({ secret: process.env.HARMON_ENCRYPTION_SECRET! });
 const cipher = enc.encrypt('spotify-refresh-token-value');

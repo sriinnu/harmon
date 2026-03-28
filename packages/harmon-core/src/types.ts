@@ -2,7 +2,7 @@
  * Internal types for harmon-core
  */
 
-import type { TrackInfo, SessionPolicy } from '@athena/harmon-protocol';
+import type { TrackInfo, SessionPolicy } from '@sriinnu/harmon-protocol';
 
 /**
  * Audio features for track ranking.

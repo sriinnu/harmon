@@ -7,6 +7,7 @@ describe('harmon-protocol', () => {
       expect(() => DeviceKind.parse('cli')).not.toThrow()
       expect(() => DeviceKind.parse('menubar')).not.toThrow()
       expect(() => DeviceKind.parse('voice')).not.toThrow()
+      expect(() => DeviceKind.parse('mcp')).not.toThrow()
     })
 
     it('should reject invalid device kinds', () => {
@@ -97,6 +98,7 @@ describe('harmon-protocol', () => {
           artist: 'Artist Name',
           album: 'Album Name',
           durationMs: 123000,
+          playbackTruth: 'verified',
         })
       ).not.toThrow()
     })

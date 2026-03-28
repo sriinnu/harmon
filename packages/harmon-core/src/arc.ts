@@ -2,7 +2,7 @@
  * Energy arc modulation for session progression
  */
 
-import type { EnergyArc } from '@athena/harmon-protocol';
+import type { EnergyArc } from '@sriinnu/harmon-protocol';
 
 /**
  * Calculate energy arc modulation based on session progress

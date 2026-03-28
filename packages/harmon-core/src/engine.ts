@@ -4,7 +4,7 @@
  * Provider-agnostic: works with any MusicProvider + PlaybackController.
  */
 
-import type { SessionPolicy, TrackInfo } from '@athena/harmon-protocol';
+import type { SessionPolicy, TrackInfo } from '@sriinnu/harmon-protocol';
 import type {
   MusicProvider,
   PlaybackController,
@@ -98,27 +98,30 @@ class SessionEngineImpl implements SessionEngine {
       throw new Error('No active session');
     }
 
-    const elapsedMs = Date.now() - this.state.startedAt;
+    const stoppedState = this.state;
+    const elapsedMs = Date.now() - stoppedState.startedAt;
 
     // Stop monitoring
     this.stopRefillMonitoring();
 
+    // Clear the live session before store finalization so a persistence error
+    // cannot strand a ghost in-memory session.
+    this.state = null;
+
     // End session in store
-    await this.store.endSession(this.state.id);
-    await this.store.logEvent('session.stopped', { sessionId: this.state.id }, this.state.id);
+    await this.store.endSession(stoppedState.id);
+    await this.store.logEvent('session.stopped', { sessionId: stoppedState.id }, stoppedState.id);
 
     // Emit event
     this.emit({
       type: 'session.stopped',
       payload: {
-        sessionId: this.state.id,
+        sessionId: stoppedState.id,
         elapsedMs,
         duration: elapsedMs,
         durationMs: elapsedMs,
       },
     });
-
-    this.state = null;
   }
 
   async pause(): Promise<void> {
@@ -146,6 +149,8 @@ class SessionEngineImpl implements SessionEngine {
 
     const sign = direction === 'calmer' ? -1 : 1;
     const policy = this.state.policy;
+    const previousPolicy = policy;
+    const previousQueue = [...this.state.queuedTracks];
 
     // Update soft weights
     const currentWeights = policy.soft?.weights || {};
@@ -176,6 +181,12 @@ class SessionEngineImpl implements SessionEngine {
     // Clear queue and refill with new weights
     this.state.queuedTracks = [];
     await this.refillQueue();
+
+    if (this.state.queuedTracks.length === 0) {
+      this.state.policy = previousPolicy;
+      this.state.queuedTracks = previousQueue;
+      throw new Error('Nudge could not refill the queue with the updated session policy.');
+    }
 
     await this.store.logEvent(
       'session.nudged',
@@ -294,6 +305,15 @@ class SessionEngineImpl implements SessionEngine {
 
     // Remove from queue
     this.state.queuedTracks = this.state.queuedTracks.filter(t => t.id !== track.id);
+
+    await this.store.logEvent(
+      'track.started',
+      {
+        playedAt: record.playedAt,
+        track,
+      },
+      this.state.id,
+    );
   }
 
   private startRefillMonitoring(): void {

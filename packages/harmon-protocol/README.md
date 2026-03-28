@@ -1,4 +1,4 @@
-# @athena/harmon-protocol
+# @sriinnu/harmon-protocol
 
 ![logo](./logo.svg)
 
@@ -7,13 +7,13 @@
 ## Install
 
 ```bash
-pnpm add @athena/harmon-protocol
+pnpm add @sriinnu/harmon-protocol
 ```
 
 ## Quick Start
 
 ```typescript
-import { SessionPolicy, validateCommand, Command } from '@athena/harmon-protocol';
+import { SessionPolicy, validateCommand, Command } from '@sriinnu/harmon-protocol';
 
 const policy = SessionPolicy.parse({ version: 1, mode: 'focus' });
 const cmd = validateCommand({

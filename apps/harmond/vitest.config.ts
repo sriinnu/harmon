@@ -24,13 +24,13 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@athena/harmon-protocol': path.resolve(__dirname, '../../packages/harmon-protocol/src'),
-      '@athena/harmon-store': path.resolve(__dirname, '../../packages/harmon-store/src'),
-      '@athena/harmon-core': path.resolve(__dirname, '../../packages/harmon-core/src'),
-      '@athena/harmon-spotify': path.resolve(__dirname, '../../packages/harmon-spotify/src'),
-      '@athena/harmon-apple': path.resolve(__dirname, '../../packages/harmon-apple/src'),
-      '@athena/harmon-logger': path.resolve(__dirname, '../../packages/harmon-logger/src'),
-      '@athena/harmon-crypto': path.resolve(__dirname, '../../packages/harmon-crypto/src'),
+      '@sriinnu/harmon-protocol': path.resolve(__dirname, '../../packages/harmon-protocol/src'),
+      '@sriinnu/harmon-store': path.resolve(__dirname, '../../packages/harmon-store/src'),
+      '@sriinnu/harmon-core': path.resolve(__dirname, '../../packages/harmon-core/src'),
+      '@sriinnu/harmon-spotify': path.resolve(__dirname, '../../packages/harmon-spotify/src'),
+      '@sriinnu/harmon-apple': path.resolve(__dirname, '../../packages/harmon-apple/src'),
+      '@sriinnu/harmon-logger': path.resolve(__dirname, '../../packages/harmon-logger/src'),
+      '@sriinnu/harmon-crypto': path.resolve(__dirname, '../../packages/harmon-crypto/src'),
     },
   },
 })

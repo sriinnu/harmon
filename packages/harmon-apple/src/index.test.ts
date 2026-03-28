@@ -129,12 +129,9 @@ describe('harmon-apple', () => {
       }),
     });
 
-    await expect(provider.getTopTracks()).resolves.toEqual([
-      expect.objectContaining({
-        id: 'recent-song-1',
-        provider: 'apple',
-      }),
-    ]);
+    await expect(provider.getTopTracks()).rejects.toThrow(
+      'Apple Music top tracks are not available from the current provider contract.',
+    );
     await expect(provider.getRecentlyPlayed()).resolves.toEqual([
       expect.objectContaining({
         id: 'recent-song-1',

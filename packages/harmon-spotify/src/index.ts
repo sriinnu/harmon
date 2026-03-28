@@ -3,8 +3,8 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import type { DeviceInfo, TrackInfo } from '@athena/harmon-protocol';
-import type { MusicProvider, PlaybackController, AudioFeatures as CoreAudioFeatures } from '@athena/harmon-core';
+import type { DeviceInfo, TrackInfo } from '@sriinnu/harmon-protocol';
+import type { MusicProvider, PlaybackController, AudioFeatures as CoreAudioFeatures } from '@sriinnu/harmon-core';
 
 const SPOTIFY_ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';

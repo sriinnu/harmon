@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { rankTracks } from './ranking.js';
 import type { TrackWithFeatures, PlayRecord } from './types.js';
-import type { SessionPolicy } from '@athena/harmon-protocol';
+import type { SessionPolicy } from '@sriinnu/harmon-protocol';
 
 // ============================================================================
 // Test Fixtures

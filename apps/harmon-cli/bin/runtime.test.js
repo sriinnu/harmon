@@ -3,6 +3,7 @@ import {
   classifyCliError,
   CliUsageError,
   detectDeviceOS,
+  assertSafeAuthImportEndpoint,
   EXIT_AUTH,
   EXIT_OK,
   EXIT_NETWORK,
@@ -58,11 +59,29 @@ describe('harmon CLI runtime helpers', () => {
     });
   });
 
+  describe('assertSafeAuthImportEndpoint', () => {
+    it('allows loopback HTTP and HTTPS cookie-import targets', () => {
+      expect(() => assertSafeAuthImportEndpoint('http://127.0.0.1:17373')).not.toThrow();
+      expect(() => assertSafeAuthImportEndpoint('https://harmon.example.com')).not.toThrow();
+    });
+
+    it('rejects insecure remote HTTP cookie-import targets', () => {
+      expect(() => assertSafeAuthImportEndpoint('http://10.0.0.8:17373')).toThrow(
+        'Cookie import only allows loopback HTTP or HTTPS endpoints',
+      );
+    });
+  });
+
   describe('classifyCliError', () => {
     it('maps usage, auth, and network failures to the documented exit codes', () => {
       expect(classifyCliError(new CliUsageError('bad input')).exitCode).toBe(EXIT_USAGE);
       expect(classifyCliError(new Error('401 Unauthorized')).exitCode).toBe(EXIT_AUTH);
       expect(classifyCliError(new Error('fetch failed')).exitCode).toBe(EXIT_NETWORK);
+    });
+
+    it('keeps the auth recovery message provider-agnostic', () => {
+      expect(classifyCliError(new Error('403 Forbidden')).message).toContain('harmon auth status');
+      expect(classifyCliError(new Error('403 Forbidden')).message).not.toContain('harmon auth import');
     });
 
     it('treats Commander parse failures as usage errors', () => {

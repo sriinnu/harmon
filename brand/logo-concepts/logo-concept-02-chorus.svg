@@ -1,0 +1,48 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- I am concept 02: a tiny chorus holding one shared music sheet. -->
+  <rect width="200" height="200" rx="40" fill="#F3E7D4"/>
+
+  <g stroke="#1E1A17" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M28 148C43 138 57 136 73 140"/>
+    <path d="M127 140C143 136 158 138 172 148"/>
+    <path d="M72 62H128L136 70V124H64V70L72 62Z"/>
+    <path d="M128 62V70H136"/>
+    <path d="M79 82C88 76 112 76 121 82"/>
+    <path d="M79 96H121"/>
+    <path d="M79 109C91 104 109 104 121 109"/>
+    <path d="M44 119L64 94"/>
+    <path d="M156 119L136 94"/>
+  </g>
+
+  <g fill="#1E1A17">
+    <circle cx="43" cy="103" r="11"/>
+    <circle cx="100" cy="51" r="12"/>
+    <circle cx="157" cy="103" r="11"/>
+    <path d="M29 126C34 117 50 117 56 126V137H29V126Z"/>
+    <path d="M84 69C89 61 111 61 116 69V80H84V69Z"/>
+    <path d="M144 126C149 117 165 117 171 126V137H144V126Z"/>
+  </g>
+
+  <g stroke="#1E1A17" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40 151L42 136"/>
+    <path d="M50 151L48 136"/>
+    <path d="M95 92V80"/>
+    <path d="M105 92V80"/>
+    <path d="M154 151L152 136"/>
+    <path d="M164 151L166 136"/>
+    <path d="M37 103H38"/>
+    <path d="M48 103H49"/>
+    <path d="M95 51H96"/>
+    <path d="M104 51H105"/>
+    <path d="M151 103H152"/>
+    <path d="M162 103H163"/>
+  </g>
+
+  <g stroke="#1E1A17" stroke-width="2.1" stroke-linecap="round" opacity="0.55">
+    <path d="M28 72L39 69"/>
+    <path d="M161 69L172 72"/>
+    <path d="M88 30C94 26 106 26 112 30"/>
+    <path d="M32 56C37 51 45 50 51 54"/>
+    <path d="M149 53C155 49 163 50 168 55"/>
+  </g>
+</svg>

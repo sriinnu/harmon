@@ -1,7 +1,16 @@
 {
-  "name": "@athena/harmon-logger",
+  "name": "@sriinnu/harmon-logger",
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sriinnu/harmon.git",
+    "directory": "packages/harmon-logger"
+  },
+  "homepage": "https://github.com/sriinnu/harmon/tree/main/packages/harmon-logger#readme",
+  "bugs": {
+    "url": "https://github.com/sriinnu/harmon/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,7 +27,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc -b",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit"
   },

@@ -1,4 +1,4 @@
-# @athena/harmon-core
+# @sriinnu/harmon-core
 
 ![logo](./logo.svg)
 
@@ -7,13 +7,13 @@
 ## Install
 
 ```bash
-pnpm add @athena/harmon-core
+pnpm add @sriinnu/harmon-core
 ```
 
 ## Quick Start
 
 ```typescript
-import { createEngine } from '@athena/harmon-core';
+import { createEngine } from '@sriinnu/harmon-core';
 
 const engine = createEngine({ provider, playback, store });
 await engine.start({ version: 1, mode: 'focus' });

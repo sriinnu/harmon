@@ -36,7 +36,7 @@ harmon-apple provides a typed client for the Apple Music API, covering both the 
 
 ## Example
 ```typescript
-import { createAppleMusicClient, createAppleMusicProvider } from '@athena/harmon-apple';
+import { createAppleMusicClient, createAppleMusicProvider } from '@sriinnu/harmon-apple';
 
 const client = createAppleMusicClient({ developerToken, userToken });
 const results = await client.search('Nils Frahm', ['songs'], { limit: 10 });

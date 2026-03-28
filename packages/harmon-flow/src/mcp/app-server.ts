@@ -11,7 +11,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { SessionPolicy } from '@athena/harmon-protocol';
+import { SessionPolicy } from '@sriinnu/harmon-protocol';
 import { createFlowParser } from '../parser/index.js';
 import { getFlowServerVersion } from '../version.js';
 import type { JournalEntry } from '../types.js';
@@ -23,6 +23,7 @@ import { assertToolScopesFromExtra } from './tool-auth.js';
 
 export interface HarmonAppMCPServerConfig extends DaemonClientConfig {
   allowedHosts?: string[];
+  allowUnauthenticatedWrites?: boolean;
   auth?: HarmonMcpAuthConfig;
   bearerToken?: string;
   daemonClient?: HarmonDaemonAppClient;
@@ -76,6 +77,9 @@ export class HarmonAppMCPServer {
       allowedHosts: config.allowedHosts ?? splitList(process.env.HARMON_MCP_ALLOWED_HOSTS),
       host: this.host,
     });
+    if (this.shouldAllowUnauthenticatedWrites() && !isLoopbackHost(this.host)) {
+      throw new Error('Unauthenticated MCP write tools are only allowed on loopback hosts.');
+    }
     this.app.disable('x-powered-by');
     this.setupHttpRoutes();
     this.registerTools();
@@ -131,6 +135,10 @@ export class HarmonAppMCPServer {
 
   private registerTools(): void {
     const authEnabled = this.auth.mode !== 'none';
+    const canExposeWriteTools = this.auth.canExposeWriteTools || (
+      this.auth.mode === 'none' &&
+      this.shouldAllowUnauthenticatedWrites()
+    );
 
     this.server.registerTool('search', {
       annotations: { openWorldHint: false, readOnlyHint: true, title: 'Search Journal' },
@@ -247,6 +255,10 @@ export class HarmonAppMCPServer {
       });
     });
 
+    if (!canExposeWriteTools) {
+      return;
+    }
+
     this.server.registerTool('play_music', {
       annotations: {
         destructiveHint: false,
@@ -282,12 +294,15 @@ export class HarmonAppMCPServer {
         readOnlyHint: false,
         title: 'Pause Music',
       },
-      description: 'Pause playback for a provider runtime.',
+      description: 'Pause playback for a provider runtime. YouTube browser-handoff does not support pause.',
       inputSchema: {
         provider: z.enum(['spotify', 'apple', 'youtube']),
       },
     }, async ({ provider }, extra) => {
       assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      if (provider === 'youtube') {
+        throw new Error('YouTube Music pause is not supported in browser-handoff mode.');
+      }
       return this.jsonResult(await this.daemonClient.pauseMusic(provider));
     });
 
@@ -374,6 +389,13 @@ export class HarmonAppMCPServer {
       assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
       return this.jsonResult(await this.daemonClient.stopSession());
     });
+  }
+
+  private shouldAllowUnauthenticatedWrites(): boolean {
+    return (
+      this.config.allowUnauthenticatedWrites
+      ?? process.env.HARMON_MCP_ALLOW_UNAUTHENTICATED_WRITES === '1'
+    ) === true;
   }
 
   private async handleMcpRequest(
@@ -515,6 +537,10 @@ function splitList(value: string | undefined): string[] | undefined {
   }
   const entries = value.split(/[,\s]+/).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
   return entries.length > 0 ? entries : undefined;
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === '127.0.0.1' || host === '::1' || host === 'localhost';
 }
 
 function summarizePolicy(policy: SessionPolicy | undefined): Record<string, unknown> | null {

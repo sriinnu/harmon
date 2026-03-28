@@ -22,7 +22,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@athena/harmon-protocol': path.resolve(__dirname, '../harmon-protocol/src'),
+      '@sriinnu/harmon-protocol': path.resolve(__dirname, '../harmon-protocol/src'),
     },
   },
 })

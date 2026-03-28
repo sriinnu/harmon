@@ -22,7 +22,7 @@
   "privacy": {
     "localOnly": true,
     "secretFiles": [
-      "../.chitragupta-ecosystem/auth/apple-music.json"
+      "~/.chitragupta/harmon/provider-packs/harmon-apple/apple-music.json"
     ],
     "notes": [
       "I keep the Apple developer token and user token in one local auth file.",

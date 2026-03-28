@@ -1,8 +1,17 @@
 {
-  "name": "@athena/harmon-spotify",
+  "name": "@sriinnu/harmon-spotify",
   "version": "0.1.0",
   "description": "Spotify API client + OAuth + device control",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sriinnu/harmon.git",
+    "directory": "packages/harmon-spotify"
+  },
+  "homepage": "https://github.com/sriinnu/harmon/tree/main/packages/harmon-spotify#readme",
+  "bugs": {
+    "url": "https://github.com/sriinnu/harmon/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,15 +26,15 @@
     "auth": "node ./dist/auth-cli.js bootstrap",
     "auth:refresh": "node ./dist/auth-cli.js refresh",
     "auth:status": "node ./dist/auth-cli.js status",
-    "build": "tsc",
+    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
-    "test": "vitest",
-    "test:run": "vitest run"
+    "test": "vitest --root ../.. packages/harmon-spotify/src/index.test.ts",
+    "test:run": "vitest --root ../.. run packages/harmon-spotify/src/index.test.ts"
   },
   "dependencies": {
-    "@athena/harmon-protocol": "workspace:*",
-    "@athena/harmon-core": "workspace:*"
+    "@sriinnu/harmon-protocol": "workspace:*",
+    "@sriinnu/harmon-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.0.8",

@@ -1,4 +1,4 @@
-# @athena/harmon-spotify
+# @sriinnu/harmon-spotify
 
 ![logo](./logo.svg)
 
@@ -7,10 +7,12 @@
 ## Install
 
 ```bash
-pnpm add @athena/harmon-spotify
+pnpm add @sriinnu/harmon-spotify
 ```
 
 ## Pack Auth
+
+These commands are for the provider pack checkout or a profile-aware loader that executes inside the pack root. They are not exposed as a global installed binary. From a fresh repo checkout, run `pnpm build` once before you use them.
 
 ```bash
 npm run auth
@@ -18,7 +20,7 @@ npm run auth:status
 npm run auth:refresh
 ```
 
-I keep local auth state in `.chitragupta-ecosystem/auth/spotify.tokens.json` and `.chitragupta-ecosystem/auth/spotify.cookies.json`. I also ship `.chitragupta-ecosystem/.profile.json`, so Chitragupta-style loaders can discover the auth entrypoints, logo, README, and env contract without guessing.
+I keep local auth state in `~/.chitragupta/harmon/provider-packs/harmon-spotify/spotify.tokens.json` and `~/.chitragupta/harmon/provider-packs/harmon-spotify/spotify.cookies.json` by default. Set `HARMON_PACK_STATE_DIR` if you need a different local root. I also ship `.chitragupta-ecosystem/.profile.json`, so Chitragupta-style loaders can discover the auth entrypoints, logo, README, and env contract without guessing.
 
 I support two bootstrap paths:
 
@@ -28,7 +30,7 @@ I support two bootstrap paths:
 ## Quick Start
 
 ```typescript
-import { createSpotifyAuth, createSpotifyClient, createSpotifyProvider } from '@athena/harmon-spotify';
+import { createSpotifyAuth, createSpotifyClient, createSpotifyProvider } from '@sriinnu/harmon-spotify';
 
 const auth = createSpotifyAuth({
   clientId: '...',

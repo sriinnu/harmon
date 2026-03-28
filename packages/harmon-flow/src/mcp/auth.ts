@@ -24,6 +24,7 @@ export interface HarmonMcpAuthConfig {
 }
 
 export interface HarmonMcpAuthContext {
+  canExposeWriteTools: boolean;
   metadata?: AuthMetadataOptions;
   mode: 'none' | 'oauth-jwt' | 'static-bearer';
   readScopes: string[];
@@ -46,11 +47,12 @@ export function createAppAuthContext(options: AppAuthContextOptions): HarmonMcpA
   const auth = resolveAuthConfig(options.auth);
   const readScopes = auth.readScopes ?? DEFAULT_READ_SCOPES;
   const writeScopes = auth.writeScopes ?? DEFAULT_WRITE_SCOPES;
-  const resourceServerUrl = auth.resourceServerUrl ?? options.defaultResourceServerUrl;
 
   if (auth.issuerUrl && auth.authorizationEndpoint && auth.tokenEndpoint && auth.jwksUrl) {
+    const resourceServerUrl = requireUrl(auth.resourceServerUrl, 'HARMON_MCP_PUBLIC_URL');
     return {
-      metadata: createAuthMetadata(auth, resourceServerUrl, [...new Set([...readScopes, ...writeScopes])]),
+      canExposeWriteTools: true,
+      metadata: createAuthMetadata(auth, resourceServerUrl.href, [...new Set([...readScopes, ...writeScopes])]),
       mode: 'oauth-jwt',
       readScopes,
       verifier: createJwtVerifier(auth),
@@ -59,18 +61,18 @@ export function createAppAuthContext(options: AppAuthContextOptions): HarmonMcpA
   }
 
   if (auth.bearerToken) {
+    const bearerTokenScopes = auth.bearerTokenScopes ?? readScopes;
     return {
-      metadata: auth.issuerUrl && auth.authorizationEndpoint && auth.tokenEndpoint
-        ? createAuthMetadata(auth, resourceServerUrl, [...new Set([...readScopes, ...writeScopes])])
-        : undefined,
+      canExposeWriteTools: writeScopes.some((scope) => bearerTokenScopes.includes(scope)),
       mode: 'static-bearer',
       readScopes,
-      verifier: createStaticVerifier(auth.bearerToken, auth.bearerTokenScopes ?? [...new Set([...readScopes, ...writeScopes])]),
+      verifier: createStaticVerifier(auth.bearerToken, bearerTokenScopes),
       writeScopes,
     };
   }
 
   return {
+    canExposeWriteTools: false,
     mode: 'none',
     readScopes: [],
     writeScopes: [],

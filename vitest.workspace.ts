@@ -2,6 +2,7 @@ import { defineWorkspace } from 'vitest/config'
 
 export default defineWorkspace([
   'apps/harmon-cli',
+  'apps/harmon-web',
   'packages/harmon-apple',
   'packages/harmon-flow',
   'packages/harmon-spotify',

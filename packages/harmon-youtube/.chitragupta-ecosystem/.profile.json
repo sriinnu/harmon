@@ -22,7 +22,7 @@
   "privacy": {
     "localOnly": true,
     "secretFiles": [
-      "../.chitragupta-ecosystem/auth/youtube-oauth.json"
+      "~/.chitragupta/harmon/provider-packs/harmon-youtube/youtube-oauth.json"
     ],
     "notes": [
       "I keep Google OAuth state in a local JSON file.",
@@ -92,12 +92,12 @@
   ],
   "capabilities": {
     "authModes": ["google-pkce-oauth", "api-key-catalog-only"],
-    "readSurface": ["search", "liked-library-tracks", "playlists", "playlist-tracks", "related-track-recommendations"],
+    "readSurface": ["search", "liked-video-derived-tracks", "owned-playlists", "playlist-tracks", "related-track-recommendations"],
     "playbackSurface": ["browser-handoff"],
     "sessionSeedSources": ["search", "liked", "playlist", "related"]
   },
   "notes": [
-    "OAuth is the recommended mode because liked tracks and owned playlists require a signed-in user.",
+    "OAuth is the recommended mode because liked-video tracks and owned playlists require a signed-in user.",
     "API-key mode remains useful for read-only search and public metadata."
   ]
 }

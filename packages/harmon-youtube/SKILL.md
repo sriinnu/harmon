@@ -37,7 +37,7 @@ harmon-youtube integrates YouTube Music into the harmon ecosystem through the of
 
 ## Example
 ```typescript
-import { createYouTubeMusicClient, createYouTubeMusicProvider } from '@athena/harmon-youtube';
+import { createYouTubeMusicClient, createYouTubeMusicProvider } from '@sriinnu/harmon-youtube';
 
 const client = createYouTubeMusicClient({ apiKey: 'AIza...' });
 const results = await client.search('Bonobo', ['songs'], { limit: 10 });

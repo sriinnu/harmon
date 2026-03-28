@@ -9,7 +9,7 @@ import type {
   MusicProviderName,
   SessionPolicy,
   TrackInfo,
-} from '@athena/harmon-protocol';
+} from '@sriinnu/harmon-protocol';
 
 export type MusicSearchKind = 'track' | 'song' | 'album' | 'artist' | 'playlist';
 
@@ -56,6 +56,10 @@ type RequestOptions = {
   query?: Record<string, number | string | undefined>;
 };
 
+interface SpotifyPagedPayload<T> {
+  items?: T[];
+}
+
 /**
  * I create a daemon client that stays small enough for MCP-facing tool calls.
  */
@@ -65,7 +69,7 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
   const timeoutMs = config.timeoutMs ?? 10_000;
 
   const requestJson = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
-    const url = new URL(path, endpoint);
+    const url = buildDaemonUrl(endpoint, path);
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) {
         url.searchParams.set(key, String(value));
@@ -146,8 +150,13 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
         : provider === 'apple'
           ? '/v1/apple/library/songs'
           : '/v1/youtube/library/tracks';
-      const result = await requestJson<unknown[]>(path, { query: { limit } });
-      return mapTracks(result, provider, provider === 'spotify' ? 'track' : 'song');
+      const result = provider === 'spotify'
+        ? await requestJson<SpotifyPagedPayload<unknown>>(path, { query: { limit } })
+        : await requestJson<unknown[]>(path, { query: { limit } });
+      const items = provider === 'spotify'
+        ? unwrapSpotifyTrackItems((result as SpotifyPagedPayload<unknown>).items)
+        : result as unknown[];
+      return mapTracks(items, provider, provider === 'spotify' ? 'track' : 'song');
     },
     async listPlaylists(provider, limit) {
       const path = provider === 'spotify'
@@ -155,8 +164,16 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
         : provider === 'apple'
           ? '/v1/apple/library/playlists'
           : '/v1/youtube/playlists';
-      const result = await requestJson<unknown[]>(path, { query: { limit } });
-      return mapCatalogItems(result, provider, 'playlist');
+      const result = provider === 'spotify'
+        ? await requestJson<SpotifyPagedPayload<unknown>>(path, { query: { limit } })
+        : await requestJson<unknown[]>(path, { query: { limit } });
+      return mapCatalogItems(
+        provider === 'spotify'
+          ? (result as SpotifyPagedPayload<unknown>).items ?? []
+          : result as unknown[],
+        provider,
+        'playlist',
+      );
     },
     async getPlaylistTracks(provider, playlistId, limit) {
       const path = provider === 'spotify'
@@ -164,8 +181,16 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
         : provider === 'apple'
           ? `/v1/apple/playlists/${encodeURIComponent(playlistId)}/tracks`
           : `/v1/youtube/playlists/${encodeURIComponent(playlistId)}/tracks`;
-      const result = await requestJson<unknown[]>(path, { query: { limit } });
-      return mapTracks(result, provider, provider === 'spotify' ? 'track' : 'song');
+      const result = provider === 'spotify'
+        ? await requestJson<SpotifyPagedPayload<unknown>>(path, { query: { limit } })
+        : await requestJson<unknown[]>(path, { query: { limit } });
+      return mapTracks(
+        provider === 'spotify'
+          ? unwrapSpotifyTrackItems((result as SpotifyPagedPayload<unknown>).items)
+          : result as unknown[],
+        provider,
+        provider === 'spotify' ? 'track' : 'song',
+      );
     },
     async getNowPlaying(provider) {
       const path = provider === 'spotify'
@@ -235,6 +260,15 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
 }
 
 /**
+ * I preserve any configured daemon base-path prefix instead of letting a
+ * leading slash reset the request back to the origin root.
+ */
+function buildDaemonUrl(endpoint: string, path: string): URL {
+  const base = new URL(endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
+  return new URL(path.replace(/^\//, ''), base);
+}
+
+/**
  * I build a daemon command envelope that matches the shared protocol.
  */
 function createCommand(type: Command['type'], payload?: Record<string, unknown>): Command {
@@ -243,7 +277,7 @@ function createCommand(type: Command['type'], payload?: Record<string, unknown>)
     payload,
     source: {
       device: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux',
-      kind: 'cli',
+      kind: 'mcp' as Command['source']['kind'],
     },
     ts: Date.now(),
     type,
@@ -319,6 +353,23 @@ function mapTracks(
       uri: typeof track.uri === 'string' ? track.uri : defaultTrackUri(provider, kind, typeof track.id === 'string' ? track.id : title),
       url: typeof track.url === 'string' ? track.url : undefined,
     }];
+  });
+}
+
+function unwrapSpotifyTrackItems(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+
+    const wrapped = 'track' in item && item.track && typeof item.track === 'object'
+      ? item.track
+      : item;
+    return [wrapped];
   });
 }
 

@@ -4,11 +4,11 @@
 
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -38,11 +38,21 @@ interface GoogleTokenPayload {
   token_type?: string;
 }
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const packageRoot = path.resolve(scriptDir, '..');
-const authPath = path.join(packageRoot, '.chitragupta-ecosystem', 'auth', 'youtube-oauth.json');
+const authPath = resolveAuthPath('youtube-oauth.json');
 const tokenUrl = 'https://oauth2.googleapis.com/token';
 const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth';
+
+/**
+ * I keep Google OAuth state under user-local storage instead of the package
+ * tree so installed packs stay immutable and publish-safe.
+ */
+function resolveAuthPath(fileName: string): string {
+  const overrideRoot = process.env.HARMON_PACK_STATE_DIR?.trim();
+  const stateRoot = overrideRoot && overrideRoot.length > 0
+    ? overrideRoot
+    : path.join(os.homedir(), '.chitragupta', 'harmon', 'provider-packs');
+  return path.join(stateRoot, 'harmon-youtube', fileName);
+}
 
 async function readJson<T>(filePath: string): Promise<T | null> {
   try {
@@ -56,12 +66,13 @@ async function readJson<T>(filePath: string): Promise<T | null> {
 }
 
 async function writeJson(filePath: string, value: JsonValue | null): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
+  await mkdir(path.dirname(filePath), { mode: 0o700, recursive: true });
   if (value == null) {
     await rm(filePath, { force: true });
     return;
   }
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await chmod(filePath, 0o600);
 }
 
 async function openUrl(url: string): Promise<void> {
@@ -173,7 +184,11 @@ async function validateYouTube(state: YouTubeAuthState | null, apiKey?: string):
 /**
  * I wait for the localhost Google OAuth callback and exchange the auth code.
  */
-async function waitForCallback(config: YouTubePackConfig, verifier: string): Promise<GoogleTokenPayload> {
+async function waitForCallback(
+  config: YouTubePackConfig,
+  verifier: string,
+  expectedState: string,
+): Promise<GoogleTokenPayload> {
   const redirectUrl = new URL(config.redirectUri);
   return await new Promise<GoogleTokenPayload>((resolve, reject) => {
     const server = createServer((request, response) => {
@@ -183,9 +198,22 @@ async function waitForCallback(config: YouTubePackConfig, verifier: string): Pro
         return;
       }
       const code = requestUrl.searchParams.get('code');
+      const state = requestUrl.searchParams.get('state');
       if (!code) {
         response.writeHead(400).end('Missing code');
         reject(new Error('Google OAuth callback did not include a code.'));
+        server.close();
+        return;
+      }
+      if (!state) {
+        response.writeHead(400).end('Missing state');
+        reject(new Error('Google OAuth callback did not include a state parameter.'));
+        server.close();
+        return;
+      }
+      if (state !== expectedState) {
+        response.writeHead(400).end('Invalid state');
+        reject(new Error('Google OAuth state did not match the login attempt.'));
         server.close();
         return;
       }
@@ -234,6 +262,7 @@ async function bootstrap(): Promise<void> {
     throw new Error('Set YOUTUBE_MUSIC_CLIENT_ID for OAuth bootstrap, or configure YOUTUBE_MUSIC_API_KEY for catalog-only mode.');
   }
   const { verifier, challenge } = createPkcePair();
+  const oauthState = randomBytes(24).toString('base64url');
   const url = new URL(authUrl);
   url.searchParams.set('client_id', config.clientId);
   url.searchParams.set('redirect_uri', config.redirectUri);
@@ -243,11 +272,12 @@ async function bootstrap(): Promise<void> {
   url.searchParams.set('prompt', 'consent');
   url.searchParams.set('code_challenge', challenge);
   url.searchParams.set('code_challenge_method', 'S256');
+  url.searchParams.set('state', oauthState);
   console.error(`YouTube Music login URL: ${url.toString()}`);
-  const callback = waitForCallback(config, verifier);
+  const callback = waitForCallback(config, verifier, oauthState);
   await openUrl(url.toString());
   const payload = await callback;
-  const state: YouTubeAuthState = {
+  const authState: YouTubeAuthState = {
     provider: 'youtube-music',
     updatedAt: new Date().toISOString(),
     accessToken: payload.access_token,
@@ -256,9 +286,9 @@ async function bootstrap(): Promise<void> {
     scope: payload.scope || config.scopes.join(' '),
     tokenType: payload.token_type || 'Bearer',
   };
-  await validateYouTube(state, config.apiKey);
-  await writeJson(authPath, state as unknown as JsonValue);
-  await printStatus(state, 'bootstrapped', config.apiKey);
+  await validateYouTube(authState, config.apiKey);
+  await writeJson(authPath, authState as unknown as JsonValue);
+  await printStatus(authState, 'bootstrapped', config.apiKey);
 }
 
 async function refresh(): Promise<void> {

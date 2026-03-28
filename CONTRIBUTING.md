@@ -34,7 +34,7 @@ apps/
 ```bash
 pnpm test              # Run all tests
 pnpm test:run          # Run once (no watch)
-pnpm --filter @athena/harmon-core test  # Single package
+pnpm --filter @sriinnu/harmon-core test  # Single package
 ```
 
 ## Making Changes

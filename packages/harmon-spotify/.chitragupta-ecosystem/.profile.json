@@ -22,8 +22,8 @@
   "privacy": {
     "localOnly": true,
     "secretFiles": [
-      "../.chitragupta-ecosystem/auth/spotify.tokens.json",
-      "../.chitragupta-ecosystem/auth/spotify.cookies.json"
+      "~/.chitragupta/harmon/provider-packs/harmon-spotify/spotify.tokens.json",
+      "~/.chitragupta/harmon/provider-packs/harmon-spotify/spotify.cookies.json"
     ],
     "notes": [
       "I keep Spotify tokens and imported cookies on the local filesystem.",

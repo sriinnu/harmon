@@ -7,10 +7,12 @@
  */
 
 import { execFile } from 'node:child_process';
+import { accessSync, constants as fsConstants } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { promisify } from 'node:util';
-import type { TrackInfo, MusicProviderName } from '@athena/harmon-protocol';
-import type { MusicProvider, PlaybackController } from '@athena/harmon-core';
-import type { AppleMusicClient } from '@athena/harmon-apple';
+import type { TrackInfo, MusicProviderName } from '@sriinnu/harmon-protocol';
+import type { MusicProvider, PlaybackController } from '@sriinnu/harmon-core';
+import type { AppleMusicClient } from '@sriinnu/harmon-apple';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,7 +24,7 @@ export interface ProviderRuntime {
   name: MusicProviderName;
   provider: MusicProvider;
   playback: RuntimePlaybackController;
-  playbackMode: 'native' | 'applescript' | 'browser-handoff';
+  playbackMode: 'native' | 'applescript' | 'browser-handoff' | 'remote';
   autoStartSession: boolean;
 }
 
@@ -40,6 +42,15 @@ export interface SessionStateResetOptions {
 export interface RuntimePlaybackController extends PlaybackController {
   readonly supportsPause: boolean;
   resetSessionState(options?: SessionStateResetOptions): Promise<void>;
+}
+
+/**
+ * I describe whether the host can launch browser-handoff playback.
+ */
+export interface BrowserLaunchSupport {
+  available: boolean;
+  launcher?: 'open' | 'cmd' | 'xdg-open';
+  reason?: string;
 }
 
 /**
@@ -66,6 +77,42 @@ export function createAppleMusicPlaybackController(client: AppleMusicClient): Ru
  */
 export function createYouTubeMusicPlaybackController(): RuntimePlaybackController {
   return new BrowserQueuePlaybackController('youtube');
+}
+
+/**
+ * I check whether the current host can launch browser-handoff playback
+ * without assuming Linux always ships `xdg-open`.
+ */
+export function getBrowserLaunchSupport(
+  platform: NodeJS.Platform = process.platform,
+  pathEnv: string | undefined = process.env.PATH,
+): BrowserLaunchSupport {
+  if (platform === 'darwin') {
+    return { available: true, launcher: 'open' };
+  }
+
+  if (platform === 'win32') {
+    return { available: true, launcher: 'cmd' };
+  }
+
+  if (!pathEnv) {
+    return { available: false, reason: 'Browser handoff requires xdg-open on PATH.' };
+  }
+
+  for (const segment of pathEnv.split(delimiter)) {
+    if (!segment) {
+      continue;
+    }
+
+    try {
+      accessSync(join(segment, 'xdg-open'), fsConstants.X_OK);
+      return { available: true, launcher: 'xdg-open' };
+    } catch {
+      // I keep scanning PATH until I find an executable launcher.
+    }
+  }
+
+  return { available: false, reason: 'Browser handoff requires xdg-open on PATH.' };
 }
 
 class RuntimePlaybackControllerAdapter implements RuntimePlaybackController {
@@ -114,7 +161,7 @@ class RuntimePlaybackControllerAdapter implements RuntimePlaybackController {
   }
 
   async getNowPlaying(): Promise<TrackInfo | null> {
-    return this.playback.getNowPlaying();
+    return withPlaybackTruth(await this.playback.getNowPlaying(), 'verified');
   }
 
   async addToQueue(trackUri: string, track?: TrackInfo): Promise<void> {
@@ -182,7 +229,13 @@ class AppleMusicPlaybackController implements RuntimePlaybackController {
   }
 
   async getNowPlaying(): Promise<TrackInfo | null> {
-    return (await this.readLiveTrack()) ?? this.currentTrack;
+    const liveTrack = await this.readLiveTrack();
+    if (!liveTrack) {
+      this.currentTrack = null;
+      return null;
+    }
+    this.currentTrack = liveTrack;
+    return liveTrack;
   }
 
   async addToQueue(_trackUri: string, track?: TrackInfo): Promise<void> {
@@ -271,6 +324,7 @@ end tell
       artist,
       album: album ?? '',
       durationMs: Math.max(0, Number.parseFloat(durationSeconds || '0') * 1000),
+      playbackTruth: 'verified',
       uri: currentTrackMatchesLiveTrack ? this.currentTrack?.uri : undefined,
       provider: 'apple',
     };
@@ -299,6 +353,7 @@ class BrowserQueuePlaybackController implements RuntimePlaybackController {
     const nextTrack = this.dequeueNextTrack();
     if (!nextTrack) {
       if (this.currentTrack) {
+        await this.playTrack(this.currentTrack, false);
         return;
       }
       throw new Error('YouTube Music queue is empty. Start a session or add tracks before playback.');
@@ -328,7 +383,7 @@ class BrowserQueuePlaybackController implements RuntimePlaybackController {
   }
 
   async getNowPlaying(): Promise<TrackInfo | null> {
-    return this.currentTrack;
+    return withPlaybackTruth(this.currentTrack, 'daemon-managed');
   }
 
   async addToQueue(_trackUri: string, track?: TrackInfo): Promise<void> {
@@ -355,17 +410,18 @@ class BrowserQueuePlaybackController implements RuntimePlaybackController {
       throw new Error('YouTube Music track could not be resolved to a playable URL.');
     }
 
-    if (rememberCurrent && this.currentTrack) {
-      this.history.push(this.currentTrack);
-    }
-
-    this.currentTrack = {
+    const nextTrack: TrackInfo = {
       ...track,
       uri: url,
       provider: this.provider,
     };
 
     await openUrl(url);
+
+    if (rememberCurrent && this.currentTrack) {
+      this.history.push(this.currentTrack);
+    }
+    this.currentTrack = nextTrack;
   }
 }
 
@@ -430,15 +486,34 @@ function escapeAppleScriptString(value: string): string {
 }
 
 async function openUrl(url: string): Promise<void> {
-  if (process.platform === 'darwin') {
+  const support = getBrowserLaunchSupport();
+  if (!support.available || !support.launcher) {
+    throw new Error(support.reason ?? 'Browser handoff is not available on this host.');
+  }
+
+  if (support.launcher === 'open') {
     await execFileAsync('open', [url]);
     return;
   }
 
-  if (process.platform === 'win32') {
+  if (support.launcher === 'cmd') {
     await execFileAsync('cmd', ['/c', 'start', '', url]);
     return;
   }
 
   await execFileAsync('xdg-open', [url]);
+}
+
+function withPlaybackTruth(
+  track: TrackInfo | null,
+  playbackTruth: NonNullable<TrackInfo['playbackTruth']>,
+): TrackInfo | null {
+  if (!track) {
+    return null;
+  }
+
+  return {
+    ...track,
+    playbackTruth,
+  };
 }

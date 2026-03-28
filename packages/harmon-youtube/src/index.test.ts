@@ -325,12 +325,9 @@ describe('harmon-youtube', () => {
 
     const provider = createYouTubeMusicProvider(createYouTubeMusicClient({ accessToken: 'yt-token' }));
 
-    await expect(provider.getTopTracks({ limit: 1 })).resolves.toEqual([
-      expect.objectContaining({
-        id: 'affinity-video-1',
-        provider: 'youtube',
-      }),
-    ]);
+    await expect(provider.getTopTracks({ limit: 1 })).rejects.toThrow(
+      'YouTube Music top tracks are not available from the official provider contract.',
+    );
     await expect(provider.getRecentlyPlayed({ limit: 1 })).resolves.toEqual([
       expect.objectContaining({
         id: 'affinity-video-1',

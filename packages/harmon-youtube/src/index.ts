@@ -7,8 +7,8 @@
  * private YouTube Music endpoints that would make the runtime brittle.
  */
 
-import type { TrackInfo } from '@athena/harmon-protocol';
-import type { MusicProvider, AudioFeatures } from '@athena/harmon-core';
+import type { TrackInfo } from '@sriinnu/harmon-protocol';
+import type { MusicProvider, AudioFeatures } from '@sriinnu/harmon-core';
 
 const YT_DATA_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
@@ -493,11 +493,12 @@ export class YouTubeMusicProvider implements MusicProvider {
   }
 
   /**
-   * I treat liked-library order as the strongest durable affinity signal the
-   * official YouTube Data API exposes to this runtime.
+   * I reject synthetic top-track semantics so the YouTube provider stays
+   * aligned with what the official API actually exposes.
    */
   async getTopTracks(options?: { limit?: number }): Promise<TrackInfo[]> {
-    return this.getLibraryTracks(options);
+    void options;
+    throw new Error('YouTube Music top tracks are not available from the official provider contract. Use recently played or library tracks instead.');
   }
 
   async getRecentlyPlayed(options?: { limit?: number }): Promise<TrackInfo[]> {

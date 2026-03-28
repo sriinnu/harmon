@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DaemonStatus, SessionPolicy, TrackInfo } from '@athena/harmon-protocol';
+import type { DaemonStatus, SessionPolicy, TrackInfo } from '@sriinnu/harmon-protocol';
 import { HarmonAppMCPServer } from './app-server.js';
 import type { HarmonDaemonAppClient, MusicSearchItem } from './daemon-client.js';
 
@@ -53,12 +53,10 @@ Focused ambient session before deep work.`,
       'list_playlists',
       'get_playlist_tracks',
       'get_now_playing',
+    ]));
+    expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
       'play_music',
-      'pause_music',
-      'next_track',
-      'previous_track',
       'start_session',
-      'nudge_session',
       'stop_session',
     ]));
 
@@ -95,6 +93,7 @@ Focused ambient session before deep work.`,
     const flowDir = createFlowDir(tempDirs);
     const playCalls: Array<{ provider: string; target?: string }> = [];
     const appServer = new HarmonAppMCPServer({
+      allowUnauthenticatedWrites: true,
       daemonClient: createFakeDaemonClient({
         async listPlaylists() {
           return [{
@@ -155,6 +154,37 @@ Focused ambient session before deep work.`,
     await appServer.close();
   });
 
+  it('rejects youtube pause at the tool boundary before touching the daemon client', async () => {
+    const flowDir = createFlowDir(tempDirs);
+    let pauseCalls = 0;
+    const appServer = new HarmonAppMCPServer({
+      allowUnauthenticatedWrites: true,
+      daemonClient: createFakeDaemonClient({
+        async pauseMusic() {
+          pauseCalls += 1;
+          return { success: true };
+        },
+      }),
+      flowDir,
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'harmon-pause-client', version: '1.0.0' });
+
+    await appServer.getMcpServer().connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      arguments: { provider: 'youtube' },
+      name: 'pause_music',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain('YouTube Music pause is not supported in browser-handoff mode.');
+    expect(pauseCalls).toBe(0);
+
+    await client.close();
+    await appServer.close();
+  });
+
   it('passes the shared policy contract through start_session', async () => {
     const policyCalls: SessionPolicy[] = [];
     const flowDir = createFlowDir(tempDirs);
@@ -164,7 +194,11 @@ Focused ambient session before deep work.`,
         return { sessionId: 'sess_1', success: true };
       },
     });
-    const appServer = new HarmonAppMCPServer({ daemonClient, flowDir });
+    const appServer = new HarmonAppMCPServer({
+      allowUnauthenticatedWrites: true,
+      daemonClient,
+      flowDir,
+    });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'harmon-test-client', version: '1.0.0' });
 
@@ -223,7 +257,7 @@ Focused ambient session before deep work.`,
     await appServer.close();
   });
 
-  it('advertises OAuth-style metadata and challenges unauthenticated MCP requests', async () => {
+  it('keeps static bearer mode separate from OAuth protected-resource metadata', async () => {
     const flowDir = createFlowDir(tempDirs);
     const appServer = new HarmonAppMCPServer({
       auth: {
@@ -243,17 +277,11 @@ Focused ambient session before deep work.`,
     await appServer.start();
 
     const metadataResponse = await fetch('http://127.0.0.1:17402/.well-known/oauth-protected-resource/mcp');
-    expect(metadataResponse.status).toBe(200);
-    expect(await metadataResponse.json()).toMatchObject({
-      authorization_servers: ['https://auth.example.com/'],
-      resource: 'http://127.0.0.1:17402/mcp',
-    });
+    expect(metadataResponse.status).toBe(404);
 
     const unauthorizedResponse = await fetch('http://127.0.0.1:17402/mcp');
     expect(unauthorizedResponse.status).toBe(401);
-    expect(unauthorizedResponse.headers.get('www-authenticate')).toContain(
-      'resource_metadata="http://127.0.0.1:17402/.well-known/oauth-protected-resource/mcp"',
-    );
+    expect(unauthorizedResponse.headers.get('www-authenticate')).not.toContain('resource_metadata=');
 
     await appServer.close();
   });
@@ -288,28 +316,48 @@ Focused ambient session before deep work.`,
 
     await client.connect(transport);
 
+    const tools = await client.listTools();
+    expect(tools.tools.some((tool) => tool.name === 'start_session')).toBe(false);
+
     const readResult = await client.callTool({
       arguments: {},
       name: 'get_status',
     });
     expect((parseToolResult(readResult) as { isRunning: boolean }).isRunning).toBe(true);
 
-    const writeResult = await client.callTool({
-      arguments: {
-        policy: {
-          mode: 'focus',
-          provider: 'spotify',
-          sources: { searchQueries: ['deep focus'] },
-          version: 1,
-        },
-      },
-      name: 'start_session',
+    await client.close();
+    await appServer.close();
+  });
+
+  it('keeps unauthenticated remote mode read-only by default', async () => {
+    const flowDir = createFlowDir(tempDirs);
+    const appServer = new HarmonAppMCPServer({
+      daemonClient: createFakeDaemonClient(),
+      flowDir,
     });
-    expect(writeResult.isError).toBe(true);
-    expect(writeResult.content?.[0]?.text).toContain('Token is missing required scopes');
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'harmon-read-only-client', version: '1.0.0' });
+
+    await appServer.getMcpServer().connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const tools = await client.listTools();
+    expect(tools.tools.some((tool) => tool.name === 'play_music')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'start_session')).toBe(false);
 
     await client.close();
     await appServer.close();
+  });
+
+  it('rejects unauthenticated write mode on non-loopback hosts', async () => {
+    const flowDir = createFlowDir(tempDirs);
+
+    expect(() => new HarmonAppMCPServer({
+      allowUnauthenticatedWrites: true,
+      daemonClient: createFakeDaemonClient(),
+      flowDir,
+      host: '0.0.0.0',
+    })).toThrow('Unauthenticated MCP write tools are only allowed on loopback hosts.');
   });
 });
 

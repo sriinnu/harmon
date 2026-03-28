@@ -8,10 +8,10 @@
 import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { HarmonStore } from '@athena/harmon-store';
-import { createEngine, type SessionEngine, type EngineEvent } from '@athena/harmon-core';
-import { createLogger, type Logger } from '@athena/harmon-logger';
-import { createEncryptor, type Encryptor } from '@athena/harmon-crypto';
+import { HarmonStore } from '@sriinnu/harmon-store';
+import { createEngine, type MusicProvider, type SessionEngine, type EngineEvent } from '@sriinnu/harmon-core';
+import { createLogger, type Logger } from '@sriinnu/harmon-logger';
+import { createEncryptor, type Encryptor } from '@sriinnu/harmon-crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type { Socket } from 'node:net';
 import { pathToFileURL } from 'node:url';
@@ -21,12 +21,13 @@ import {
   SessionStartCommand,
   SessionNudgeCommand,
   SessionPolicy,
+  TrackInfo as TrackInfoSchema,
   type Command,
   type Event,
   type DaemonStatus,
   type DeviceInfo,
   type TrackInfo,
-} from '@athena/harmon-protocol';
+} from '@sriinnu/harmon-protocol';
 import {
   createSpotifyAuth,
   createSpotifyClient,
@@ -38,17 +39,17 @@ import {
   type TokenStore,
   type CookieStore,
   type SpotifyCookieRecord,
-} from '@athena/harmon-spotify';
+} from '@sriinnu/harmon-spotify';
 import {
   createAppleMusicClient,
   createAppleMusicProvider,
   type AppleMusicClient,
-} from '@athena/harmon-apple';
+} from '@sriinnu/harmon-apple';
 import {
   createYouTubeMusicClient,
   createYouTubeMusicProvider,
   type YouTubeMusicClient,
-} from '@athena/harmon-youtube';
+} from '@sriinnu/harmon-youtube';
 import {
   ApiError,
   ConfigurationError,
@@ -62,11 +63,21 @@ import {
 import { validateDaemonEnvironment } from './config.js';
 import { getDaemonVersion } from './version.js';
 import {
+  getBrowserLaunchSupport,
   createAppleMusicPlaybackController,
   createRuntimePlaybackController,
   createYouTubeMusicPlaybackController,
+  type BrowserLaunchSupport,
   type ProviderRuntime,
 } from './provider-runtime.js';
+import {
+  createApplePlaybackOnlyProvider,
+  createAppleRemoteBridge,
+  createAppleRemotePlaybackController,
+  createAppleUnifiedPlaybackController,
+  type AppleRemoteBridge,
+} from './apple-remote.js';
+import { createHistoryBackedProvider } from './history-provider.js';
 
 // ============================================================================
 // Configuration
@@ -75,6 +86,7 @@ import {
 const DEFAULT_PORT = 17373;
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_DB_PATH = '.harmon.db';
+const DEFAULT_DEV_CORS_ORIGINS = ['http://127.0.0.1:4173', 'http://localhost:4173'];
 const SSE_HEARTBEAT_MS = 30000;
 const MAX_SSE_CLIENTS = 50;
 const SHUTDOWN_TIMEOUT_MS = 5000;
@@ -106,7 +118,7 @@ interface ProviderStatusDetails {
   name?: string;
   status?: 'missing' | 'configured' | 'ready' | 'degraded';
   auth?: 'none' | 'oauth' | 'cookies' | 'api-key' | 'developer-token' | 'developer-and-user-token';
-  playbackMode?: 'native' | 'applescript' | 'browser-handoff';
+  playbackMode?: 'native' | 'applescript' | 'browser-handoff' | 'remote';
   capabilities?: Record<string, boolean>;
 }
 
@@ -122,6 +134,13 @@ function parseCorsOrigins(value?: string): string[] {
     .split(',')
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
+}
+
+function getDefaultCorsOrigins(nodeEnv?: string): string[] {
+  if (nodeEnv === 'production') {
+    return [];
+  }
+  return [...DEFAULT_DEV_CORS_ORIGINS];
 }
 
 // ============================================================================
@@ -152,7 +171,9 @@ export class Harmond {
   private enableSSE: boolean;
   private appleCatalogEnabled = false;
   private appleLibraryEnabled = false;
-  private applePlaybackEnabled = process.platform === 'darwin';
+  private appleLocalPlaybackEnabled = process.platform === 'darwin';
+  private appleRemoteBridge?: AppleRemoteBridge;
+  private appleRemoteToken?: string;
   private openSockets: Set<Socket> = new Set();
   private sseClients: Set<Response> = new Set();
   private server: ReturnType<express.Application['listen']> | null = null;
@@ -161,6 +182,7 @@ export class Harmond {
   private lastTrackId: string | null = null;
   private spotifyTokenLoadFailure = false;
   private spotifyCookieLoadFailure = false;
+  private youtubeBrowserSupport: BrowserLaunchSupport;
   private youtubeAccessToken?: string;
   private youtubeApiKey?: string;
 
@@ -169,7 +191,10 @@ export class Harmond {
     const envHost = process.env.HARMON_BIND_ADDRESS;
     const envDbPath = process.env.HARMON_DB_PATH;
     const envCorsOrigins = parseCorsOrigins(process.env.HARMON_CORS_ORIGINS);
-    const corsOrigins = config.corsOrigins ?? envCorsOrigins;
+    const configuredCorsOrigins = config.corsOrigins ?? envCorsOrigins;
+    const corsOrigins = configuredCorsOrigins.length > 0
+      ? configuredCorsOrigins
+      : getDefaultCorsOrigins(process.env.NODE_ENV);
 
     this.port = config.port ?? envPort ?? DEFAULT_PORT;
     this.host = config.host || envHost || DEFAULT_HOST;
@@ -229,6 +254,13 @@ export class Harmond {
 
     const appleDeveloperToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
     const appleUserToken = process.env.APPLE_MUSIC_USER_TOKEN;
+    this.appleRemoteToken = process.env.APPLE_MUSIC_REMOTE_TOKEN;
+    const appleRemotePlaybackEnabled =
+      typeof this.appleRemoteToken === 'string' &&
+      this.appleRemoteToken.length > 0;
+    if (appleRemotePlaybackEnabled) {
+      this.appleRemoteBridge = createAppleRemoteBridge();
+    }
     if (appleDeveloperToken) {
       this.appleCatalogEnabled = true;
       this.appleLibraryEnabled =
@@ -239,34 +271,67 @@ export class Harmond {
         userToken: appleUserToken,
         storefront: process.env.APPLE_MUSIC_STOREFRONT || 'us',
       });
-
-      if (this.applePlaybackEnabled) {
-        this.appleRuntime = {
-          name: 'apple',
-          provider: createAppleMusicProvider(this.appleMusicClient),
-          playback: createAppleMusicPlaybackController(this.appleMusicClient),
-          playbackMode: 'applescript',
-          autoStartSession: true,
-        };
-        this.registerRuntime(this.appleRuntime);
-      }
+    }
+    const appleProvider = this.appleMusicClient
+      ? createHistoryBackedProvider({
+          baseProvider: createAppleMusicProvider(this.appleMusicClient),
+          provider: 'apple',
+          recentPlaysMode: 'delegate-or-local',
+          store: this.store,
+        })
+      : createApplePlaybackOnlyProvider();
+    const appleLocalPlayback =
+      this.appleLocalPlaybackEnabled && this.appleMusicClient
+        ? createAppleMusicPlaybackController(this.appleMusicClient)
+        : undefined;
+    const appleRemotePlayback =
+      appleRemotePlaybackEnabled && this.appleRemoteBridge
+        ? createAppleRemotePlaybackController({
+            bridge: this.appleRemoteBridge,
+            client: this.appleMusicClient,
+          })
+        : undefined;
+    if (appleLocalPlayback || appleRemotePlayback) {
+      this.appleRuntime = {
+        name: 'apple',
+        provider: appleProvider,
+        playback:
+          appleLocalPlayback && appleRemotePlayback
+            ? createAppleUnifiedPlaybackController({
+                bridge: this.appleRemoteBridge,
+                local: appleLocalPlayback,
+                remote: appleRemotePlayback,
+              })
+            : appleLocalPlayback ?? appleRemotePlayback!,
+        playbackMode: appleLocalPlayback ? 'applescript' : 'remote',
+        autoStartSession: true,
+      };
+      this.registerRuntime(this.appleRuntime);
     }
 
     this.youtubeAccessToken = process.env.YOUTUBE_MUSIC_ACCESS_TOKEN || process.env.GOOGLE_ACCESS_TOKEN;
     this.youtubeApiKey = process.env.YOUTUBE_MUSIC_API_KEY || process.env.YT_API_KEY;
+    this.youtubeBrowserSupport = getBrowserLaunchSupport();
     if (this.youtubeAccessToken || this.youtubeApiKey) {
       this.youtubeMusicClient = createYouTubeMusicClient({
         accessToken: this.youtubeAccessToken,
         apiKey: this.youtubeApiKey,
       });
-      this.youtubeRuntime = {
-        name: 'youtube',
-        provider: createYouTubeMusicProvider(this.youtubeMusicClient),
-        playback: createYouTubeMusicPlaybackController(),
-        playbackMode: 'browser-handoff',
-        autoStartSession: true,
-      };
-      this.registerRuntime(this.youtubeRuntime);
+      if (this.youtubeBrowserSupport.available) {
+        this.youtubeRuntime = {
+          name: 'youtube',
+          provider: createHistoryBackedProvider({
+            baseProvider: createYouTubeMusicProvider(this.youtubeMusicClient),
+            provider: 'youtube',
+            recentPlaysMode: 'local',
+            store: this.store,
+          }),
+          playback: createYouTubeMusicPlaybackController(),
+          playbackMode: 'browser-handoff',
+          autoStartSession: true,
+        };
+        this.registerRuntime(this.youtubeRuntime);
+      }
     }
 
     this.logger.info({ port: this.port, host: this.host }, 'Daemon initializing');
@@ -677,6 +742,18 @@ export class Harmond {
       catch (error) { this.handleRouteError(res, error); }
     });
 
+    this.app.get('/v1/spotify/recommendations', async (req, res) => {
+      try {
+        const seedTrackIds = await this.resolveSpotifyRecommendationSeeds(
+          typeof req.query.seed === 'string' ? req.query.seed : undefined,
+        );
+        res.json(await this.spotifyRuntime.provider.getRecommendations({
+          seedTrackIds,
+          limit: this.clampNumber(req.query.limit, 1, 50),
+        }));
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
     // Apple Music
     this.app.get('/v1/apple/search', async (req, res) => {
       try {
@@ -748,19 +825,24 @@ export class Harmond {
 
     this.app.get('/v1/apple/history', async (req, res) => {
       try {
-        res.json(await this.getAppleMusicClient().getRecentlyPlayedTracks({ limit: this.clampNumber(req.query.limit, 1, 100) }));
+        res.json(await this.getReadProvider('apple').getRecentlyPlayed({ limit: this.clampNumber(req.query.limit, 1, 100) }));
       } catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.get('/v1/apple/recommendations', async (req, res) => {
       try {
-        const provider = this.getRuntime('apple')?.provider;
-        if (!provider) {
-          throw new ProviderUnavailableError('Apple Music playback is not available on this daemon instance.');
+        if (!this.appleCatalogEnabled) {
+          throw new ProviderUnavailableError('Apple Music is not configured on this daemon instance.');
         }
+        const provider = this.appleRuntime?.provider ?? createAppleMusicProvider(this.getAppleMusicClient());
         const seedTrackIds = typeof req.query.seed === 'string'
           ? req.query.seed.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
           : [];
+        if (seedTrackIds.length === 0 && !this.appleLibraryEnabled) {
+          throw new ProviderUnavailableError(
+            'Apple Music recommendations without an explicit seed require APPLE_MUSIC_USER_TOKEN.',
+          );
+        }
         res.json(await provider.getRecommendations({
           seedTrackIds,
           limit: this.clampNumber(req.query.limit, 1, 50),
@@ -779,6 +861,7 @@ export class Harmond {
     this.app.post('/v1/apple/play', async (req, res) => {
       try {
         const url = this.parseBodyString(req.body?.url);
+        await this.assertProviderReady('apple', 'starting Apple Music playback');
         const playback = this.getPlaybackRuntime('apple').playback;
         await playback.play(url ? { uri: url } : undefined);
         res.json({ success: true });
@@ -786,18 +869,122 @@ export class Harmond {
     });
 
     this.app.post('/v1/apple/pause', async (_req, res) => {
-      try { await this.getPlaybackRuntime('apple').playback.pause(); res.json({ success: true }); }
+      try {
+        await this.assertProviderReady('apple', 'pausing Apple Music playback');
+        await this.getPlaybackRuntime('apple').playback.pause();
+        res.json({ success: true });
+      }
       catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/apple/next', async (_req, res) => {
-      try { await this.getPlaybackRuntime('apple').playback.next(); res.json({ success: true }); }
+      try {
+        await this.assertProviderReady('apple', 'skipping Apple Music playback');
+        await this.getPlaybackRuntime('apple').playback.next();
+        res.json({ success: true });
+      }
       catch (error) { this.handleRouteError(res, error); }
     });
 
     this.app.post('/v1/apple/prev', async (_req, res) => {
-      try { await this.getPlaybackRuntime('apple').playback.previous(); res.json({ success: true }); }
+      try {
+        await this.assertProviderReady('apple', 'rewinding Apple Music playback');
+        await this.getPlaybackRuntime('apple').playback.previous();
+        res.json({ success: true });
+      }
       catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/apple/remote/status', async (_req, res) => {
+      try {
+        res.json(this.getAppleRemoteBridge().getStatus());
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.post('/v1/apple/remote/connect', async (req, res) => {
+      try {
+        const deviceId = this.parseBodyString(req.body?.deviceId);
+        if (!deviceId) {
+          res.status(400).json({ success: false, error: 'Missing deviceId' });
+          return;
+        }
+        res.json({
+          success: true,
+          status: this.getAppleRemoteBridge().registerCompanion({
+            appVersion: this.parseBodyString(req.body?.appVersion),
+            deviceId,
+            name: this.parseBodyString(req.body?.name),
+            platform: this.parseBodyString(req.body?.platform),
+          }),
+        });
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.get('/v1/apple/remote/commands', async (req, res) => {
+      try {
+        const deviceId = this.parseBodyString(req.query.deviceId);
+        if (!deviceId) {
+          res.status(400).json({ success: false, error: 'Missing deviceId' });
+          return;
+        }
+        res.json({
+          commands: this.getAppleRemoteBridge().listCommands(deviceId),
+          success: true,
+        });
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.post('/v1/apple/remote/commands/:id/ack', async (req, res) => {
+      try {
+        const deviceId = this.parseBodyString(req.body?.deviceId);
+        if (!deviceId) {
+          res.status(400).json({ success: false, error: 'Missing deviceId' });
+          return;
+        }
+        this.getAppleRemoteBridge().acknowledgeCommand(deviceId, req.params.id);
+        res.json({ success: true });
+      } catch (error) { this.handleRouteError(res, error); }
+    });
+
+    this.app.post('/v1/apple/remote/state', async (req, res) => {
+      try {
+        const deviceId = this.parseBodyString(req.body?.deviceId);
+        if (!deviceId) {
+          res.status(400).json({ success: false, error: 'Missing deviceId' });
+          return;
+        }
+        const playbackState = this.parseAppleRemotePlaybackState(req.body?.playbackState);
+        const currentTrackResult =
+          req.body?.currentTrack === undefined
+            ? { success: true as const, data: undefined }
+            : req.body?.currentTrack === null
+              ? { success: true as const, data: null }
+              : TrackInfoSchema.safeParse(req.body.currentTrack);
+        if (!currentTrackResult.success) {
+          res.status(400).json({ success: false, error: 'Invalid currentTrack', issues: currentTrackResult.error.issues });
+          return;
+        }
+        if (currentTrackResult.data && currentTrackResult.data.provider && currentTrackResult.data.provider !== 'apple') {
+          res.status(400).json({ success: false, error: 'Apple remote currentTrack must use provider apple' });
+          return;
+        }
+        res.json({
+          success: true,
+          status: this.getAppleRemoteBridge().updateState({
+            ackCommandId: this.parseBodyString(req.body?.ackCommandId),
+            currentTrack:
+              currentTrackResult.data && currentTrackResult.data !== null
+                ? {
+                    ...currentTrackResult.data,
+                    playbackTruth: undefined,
+                    provider: 'apple',
+                  }
+                : currentTrackResult.data,
+            deviceId,
+            playbackState,
+          }),
+        });
+      } catch (error) { this.handleRouteError(res, error); }
     });
 
     // YouTube Music
@@ -842,10 +1029,7 @@ export class Harmond {
 
     this.app.get('/v1/youtube/recommendations', async (req, res) => {
       try {
-        const provider = this.getRuntime('youtube')?.provider;
-        if (!provider) {
-          throw new ProviderUnavailableError('YouTube Music playback is not available on this daemon instance.');
-        }
+        const provider = this.getReadProvider('youtube');
         const seedTrackIds = typeof req.query.seed === 'string'
           ? req.query.seed.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
           : [];
@@ -1014,11 +1198,37 @@ export class Harmond {
     return this.youtubeRuntime ?? null;
   }
 
+  /**
+   * I resolve a provider's read surface even when local playback is not
+   * available on the current host.
+   */
+  private getReadProvider(provider: MusicProviderName): MusicProvider {
+    if (provider === 'spotify') {
+      return this.spotifyRuntime.provider;
+    }
+
+    if (provider === 'apple') {
+      return this.appleRuntime?.provider ?? createHistoryBackedProvider({
+        baseProvider: createAppleMusicProvider(this.getAppleMusicClient()),
+        provider: 'apple',
+        recentPlaysMode: 'delegate-or-local',
+        store: this.store,
+      });
+    }
+
+    return this.youtubeRuntime?.provider ?? createHistoryBackedProvider({
+      baseProvider: createYouTubeMusicProvider(this.getYouTubeMusicClient()),
+      provider: 'youtube',
+      recentPlaysMode: 'local',
+      store: this.store,
+    });
+  }
+
   private getPlaybackRuntime(provider: MusicProviderName): ProviderRuntime {
     const runtime = this.getRuntime(provider);
     if (!runtime) {
       throw new ProviderUnavailableError(
-        `${provider === 'apple' ? 'Apple Music' : 'YouTube Music'} playback is not available on this daemon instance.`,
+        this.getProviderPlaybackUnavailableMessage(provider as Extract<MusicProviderName, 'apple' | 'youtube'>),
       );
     }
     return runtime;
@@ -1062,12 +1272,6 @@ export class Harmond {
     }
 
     if (provider === 'apple') {
-      if ((sources.topTracks || sources.recentPlays || sources.discovery?.enabled) && !this.appleLibraryEnabled) {
-        throw new ValidationError(
-          'Apple Music topTracks, recentPlays, and discovery require APPLE_MUSIC_USER_TOKEN for personal playback history.',
-        );
-      }
-
       if (sources.likedTracks && !this.appleLibraryEnabled) {
         throw new ProviderUnavailableError(
           'Apple Music likedTracks sessions require APPLE_MUSIC_USER_TOKEN to enable the library surface.',
@@ -1077,9 +1281,9 @@ export class Harmond {
       return;
     }
 
-    if ((sources.likedTracks || sources.topTracks || sources.recentPlays) && !this.youtubeAccessToken) {
+    if (sources.likedTracks && !this.youtubeAccessToken) {
       throw new ProviderUnavailableError(
-        'YouTube Music likedTracks, topTracks, and recentPlays require YOUTUBE_MUSIC_ACCESS_TOKEN.',
+        'YouTube Music likedTracks require YOUTUBE_MUSIC_ACCESS_TOKEN.',
       );
     }
   }
@@ -1107,41 +1311,44 @@ export class Harmond {
     policy: SessionPolicy,
   ): Promise<void> {
     const sources = policy.sources ?? {};
+    const providerRuntime = this.getRuntime(provider);
+    if (!providerRuntime) {
+      throw new ProviderUnavailableError(
+        this.getProviderPlaybackUnavailableMessage(provider as Extract<MusicProviderName, 'apple' | 'youtube'>),
+      );
+    }
+    const musicProvider = this.getReadProvider(provider);
 
-    if (provider === 'apple') {
-      const client = this.getAppleMusicClient();
-      if (sources.seedPlaylists?.length) {
-        await client.getPlaylistTracks(this.extractSessionSourceId(sources.seedPlaylists[0]), { limit: 1 });
-        return;
-      }
-      if (sources.topTracks || sources.recentPlays) {
-        await client.getRecentlyPlayedTracks({ limit: 1 });
-        return;
-      }
-      if (sources.likedTracks) {
-        await client.getLibrarySongs({ limit: 1 });
-        return;
-      }
+    const probes: Array<Promise<unknown>> = [];
 
-      const query = sources.searchQueries?.find((value) => typeof value === 'string' && value.trim().length > 0)
-        ?? this.modeSearchQuery(policy.mode);
-      await client.search(query, ['songs'], { limit: 1 });
-      return;
+    if (sources.seedPlaylists?.length) {
+      probes.push(musicProvider.getPlaylistTracks(
+        this.extractSessionSourceId(sources.seedPlaylists[0]),
+        { limit: 1 },
+      ));
+    }
+    if (sources.likedTracks) {
+      probes.push(musicProvider.getLibraryTracks({ limit: 1 }));
+    }
+    if (sources.topTracks) {
+      probes.push(musicProvider.getTopTracks({ limit: 1 }));
+    }
+    if (sources.recentPlays) {
+      probes.push(musicProvider.getRecentlyPlayed({ limit: 1 }));
     }
 
-    if (provider === 'youtube') {
-      const client = this.getYouTubeMusicClient();
-      if (sources.seedPlaylists?.length) {
-        await client.getPlaylistTracks(this.extractSessionSourceId(sources.seedPlaylists[0]), { limit: 1 });
-        return;
-      }
-      if (sources.likedTracks || sources.topTracks || sources.recentPlays) {
-        await client.getLibrarySongs({ limit: 1 });
-        return;
-      }
-      const query = sources.searchQueries?.find((value) => typeof value === 'string' && value.trim().length > 0)
-        ?? this.modeSearchQuery(policy.mode);
-      await client.search(query, ['songs'], { limit: 1 });
+    const query = sources.searchQueries?.find((value) => typeof value === 'string' && value.trim().length > 0)
+      ?? (probes.length === 0 ? this.modeSearchQuery(policy.mode) : undefined);
+    if (query) {
+      probes.push(musicProvider.search(query, 1));
+    }
+
+    if (probes.length === 0) {
+      throw new ValidationError(`No supported session sources were configured for ${provider}.`);
+    }
+
+    for (const probe of probes) {
+      await probe;
     }
   }
 
@@ -1165,6 +1372,39 @@ export class Harmond {
     }
 
     return value;
+  }
+
+  /**
+   * I resolve Spotify recommendation seeds from explicit input first, then fall
+   * back to the strongest personal listening signals the provider exposes.
+   */
+  private async resolveSpotifyRecommendationSeeds(seed: string | undefined): Promise<string[]> {
+    const explicitSeeds = seed
+      ? seed
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0)
+          .map((entry) => this.extractSessionSourceId(entry))
+      : [];
+    if (explicitSeeds.length > 0) {
+      return explicitSeeds.slice(0, 5);
+    }
+
+    const provider = this.spotifyRuntime.provider;
+    const candidates = [
+      ...(await provider.getTopTracks({ limit: 1 })),
+      ...(await provider.getRecentlyPlayed({ limit: 1 })),
+      ...(await provider.getLibraryTracks({ limit: 1 })),
+    ];
+    const fallbackSeedIds = candidates
+      .map((track) => track.id)
+      .filter((trackId, index, all) => typeof trackId === 'string' && trackId.length > 0 && all.indexOf(trackId) === index);
+    if (fallbackSeedIds.length === 0) {
+      throw new ProviderUnavailableError(
+        'Spotify recommendations require a seed track or personal listening history.',
+      );
+    }
+    return fallbackSeedIds.slice(0, 5);
   }
 
   /**
@@ -1192,7 +1432,7 @@ export class Harmond {
 
     if (provider === 'apple') {
       return {
-        likedTracks: true,
+        likedTracks: this.appleLibraryEnabled,
         recentPlays: this.appleLibraryEnabled,
         searchQueries: [modeQuery],
       };
@@ -1285,7 +1525,7 @@ export class Harmond {
     const runtime = this.getRuntime(provider);
     if (!engine || !runtime) {
       throw new ProviderUnavailableError(
-        `${provider === 'apple' ? 'Apple Music' : 'YouTube Music'} playback is not available on this daemon instance.`,
+        this.getProviderPlaybackUnavailableMessage(provider as Extract<MusicProviderName, 'apple' | 'youtube'>),
       );
     }
 
@@ -1296,9 +1536,7 @@ export class Harmond {
 
     const state = engine.getState();
     if (!state || state.queuedTracks.length === 0) {
-      await engine.stop().catch(() => undefined);
-      await this.resetRuntimeState(provider).catch(() => undefined);
-      this.activeProvider = null;
+      await this.rollbackFailedSessionStart(engine, provider);
       throw new ProviderUnavailableError(
         `No tracks were available from ${provider} for this session policy. Adjust the policy sources and try again.`,
       );
@@ -1311,16 +1549,40 @@ export class Harmond {
         await runtime.playback.play();
       }
     } catch (error) {
-      await engine.stop().catch(() => undefined);
-      await this.resetRuntimeState(provider).catch(() => undefined);
-      this.activeProvider = null;
-      this.stopTrackPolling();
+      await this.rollbackFailedSessionStart(engine, provider);
       throw error;
     }
 
     this.activeProvider = provider;
     this.startTrackPolling();
     return { success: true, sessionId };
+  }
+
+  /**
+   * I unwind a failed session start and surface rollback failures instead of
+   * hiding them behind the original startup error.
+   */
+  private async rollbackFailedSessionStart(engine: SessionEngine, provider: MusicProviderName): Promise<void> {
+    const rollbackErrors: unknown[] = [];
+
+    try {
+      await engine.stop();
+    } catch (error) {
+      rollbackErrors.push(error);
+    }
+
+    try {
+      await this.resetRuntimeState(provider);
+    } catch (error) {
+      rollbackErrors.push(error);
+    }
+
+    this.activeProvider = null;
+    this.stopTrackPolling();
+
+    if (rollbackErrors.length > 0) {
+      throw rollbackErrors[0];
+    }
   }
 
   private async stopSession(): Promise<{ success: boolean }> {
@@ -1350,12 +1612,22 @@ export class Harmond {
     const state = engine?.getState();
     if (!state || !engine || !provider || !runtime) throw new SessionNotFoundError();
 
-    await this.assertProviderReady(provider, 'nudging a session');
+    const previousQueue = [...state.queuedTracks];
+    await this.assertProviderReady(provider, 'nudging a session', state.policy);
     await runtime.playback.resetSessionState({
       preserveCurrentTrack: true,
       preserveHistory: true,
     });
-    await engine.nudge(direction, amount);
+    try {
+      await engine.nudge(direction, amount);
+    } catch (error) {
+      for (const track of previousQueue) {
+        if (track.uri) {
+          await runtime.playback.addToQueue(track.uri, track);
+        }
+      }
+      throw error;
+    }
 
     this.broadcastEvent('session.nudged', {
       sessionId: state.id,
@@ -1547,23 +1819,43 @@ export class Harmond {
 
   private requireAuth(req: Request, res: Response, next: NextFunction): void {
     if (req.path === '/auth/spotify/callback') { next(); return; }
+    const token = this.extractAuthorizationToken(req);
+
+    if (req.path.startsWith('/apple/remote')) {
+      const authorized = this.appleRemoteToken
+        ? this.tokensMatch(this.appleRemoteToken, token)
+        : this.tokensMatch(this.apiToken, token);
+      if (authorized) {
+        next();
+        return;
+      }
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
 
     if (!this.apiToken) { next(); return; }
 
-    const authHeader = req.header('authorization') || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
-
-    // HMAC both values to fixed-length, then compare — no length oracle
-    const hmacKey = 'harmon-auth-compare';
-    const expectedMac = createHmac('sha256', hmacKey).update(this.apiToken).digest();
-    const providedMac = createHmac('sha256', hmacKey).update(token).digest();
-
-    if (!timingSafeEqual(expectedMac, providedMac)) {
+    if (!this.tokensMatch(this.apiToken, token)) {
       res.status(401).json({ success: false, error: 'Unauthorized' });
       return;
     }
 
     next();
+  }
+
+  private extractAuthorizationToken(req: Request): string {
+    const authHeader = req.header('authorization') || '';
+    return authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+  }
+
+  private tokensMatch(expected: string | undefined, provided: string): boolean {
+    if (!expected) {
+      return false;
+    }
+    const hmacKey = 'harmon-auth-compare';
+    const expectedMac = createHmac('sha256', hmacKey).update(expected).digest();
+    const providedMac = createHmac('sha256', hmacKey).update(provided).digest();
+    return timingSafeEqual(expectedMac, providedMac);
   }
 
   // ============================================================================
@@ -1801,6 +2093,16 @@ export class Harmond {
     return undefined;
   }
 
+  private parseAppleRemotePlaybackState(value: unknown): 'paused' | 'playing' | 'stopped' | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === 'paused' || value === 'playing' || value === 'stopped') {
+      return value;
+    }
+    throw new ValidationError('Invalid Apple remote playbackState');
+  }
+
   private async assertProviderReady(
     provider: MusicProviderName,
     operation: string,
@@ -1843,8 +2145,30 @@ export class Harmond {
     }
 
     throw new ProviderUnavailableError(
-      `YouTube Music is not ready. Complete setup before ${operation}.`,
+      this.youtubeBrowserSupport.available
+        ? `YouTube Music is not ready. Complete setup before ${operation}.`
+        : `${this.youtubeBrowserSupport.reason ?? 'Browser handoff is not available on this host.'} Complete setup before ${operation}.`,
     );
+  }
+
+  /**
+   * I keep playback-unavailable errors explicit about the missing local runtime.
+   */
+  private getProviderPlaybackUnavailableMessage(
+    provider: Extract<MusicProviderName, 'apple' | 'youtube'>,
+  ): string {
+    if (provider === 'apple') {
+      if (this.appleRemoteBridge) {
+        return this.appleRemoteBridge.isConnected()
+          ? 'Apple Music remote playback is not available on this daemon instance.'
+          : 'Apple Music remote playback is configured, but no iOS companion is connected.';
+      }
+      return 'Apple Music playback is not available on this daemon instance.';
+    }
+
+    return this.youtubeBrowserSupport.reason
+      ? `YouTube Music playback is not available on this daemon instance: ${this.youtubeBrowserSupport.reason}`
+      : 'YouTube Music playback is not available on this daemon instance.';
   }
 
   private parseJournalEntry(value: unknown): JournalEntryInput {
@@ -2014,6 +2338,12 @@ export class Harmond {
    */
   private getAppleProviderStatus(): ProviderStatusDetails {
     const playbackRuntime = this.appleRuntime;
+    const remoteBridgeStatus = this.appleRemoteBridge?.getStatus();
+    const localPlaybackReady =
+      this.appleLocalPlaybackEnabled &&
+      Boolean(this.appleMusicClient);
+    const remotePlaybackReady = Boolean(remoteBridgeStatus?.connected);
+    const playbackReady = localPlaybackReady || remotePlaybackReady;
     const auth =
       this.appleLibraryEnabled
         ? 'developer-and-user-token'
@@ -2023,39 +2353,58 @@ export class Harmond {
     const hasAppleCapability =
       this.appleCatalogEnabled ||
       this.appleLibraryEnabled ||
-      !!playbackRuntime;
+      !!playbackRuntime ||
+      !!this.appleRemoteBridge;
+    const playbackMode =
+      remotePlaybackReady
+        ? 'remote'
+        : localPlaybackReady
+          ? 'applescript'
+          : this.appleRemoteBridge
+            ? 'remote'
+            : playbackRuntime?.playbackMode;
+    const ready = playbackReady;
 
     return {
       connected: hasAppleCapability,
       name: 'Apple Music',
-      status: hasAppleCapability ? 'configured' : 'missing',
+      status: !hasAppleCapability ? 'missing' : ready ? 'ready' : 'configured',
       auth,
-      playbackMode: playbackRuntime ? 'applescript' : undefined,
+      playbackMode,
       capabilities: {
         catalog: this.appleCatalogEnabled,
+        companion: Boolean(remoteBridgeStatus?.connected),
         library: this.appleLibraryEnabled,
-        next: !!playbackRuntime,
-        pause: !!playbackRuntime,
-        previous: !!playbackRuntime,
-        playback: !!playbackRuntime,
-        recommendations: this.appleLibraryEnabled,
-        recentPlays: this.appleLibraryEnabled,
+        next: playbackReady,
+        pause: playbackReady,
+        previous: playbackReady,
+        playback: playbackReady,
+        recommendations: this.appleCatalogEnabled,
+        recentPlays: this.appleCatalogEnabled,
         search: this.appleCatalogEnabled,
-        sessionControl: !!playbackRuntime && (this.appleCatalogEnabled || this.appleLibraryEnabled),
+        sessionControl: playbackReady && (this.appleCatalogEnabled || this.appleLibraryEnabled),
+        topTracks: this.appleCatalogEnabled,
       },
     };
   }
 
+  private getAppleRemoteBridge(): AppleRemoteBridge {
+    if (!this.appleRemoteBridge) {
+      throw new ProviderUnavailableError('Apple Music remote playback is not configured on this daemon instance.');
+    }
+    return this.appleRemoteBridge;
+  }
+
   private getYouTubeProviderStatus(): ProviderStatusDetails {
     const configured = !!this.youtubeMusicClient;
-    const runtime = !!this.youtubeRuntime;
+    const runtime = !!this.youtubeRuntime && this.youtubeBrowserSupport.available;
     const auth: ProviderStatusDetails['auth'] =
       this.youtubeAccessToken ? 'oauth' : this.youtubeApiKey ? 'api-key' : 'none';
 
     return {
       connected: configured,
       name: 'YouTube Music',
-      status: configured ? 'configured' : 'missing',
+      status: !configured ? 'missing' : runtime ? 'ready' : 'configured',
       auth,
       playbackMode: runtime ? 'browser-handoff' : undefined,
       capabilities: {
@@ -2069,8 +2418,8 @@ export class Harmond {
         search: configured,
         sessionControl: runtime && configured,
         songLookup: configured,
-        topTracks: Boolean(this.youtubeAccessToken),
-        recentPlays: Boolean(this.youtubeAccessToken),
+        topTracks: configured,
+        recentPlays: configured,
       },
     };
   }

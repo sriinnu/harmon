@@ -32,7 +32,7 @@ harmon-store provides the persistence layer for the entire harmon system. It man
 
 ## Example
 ```typescript
-import { createStore } from '@athena/harmon-store';
+import { createStore } from '@sriinnu/harmon-store';
 
 const store = await createStore({ dbPath: '.harmon.db' });
 const sessionId = await store.createSession(JSON.stringify(policy));

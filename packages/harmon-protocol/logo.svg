@@ -1,5 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <polygon points="32,4 58,18 58,46 32,60 6,46 6,18" fill="none" stroke="#1a1a2e" stroke-width="2.5"/>
-  <polygon points="32,14 48,23 48,41 32,50 16,41 16,23" fill="none" stroke="#e0a526" stroke-width="2"/>
-  <polygon points="32,24 38,28 38,36 32,40 26,36 26,28" fill="#e0a526"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <!-- I am the protocol mark: two sides exchanging one structured page. -->
+  <rect width="64" height="64" rx="16" fill="#F3E7D4"/>
+  <g stroke="#171513" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M25 17H38L44 23V43H25V17Z"/>
+    <path d="M38 17V23H44"/>
+    <path d="M29 28H39"/>
+    <path d="M29 34H39"/>
+    <path d="M17 31L24 31"/>
+    <path d="M44 31L51 31"/>
+    <circle cx="14" cy="31" r="3"/>
+    <circle cx="54" cy="31" r="3"/>
+  </g>
 </svg>

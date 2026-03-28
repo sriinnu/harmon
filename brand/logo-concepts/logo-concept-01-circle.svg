@@ -1,0 +1,41 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- I am concept 01: one calm listener wrapped in a circular music halo. -->
+  <rect width="200" height="200" rx="40" fill="#F3E7D4"/>
+
+  <g stroke="#1E1A17" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="100" cy="98" r="44"/>
+    <path d="M46 145C60 132 76 127 100 127C124 127 141 132 154 145"/>
+    <path d="M73 70C77 60 87 54 99 54C111 54 121 60 126 70"/>
+    <path d="M56 84C62 77 69 74 76 74"/>
+    <path d="M124 74C132 74 139 77 145 84"/>
+    <path d="M58 112C63 117 69 119 75 119"/>
+    <path d="M126 119C132 119 138 117 143 112"/>
+    <path d="M90 52V38L116 31V62"/>
+    <circle cx="87" cy="55" r="5"/>
+    <circle cx="116" cy="62" r="5"/>
+  </g>
+
+  <g fill="#1E1A17">
+    <circle cx="100" cy="81" r="13"/>
+    <path d="M84 102C89 96 111 96 116 102V112H84V102Z"/>
+  </g>
+
+  <g stroke="#1E1A17" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M81 80C81 69 89 61 100 61C111 61 119 69 119 80"/>
+    <path d="M78 80V88"/>
+    <path d="M122 80V88"/>
+    <path d="M95 86H96"/>
+    <path d="M104 86H105"/>
+    <path d="M94 93C98 96 102 96 106 93"/>
+    <path d="M74 152C83 145 93 142 100 142C107 142 118 145 126 152"/>
+    <path d="M90 112V134"/>
+    <path d="M110 112V134"/>
+  </g>
+
+  <g stroke="#1E1A17" stroke-width="2.1" stroke-linecap="round" opacity="0.6">
+    <path d="M34 55C40 51 47 51 53 56"/>
+    <path d="M145 53C151 49 160 50 166 57"/>
+    <path d="M31 128C37 124 46 124 52 130"/>
+    <path d="M148 130C154 124 163 124 169 129"/>
+  </g>
+</svg>

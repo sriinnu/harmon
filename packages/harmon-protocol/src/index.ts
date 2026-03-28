@@ -9,7 +9,7 @@ import { z } from 'zod';
 // ============================================================================
 
 /** Device type enum */
-export const DeviceKind = z.enum(['cli', 'menubar', 'voice']);
+export const DeviceKind = z.enum(['cli', 'menubar', 'voice', 'mcp']);
 export type DeviceKind = z.infer<typeof DeviceKind>;
 
 /** OS/platform enum */
@@ -207,6 +207,7 @@ export const TrackInfo = z.object({
   provider: z.enum(['spotify', 'apple', 'youtube', 'local']).optional(),
   imageUrl: z.string().optional(),
   isrc: z.string().optional(),
+  playbackTruth: z.enum(['verified', 'daemon-managed']).optional(),
 });
 export type TrackInfo = z.infer<typeof TrackInfo>;
 
@@ -241,7 +242,7 @@ export const ProviderStatus = z.object({
   auth: z
     .enum(['none', 'oauth', 'cookies', 'api-key', 'developer-token', 'developer-and-user-token'])
     .optional(),
-  playbackMode: z.enum(['native', 'applescript', 'browser-handoff']).optional(),
+  playbackMode: z.enum(['native', 'applescript', 'browser-handoff', 'remote']).optional(),
   capabilities: z.record(z.string(), z.boolean()).optional(),
 });
 export type ProviderStatus = z.infer<typeof ProviderStatus>;

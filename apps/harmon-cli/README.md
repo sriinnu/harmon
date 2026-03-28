@@ -1,56 +1,69 @@
-# @athena/harmon
+# @sriinnu/harmon
 
 ![logo](./logo.svg)
 
-> Thin HTTP client for controlling the harmon daemon from the terminal.
+> Thin CLI and TypeScript client for controlling the Harmon daemon from the terminal.
 
 ## Install
 
 ```bash
-pnpm add @athena/harmon
+# Global CLI install
+pnpm add -g @sriinnu/harmon
+
+# Or run it without installing
+pnpm dlx @sriinnu/harmon --help
 ```
 
 ## Quick Start
 
+```bash
+# Start the daemon first
+pnpm start:daemon
+
+# If the daemon is protected
+export HARMON_API_TOKEN="your_harmond_token"
+
+# From an installed CLI
+harmon --help
+harmon status
+harmon --provider spotify session start --mode focus
+
+# From a repo checkout
+pnpm --filter @sriinnu/harmon exec harmon --help
+pnpm --filter @sriinnu/harmon exec harmon --provider youtube search song "late night focus"
+```
+
+Browser-cookie auth import is safest against loopback or HTTPS daemon endpoints. When I am not running from a repo checkout, use `--cookie-path` or set `HARMON_SILO_HELPER` before `harmon auth import`.
+
+## Programmatic Use
+
 ```typescript
-import { createCLI, getDefaultEndpoint } from '@athena/harmon';
+import { createCLI, getDefaultEndpoint } from '@sriinnu/harmon';
 
 const cli = createCLI({ endpoint: getDefaultEndpoint() });
 const status = await cli.status();
-await cli.spotifyPlay({ uri: 'spotify:track:...' });
-await cli.youtubeSearch('focus music', 'songs');
+
 await cli.command({
   id: 'c_1',
   ts: Date.now(),
   source: { kind: 'cli', device: 'macos' },
   type: 'session.start',
-  payload: { policy: { version: 1, provider: 'apple', mode: 'focus' } },
+  payload: { policy: { version: 1, provider: 'spotify', mode: 'focus' } },
 });
 ```
 
-## API
+## API Highlights
 
-| Export | Description |
-|---|---|
-| `createCLI(config)` | Create a CLI client instance |
-| `getDefaultEndpoint()` | Returns `HARMON_ENDPOINT` or `http://127.0.0.1:17373` |
-| `cli.status()` | Get daemon status |
-| `cli.command(cmd)` | Send a command envelope |
-| `cli.devices()` | List playback devices |
-| `cli.spotifyPlay(opts?)` | Play on Spotify |
-| `cli.spotifyPause()` | Pause Spotify |
-| `cli.spotifySearch(query, type)` | Search Spotify catalog |
-| `cli.applePlay(opts?)` | Play on Apple Music |
-| `cli.appleNowPlaying()` | Read Apple Music now-playing state |
-| `cli.youtubePlay(opts?)` | Open YouTube Music playback |
-| `cli.youtubeSearch(query, type)` | Search YouTube Music |
-| `cli.youtubeNowPlaying()` | Read browser-handoff now-playing state |
-| `cli.authLogin()` / `authLogout()` | Manage Spotify auth |
-| `CLIConfig` | `{ endpoint, token?, timeoutMs? }` |
+- `createCLI(config)`: create a typed daemon client
+- `getDefaultEndpoint()`: resolve `HARMON_ENDPOINT` or `http://127.0.0.1:17373`
+- `cli.status()`: read daemon and provider status
+- `cli.command(cmd)`: send a typed command envelope
+- `cli.spotifyPlay()` / `cli.applePlay()` / `cli.youtubePlay()`: provider play helpers
+- `cli.youtubeNowPlaying()`: read daemon-managed YouTube browser-handoff state
 
 ## Architecture
 
-harmon-cli is a stateless HTTP client that sends requests to the harmond daemon. It handles timeout/abort, auth headers, and maps every daemon endpoint to a typed async method. The CLI binary wraps this library with argument parsing and formatted output.
+I am a stateless HTTP client over `harmond`. The TypeScript surface stays thin, and the CLI binary adds argument parsing, output formatting, and provider-aware ergonomics on top of the same daemon contract.
 
 ## License
 

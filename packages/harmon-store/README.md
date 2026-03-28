@@ -1,4 +1,4 @@
-# @athena/harmon-store
+# @sriinnu/harmon-store
 
 ![logo](./logo.svg)
 
@@ -7,13 +7,13 @@
 ## Install
 
 ```bash
-pnpm add @athena/harmon-store
+pnpm add @sriinnu/harmon-store
 ```
 
 ## Quick Start
 
 ```typescript
-import { createStore } from '@athena/harmon-store';
+import { createStore } from '@sriinnu/harmon-store';
 
 const store = await createStore({ dbPath: '.harmon.db' });
 const sessionId = await store.createSession(JSON.stringify(policy));

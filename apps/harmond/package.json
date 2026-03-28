@@ -1,8 +1,17 @@
 {
-  "name": "@athena/harmond",
+  "name": "@sriinnu/harmond",
   "version": "0.1.0",
   "description": "Harmon daemon - multi-provider engine, store, and playback runtime",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sriinnu/harmon.git",
+    "directory": "apps/harmond"
+  },
+  "homepage": "https://github.com/sriinnu/harmon/tree/main/apps/harmond#readme",
+  "bugs": {
+    "url": "https://github.com/sriinnu/harmon/issues"
+  },
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -23,23 +32,23 @@
     "harmond": "./bin/harmond.js"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc -b",
     "dev": "tsc --watch",
     "start": "node ./dist/src/index.js",
     "lint": "tsc --noEmit",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test": "vitest --root ../.. apps/harmond/src",
+    "test:run": "vitest --root ../.. run apps/harmond/src",
+    "test:coverage": "vitest --root ../.. run --coverage apps/harmond/src"
   },
   "dependencies": {
-    "@athena/harmon-protocol": "workspace:*",
-    "@athena/harmon-store": "workspace:*",
-    "@athena/harmon-core": "workspace:*",
-    "@athena/harmon-spotify": "workspace:*",
-    "@athena/harmon-apple": "workspace:*",
-    "@athena/harmon-youtube": "workspace:*",
-    "@athena/harmon-logger": "workspace:*",
-    "@athena/harmon-crypto": "workspace:*",
+    "@sriinnu/harmon-protocol": "workspace:*",
+    "@sriinnu/harmon-store": "workspace:*",
+    "@sriinnu/harmon-core": "workspace:*",
+    "@sriinnu/harmon-spotify": "workspace:*",
+    "@sriinnu/harmon-apple": "workspace:*",
+    "@sriinnu/harmon-youtube": "workspace:*",
+    "@sriinnu/harmon-logger": "workspace:*",
+    "@sriinnu/harmon-crypto": "workspace:*",
     "express": "^5.2.1",
     "express-rate-limit": "^7.5.1",
     "uuid": "^13.0.0"

@@ -3,12 +3,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createPrivateKey, createSign } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createPrivateKey, createSign, randomBytes } from 'node:crypto';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import { createAppleMusicClient } from './index.js';
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -28,6 +28,7 @@ interface ApplePackConfig {
 }
 
 interface AppleBootstrapTokenPayload {
+  state?: string;
   userToken?: string;
   storefront?: string;
 }
@@ -44,9 +45,19 @@ interface AppleAuthState {
   appBuild: string;
 }
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const packageRoot = path.resolve(scriptDir, '..');
-const authPath = path.join(packageRoot, '.chitragupta-ecosystem', 'auth', 'apple-music.json');
+const authPath = resolveAuthPath('apple-music.json');
+
+/**
+ * I keep Apple Music auth state under user-local storage instead of the
+ * package tree so published packs never carry live tokens.
+ */
+function resolveAuthPath(fileName: string): string {
+  const overrideRoot = process.env.HARMON_PACK_STATE_DIR?.trim();
+  const stateRoot = overrideRoot && overrideRoot.length > 0
+    ? overrideRoot
+    : path.join(os.homedir(), '.chitragupta', 'harmon', 'provider-packs');
+  return path.join(stateRoot, 'harmon-apple', fileName);
+}
 
 async function readJson<T>(filePath: string): Promise<T | null> {
   try {
@@ -60,12 +71,13 @@ async function readJson<T>(filePath: string): Promise<T | null> {
 }
 
 async function writeJson(filePath: string, value: JsonValue | null): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
+  await mkdir(path.dirname(filePath), { mode: 0o700, recursive: true });
   if (value == null) {
     await rm(filePath, { force: true });
     return;
   }
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await chmod(filePath, 0o600);
 }
 
 async function openUrl(url: string): Promise<void> {
@@ -159,7 +171,13 @@ async function validateApple(state: AppleAuthState): Promise<void> {
   }
 }
 
-function renderBootstrapPage(developerToken: string, appName: string, appBuild: string): string {
+function renderBootstrapPage(
+  developerToken: string,
+  appName: string,
+  appBuild: string,
+  tokenPath: string,
+  state: string,
+): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -178,6 +196,8 @@ function renderBootstrapPage(developerToken: string, appName: string, appBuild: 
       const developerToken = ${JSON.stringify(developerToken)};
       const appName = ${JSON.stringify(appName)};
       const appBuild = ${JSON.stringify(appBuild)};
+      const state = ${JSON.stringify(state)};
+      const tokenPath = ${JSON.stringify(tokenPath)};
       const status = document.getElementById('status');
       document.getElementById('authorize').addEventListener('click', async () => {
         try {
@@ -185,10 +205,10 @@ function renderBootstrapPage(developerToken: string, appName: string, appBuild: 
           const music = MusicKit.getInstance();
           const userToken = await music.authorize();
           const storefront = music.storefrontId || null;
-          await fetch('/token', {
+          await fetch(tokenPath, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userToken, storefront }),
+            body: JSON.stringify({ state, userToken, storefront }),
           });
           status.textContent = 'Apple Music auth complete. I saved your token locally.';
         } catch (error) {
@@ -205,23 +225,41 @@ function renderBootstrapPage(developerToken: string, appName: string, appBuild: 
  */
 async function captureUserToken(config: ApplePackConfig, developerToken: string): Promise<AppleBootstrapTokenPayload> {
   const bootstrapUrl = new URL(config.bootstrapUrl);
+  const bootstrapState = randomBytes(24).toString('base64url');
+  const tokenPath = bootstrapUrl.pathname === '/'
+    ? '/token'
+    : `${bootstrapUrl.pathname.replace(/\/$/, '')}/token`;
   return new Promise<AppleBootstrapTokenPayload>((resolve, reject) => {
     const server = createServer((request, response) => {
       const requestUrl = new URL(request.url || '/', bootstrapUrl);
       if (request.method === 'GET' && requestUrl.pathname === bootstrapUrl.pathname) {
         response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        response.end(renderBootstrapPage(developerToken, config.appName, config.appBuild));
+        response.end(renderBootstrapPage(
+          developerToken,
+          config.appName,
+          config.appBuild,
+          tokenPath,
+          bootstrapState,
+        ));
         return;
       }
-      if (request.method === 'POST' && requestUrl.pathname === '/token') {
+      if (request.method === 'POST' && requestUrl.pathname === tokenPath) {
         let body = '';
         request.on('data', chunk => { body += chunk.toString(); });
         request.on('end', () => {
           try {
             const payload = JSON.parse(body || '{}') as AppleBootstrapTokenPayload;
+            const origin = request.headers.origin;
+            if (origin && origin !== bootstrapUrl.origin) {
+              throw new Error('Apple Music bootstrap origin did not match the local bootstrap server.');
+            }
+            if (payload.state !== bootstrapState) {
+              throw new Error('Apple Music bootstrap state did not match the login attempt.');
+            }
             response.writeHead(200).end('ok');
             resolve(payload);
           } catch (error) {
+            response.writeHead(400).end('invalid bootstrap request');
             reject(error);
           } finally {
             server.close();
@@ -269,10 +307,15 @@ async function bootstrap(): Promise<void> {
       developerTokenSource: developer.source,
       developerTokenExpiresAt: developer.expiresAt,
     };
-    await validateApple(current);
-    await writeJson(authPath, current as unknown as JsonValue);
-    await printStatus(current, 'already-authenticated');
-    return;
+    try {
+      await validateApple(current);
+      await writeJson(authPath, current as unknown as JsonValue);
+      await printStatus(current, 'already-authenticated');
+      return;
+    } catch {
+      // I fall through to MusicKit bootstrap so rerunning auth can repair an
+      // expired stored user token without requiring an undocumented force flag.
+    }
   }
   console.error(`Apple Music bootstrap URL: ${config.bootstrapUrl}`);
   const tokenPromise = config.userToken

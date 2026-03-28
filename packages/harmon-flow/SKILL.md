@@ -35,7 +35,7 @@ import {
   MarkdownParser,
   PatternGraphBuilder,
   createMCPServer,
-} from '@athena/harmon-flow';
+} from '@sriinnu/harmon-flow';
 
 const parser = new MarkdownParser({ path: './journals' });
 const entries = parser.scanDirectory();

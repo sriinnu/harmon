@@ -9,7 +9,7 @@ import {
   getRecentArtists,
 } from './history.js';
 import type { TrackWithFeatures, PlayRecord } from './types.js';
-import type { RepetitionLimits } from '@athena/harmon-protocol';
+import type { RepetitionLimits } from '@sriinnu/harmon-protocol';
 
 // ============================================================================
 // Test Fixtures
