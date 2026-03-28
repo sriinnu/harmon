@@ -1,11 +1,26 @@
 {
-  "name": "@athena/harmon-protocol",
+  "name": "@sriinnu/harmon-protocol",
   "version": "0.1.0",
   "description": "Command/Event/Policy types + Zod schemas for Harmon",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sriinnu/harmon.git",
+    "directory": "packages/harmon-protocol"
+  },
+  "homepage": "https://github.com/sriinnu/harmon/tree/main/packages/harmon-protocol#readme",
+  "bugs": {
+    "url": "https://github.com/sriinnu/harmon/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "SKILL.md",
+    "logo.svg"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -13,12 +28,12 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test": "vitest --root ../.. packages/harmon-protocol/src/index.test.ts",
+    "test:run": "vitest --root ../.. run packages/harmon-protocol/src/index.test.ts",
+    "test:coverage": "vitest --root ../.. run --coverage packages/harmon-protocol/src/index.test.ts"
   },
   "dependencies": {
     "zod": "^4.3.5"

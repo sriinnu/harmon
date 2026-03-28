@@ -28,7 +28,7 @@ harmon-cli is a stateless HTTP client library that maps every harmond endpoint t
 
 ## Example
 ```typescript
-import { createCLI, getDefaultEndpoint } from '@athena/harmon';
+import { createCLI, getDefaultEndpoint } from '@sriinnu/harmon';
 
 const cli = createCLI({ endpoint: getDefaultEndpoint() });
 await cli.status();

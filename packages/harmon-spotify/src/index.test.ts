@@ -113,4 +113,47 @@ describe('SpotifyAuth', () => {
       }),
     });
   });
+
+  it('keeps multiple login attempts valid until each callback completes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        access_token: 'oauth-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+        refresh_token: 'refresh-token',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = createSpotifyAuth({
+      clientId: 'client-id',
+      redirectUri: 'http://localhost:17373/v1/auth/spotify/callback',
+    });
+
+    const firstLoginUrl = new URL(auth.getLoginUrl());
+    const secondLoginUrl = new URL(auth.getLoginUrl());
+    const firstState = firstLoginUrl.searchParams.get('state');
+    const secondState = secondLoginUrl.searchParams.get('state');
+
+    expect(firstState).toBeTruthy();
+    expect(secondState).toBeTruthy();
+    expect(firstState).not.toBe(secondState);
+
+    await expect(auth.handleCallback('code-one', firstState ?? undefined)).resolves.toBeUndefined();
+    await expect(auth.handleCallback('code-two', secondState ?? undefined)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('includes the scopes required by the exported top-tracks surface', () => {
+    const auth = createSpotifyAuth({
+      clientId: 'client-id',
+      redirectUri: 'http://localhost:17373/v1/auth/spotify/callback',
+    });
+
+    const loginUrl = new URL(auth.getLoginUrl());
+    const scopes = (loginUrl.searchParams.get('scope') || '').split(' ');
+
+    expect(scopes).toContain('user-top-read');
+  });
 });

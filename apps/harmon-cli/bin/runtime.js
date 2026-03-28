@@ -11,11 +11,13 @@ export const EXIT_USAGE = 2;
 export const EXIT_AUTH = 3;
 export const EXIT_NETWORK = 4;
 
-export const PLAYBACK_ENGINES = ['auto', 'web', 'connect', 'applescript'];
+export const PLAYBACK_ENGINES = ['connect', 'applescript'];
+export const SUPPORTED_PROVIDERS = ['spotify', 'apple', 'youtube'];
 export const SESSION_MODES = ['focus', 'relax', 'energize', 'meditate', 'workout', 'custom'];
 export const SPOTIFY_SEARCH_TYPES = ['track', 'album', 'artist', 'playlist', 'episode', 'show'];
 
 const WSL_ENV_KEYS = ['WSL_DISTRO_NAME', 'WSL_INTEROP'];
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
 /**
  * I use a dedicated usage error so local validation failures
@@ -146,6 +148,36 @@ export function validateChoice(value, label, allowed) {
 }
 
 /**
+ * I keep browser-cookie import scoped to loopback HTTP or HTTPS endpoints
+ * unless the operator explicitly opts into a less safe target.
+ *
+ * @param {string} endpoint
+ * @param {boolean} [allowInsecure]
+ * @returns {void}
+ */
+export function assertSafeAuthImportEndpoint(
+  endpoint,
+  allowInsecure = process.env.HARMON_ALLOW_INSECURE_AUTH_IMPORT === '1'
+) {
+  if (allowInsecure) {
+    return;
+  }
+
+  const url = new URL(endpoint);
+  if (url.protocol === 'https:') {
+    return;
+  }
+
+  if (url.protocol === 'http:' && isLoopbackHostname(url.hostname)) {
+    return;
+  }
+
+  throw new CliUsageError(
+    'Cookie import only allows loopback HTTP or HTTPS endpoints. Set HARMON_ALLOW_INSECURE_AUTH_IMPORT=1 to override for local development.'
+  );
+}
+
+/**
  * I normalize the current runtime platform into the protocol's
  * device OS enum so session commands stay valid across hosts.
  *
@@ -164,6 +196,10 @@ export function detectDeviceOS(platform = process.platform, env = process.env) {
     return 'wsl';
   }
   return 'linux';
+}
+
+function isLoopbackHostname(hostname) {
+  return LOOPBACK_HOSTS.has(hostname) || hostname.endsWith('.localhost');
 }
 
 /**
@@ -220,7 +256,7 @@ export function classifyCliError(error, argv = process.argv) {
   if (message.includes('401') || message.includes('403') || message.includes('Unauthorized')) {
     return {
       exitCode: EXIT_AUTH,
-      message: 'Authentication failed. Run "harmon auth import" to authenticate.',
+      message: 'Authentication failed. Run "harmon auth status" to inspect provider auth, then use the provider-specific auth flow if needed.',
       json,
     };
   }

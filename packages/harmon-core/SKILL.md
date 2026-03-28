@@ -34,7 +34,7 @@ harmon-core is the decision-making engine at the heart of harmon. It accepts a S
 
 ## Example
 ```typescript
-import { createEngine } from '@athena/harmon-core';
+import { createEngine } from '@sriinnu/harmon-core';
 
 const engine = createEngine({
   providers: [spotifyProvider],

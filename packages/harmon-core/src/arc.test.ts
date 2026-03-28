@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { calculateArcModulation } from './arc.js';
-import type { EnergyArc } from '@athena/harmon-protocol';
+import type { EnergyArc } from '@sriinnu/harmon-protocol';
 
 // ============================================================================
 // Flat Arc Tests

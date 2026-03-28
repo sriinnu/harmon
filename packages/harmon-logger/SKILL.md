@@ -29,7 +29,7 @@ harmon-logger is a thin factory around Pino that standardizes logging across all
 
 ## Example
 ```typescript
-import { createLogger } from '@athena/harmon-logger';
+import { createLogger } from '@sriinnu/harmon-logger';
 
 const log = createLogger({ name: 'harmond', level: 'debug' });
 log.info({ sessionId: 'sess_abc' }, 'Session started');

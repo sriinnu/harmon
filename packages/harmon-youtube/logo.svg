@@ -1,5 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <rect x="6" y="12" rx="10" ry="10" width="52" height="40" fill="none" stroke="#1a1a2e" stroke-width="2.5"/>
-  <polygon points="26,22 26,42 44,32" fill="#FF0000"/>
-  <polygon points="26,22 26,42 44,32" fill="none" stroke="#1a1a2e" stroke-width="1" opacity="0.3"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <!-- I am the YouTube mark: a browser frame, a play symbol, and handoff motion. -->
+  <rect width="64" height="64" rx="16" fill="#F3E7D4"/>
+  <g stroke="#171513" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="16" y="18" width="32" height="20" rx="8"/>
+    <path d="M29 24L38 28L29 32V24Z"/>
+    <path d="M43 14L49 18"/>
+    <path d="M18 49L20 38"/>
+    <path d="M29 46C35 43 42 43 48 47"/>
+  </g>
+  <g fill="#171513">
+    <circle cx="18" cy="34" r="5"/>
+    <path d="M13 46C15 41 22 41 24 46V51H13V46Z"/>
+  </g>
 </svg>

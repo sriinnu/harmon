@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "id": "harmon-youtube",
+  "name": "Harmon YouTube Music",
+  "version": "0.1.0",
+  "versionHashId": "b86d51855f5d0104",
+  "status": "production",
+  "kind": "provider-pack",
+  "description": "Standalone YouTube Music provider pack for Google OAuth, playlist and library reads, recommendations, and Harmon session seeding.",
+  "packRoot": "..",
+  "author": {
+    "name": "Sriinnu",
+    "email": "hello@srinivas.dev",
+    "github": "sriinnu"
+  },
+  "github": {
+    "repo": "sriinnu/harmon",
+    "url": "https://github.com/sriinnu/harmon",
+    "packagePath": "packages/harmon-youtube"
+  },
+  "privacyKey": "harmon.youtube-music.local-auth",
+  "privacy": {
+    "localOnly": true,
+    "secretFiles": [
+      "~/.chitragupta/harmon/provider-packs/harmon-youtube/youtube-oauth.json"
+    ],
+    "notes": [
+      "I keep Google OAuth state in a local JSON file.",
+      "API-key mode is supported for catalog-only reads, but library and playlist ownership require OAuth."
+    ]
+  },
+  "entrypoints": {
+    "module": {
+      "runtime": "node-esm",
+      "path": "../dist/index.js"
+    },
+    "authBootstrap": {
+      "command": "npm",
+      "args": ["run", "auth"],
+      "cwd": ".."
+    },
+    "authRefresh": {
+      "command": "npm",
+      "args": ["run", "auth:refresh"],
+      "cwd": ".."
+    },
+    "authStatus": {
+      "command": "npm",
+      "args": ["run", "auth:status"],
+      "cwd": ".."
+    }
+  },
+  "artifacts": {
+    "packageJson": "../package.json",
+    "skill": "../SKILL.md",
+    "readme": "../README.md",
+    "logo": "../logo.svg"
+  },
+  "env": [
+    {
+      "name": "YOUTUBE_MUSIC_CLIENT_ID",
+      "required": false,
+      "secret": true,
+      "description": "Google OAuth client ID used by the local PKCE bootstrap."
+    },
+    {
+      "name": "YOUTUBE_MUSIC_CLIENT_SECRET",
+      "required": false,
+      "secret": true,
+      "description": "Optional client secret for desktop-style Google OAuth apps."
+    },
+    {
+      "name": "YOUTUBE_MUSIC_REDIRECT_URI",
+      "required": false,
+      "secret": false,
+      "default": "http://127.0.0.1:8789/callback",
+      "description": "Local callback URL used by npm run auth."
+    },
+    {
+      "name": "YOUTUBE_MUSIC_OAUTH_SCOPES",
+      "required": false,
+      "secret": false,
+      "default": "https://www.googleapis.com/auth/youtube.readonly",
+      "description": "Space-delimited Google scopes requested during bootstrap."
+    },
+    {
+      "name": "YOUTUBE_MUSIC_API_KEY",
+      "required": false,
+      "secret": true,
+      "description": "Optional catalog-only API key for non-user search mode."
+    }
+  ],
+  "capabilities": {
+    "authModes": ["google-pkce-oauth", "api-key-catalog-only"],
+    "readSurface": ["search", "liked-video-derived-tracks", "owned-playlists", "playlist-tracks", "related-track-recommendations"],
+    "playbackSurface": ["browser-handoff"],
+    "sessionSeedSources": ["search", "liked", "playlist", "related"]
+  },
+  "notes": [
+    "OAuth is the recommended mode because liked-video tracks and owned playlists require a signed-in user.",
+    "API-key mode remains useful for read-only search and public metadata."
+  ]
+}

@@ -2,7 +2,7 @@
  * Play history tracking and recency penalty calculation
  */
 
-import type { RepetitionLimits } from '@athena/harmon-protocol';
+import type { RepetitionLimits } from '@sriinnu/harmon-protocol';
 import type { TrackWithFeatures, PlayRecord } from './types.js';
 
 /**

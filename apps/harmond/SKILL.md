@@ -30,7 +30,7 @@ harmond is the long-running background process at the center of harmon. It start
 
 ## Example
 ```typescript
-import { createDaemon } from '@athena/harmond';
+import { createDaemon } from '@sriinnu/harmond';
 
 const daemon = createDaemon({
   port: 17373,

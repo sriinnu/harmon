@@ -38,14 +38,14 @@
 ```bash
 # Start the daemon
 cd /mnt/c/sriinnu/personal/harmon
-pnpm --filter @athena/harmond start
+pnpm --filter @sriinnu/harmond start
 
 # Test health endpoint
 curl http://localhost:17373/health
 
 # Run MCP server
-pnpm --filter @athena/harmon-flow start
+pnpm --filter @sriinnu/harmon-flow start
 
 # Run CLI
-pnpm --filter @athena/harmon -- help
+pnpm --filter @sriinnu/harmon -- help
 ```

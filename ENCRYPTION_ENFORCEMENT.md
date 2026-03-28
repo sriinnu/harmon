@@ -127,7 +127,7 @@ harmond
 ### Encryption Method
 
 - Algorithm: AES-256-GCM (authenticated encryption)
-- Implementation: `@athena/harmon-crypto` package
+- Implementation: `@sriinnu/harmon-crypto` package
 - Storage: Encrypted data stored in SQLite `settings` table
 
 ## Migration Guide

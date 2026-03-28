@@ -95,7 +95,7 @@ All Vitest configurations have `globals: true` enabled, so you don't need to imp
 ### harmon-core
 
 - Environment: Node.js
-- Includes path aliases for `@athena/harmon-protocol`
+- Includes path aliases for `@sriinnu/harmon-protocol`
 - Test files: `src/**/*.{test,spec}.ts`
 
 ### harmon-store

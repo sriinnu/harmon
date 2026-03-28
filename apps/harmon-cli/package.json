@@ -1,11 +1,28 @@
 {
-  "name": "@athena/harmon",
+  "name": "@sriinnu/harmon",
   "version": "0.1.0",
   "description": "CLI client for Harmon daemon",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sriinnu/harmon.git",
+    "directory": "apps/harmon-cli"
+  },
+  "homepage": "https://github.com/sriinnu/harmon/tree/main/apps/harmon-cli#readme",
+  "bugs": {
+    "url": "https://github.com/sriinnu/harmon/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "bin/harmon.js",
+    "bin/runtime.js",
+    "dist/",
+    "README.md",
+    "SKILL.md",
+    "logo.svg"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -16,14 +33,14 @@
     "harmon": "./bin/harmon.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
-    "test": "vitest run ./bin/runtime.test.js",
-    "test:run": "vitest run ./bin/runtime.test.js"
+    "test": "vitest --root ../.. apps/harmon-cli/bin/runtime.test.js apps/harmon-cli/src/index.test.ts",
+    "test:run": "vitest --root ../.. run apps/harmon-cli/bin/runtime.test.js apps/harmon-cli/src/index.test.ts"
   },
   "dependencies": {
-    "@athena/harmon-protocol": "workspace:*",
+    "@sriinnu/harmon-protocol": "workspace:*",
     "commander": "^14.0.2"
   },
   "devDependencies": {

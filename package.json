@@ -2,20 +2,45 @@
   "name": "harmon",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Policy-driven music session manager",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sriinnu/harmon.git"
+  },
+  "homepage": "https://github.com/sriinnu/harmon#readme",
+  "bugs": {
+    "url": "https://github.com/sriinnu/harmon/issues"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
     "build": "turbo run build",
+    "build:web": "pnpm --filter @sriinnu/harmon-web build",
     "dev": "turbo run dev",
-    "lint": "turbo run lint",
+    "lint": "turbo run lint && tsc -p ./tsconfig.scripts.json --noEmit",
+    "start:daemon": "pnpm --filter @sriinnu/harmond start",
+    "start:web": "pnpm --filter @sriinnu/harmon-web start",
+    "start:mcp": "pnpm --filter @sriinnu/harmon-flow start",
+    "start:mcp:http": "pnpm --filter @sriinnu/harmon-flow start:http",
+    "auth:spotify": "pnpm --filter @sriinnu/harmon-spotify auth",
+    "auth:apple": "pnpm --filter @sriinnu/harmon-apple auth",
+    "auth:youtube": "pnpm --filter @sriinnu/harmon-youtube auth",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:web": "pnpm --filter @sriinnu/harmon-web test:run",
+    "test:companion": "cd apps/harmon-companion && swift test --disable-sandbox",
+    "check": "pnpm lint && pnpm test:run && pnpm test:companion && pnpm build && pnpm verify:pack",
+    "verify:pack": "node --experimental-strip-types ./scripts/verify-packages.ts",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml}\""
   },
   "devDependencies": {

@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import { Harmond } from './index.js';
-import type { SessionPolicy } from '@athena/harmon-protocol';
+import type { SessionPolicy } from '@sriinnu/harmon-protocol';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -31,6 +31,44 @@ function createTestDaemon(
     corsOrigins: options.corsOrigins,
     enableSSE: options.enableSSE,
   });
+}
+
+async function withProductionDaemon(
+  run: (daemon: Harmond, app: any) => Promise<void>,
+): Promise<void> {
+  const previousEnv = {
+    HARMON_CORS_ORIGINS: process.env.HARMON_CORS_ORIGINS,
+    HARMON_ENCRYPTION_SECRET: process.env.HARMON_ENCRYPTION_SECRET,
+    NODE_ENV: process.env.NODE_ENV,
+    SPOTIFY_CLIENT_ID: process.env.SPOTIFY_CLIENT_ID,
+    SPOTIFY_REDIRECT_URI: process.env.SPOTIFY_REDIRECT_URI,
+  };
+
+  process.env.NODE_ENV = 'production';
+  process.env.HARMON_ENCRYPTION_SECRET = 'x'.repeat(32);
+  process.env.HARMON_CORS_ORIGINS = 'http://localhost:3000';
+  delete process.env.SPOTIFY_CLIENT_ID;
+  delete process.env.SPOTIFY_REDIRECT_URI;
+
+  const daemon = createTestDaemon({
+    apiToken: TEST_API_TOKEN,
+    corsOrigins: ['http://localhost:3000'],
+  });
+
+  try {
+    await daemon.start();
+    await run(daemon, (daemon as any).app);
+  } finally {
+    await daemon.stop().catch(() => undefined);
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 const mockSessionPolicy: SessionPolicy = {
@@ -101,7 +139,10 @@ const mockAudioFeatures = mockProviderTracks.map((_, index) => ({
 }));
 
 function stubConnectedSpotify(daemon: Harmond): void {
+  const spotifyAuth = (daemon as any).spotifyAuth;
   const spotifyClient = (daemon as any).spotifyClient;
+  vi.spyOn(spotifyAuth, 'getAuthMode').mockReturnValue('oauth');
+  vi.spyOn(spotifyAuth, 'getAccessToken').mockResolvedValue('access-token');
   vi.spyOn(spotifyClient, 'isConnected').mockReturnValue(true);
   vi.spyOn(spotifyClient, 'getSavedTracks').mockResolvedValue({
     items: mockProviderTracks.map((track) => ({ track })),
@@ -111,6 +152,7 @@ function stubConnectedSpotify(daemon: Harmond): void {
   });
   vi.spyOn(spotifyClient, 'getAudioFeatures').mockResolvedValue(mockAudioFeatures);
   vi.spyOn(spotifyClient, 'addToQueue').mockResolvedValue(undefined);
+  vi.spyOn(spotifyClient, 'play').mockResolvedValue(undefined);
   vi.spyOn(spotifyClient, 'next').mockResolvedValue(undefined);
 }
 
@@ -269,6 +311,11 @@ describe('Authentication', () => {
       await daemon.stop();
     });
 
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
     it('rejects cookie payloads without supported Spotify auth cookies', async () => {
       const response = await request(app)
         .post('/v1/auth/spotify/import')
@@ -288,7 +335,18 @@ describe('Authentication', () => {
       expect(response.body.error).toContain('sp_dc');
     });
 
-    it('imports only supported Spotify auth cookies', async () => {
+    it('imports only supported Spotify auth cookies without clearing existing auth state', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          accessToken: 'cookie-token',
+          accessTokenExpirationTimestampMs: Date.now() + 5 * 60_000,
+          tokenType: 'Bearer',
+        }),
+      }));
+      const logoutSpy = vi.spyOn((daemon as any).spotifyAuth, 'logout');
+      const setCookiesSpy = vi.spyOn((daemon as any).spotifyAuth, 'setCookies');
+
       const response = await request(app)
         .post('/v1/auth/spotify/import')
         .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
@@ -314,6 +372,39 @@ describe('Authentication', () => {
         success: true,
         cookiesImported: 1,
       });
+      expect(logoutSpy).not.toHaveBeenCalled();
+      expect(setCookiesSpy).toHaveBeenCalledWith([
+        expect.objectContaining({
+          domain: 'spotify.com',
+          name: 'sp_dc',
+          value: 'keep-me',
+        }),
+      ]);
+    });
+
+    it('rejects imported cookies that cannot produce a Spotify access token', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: async () => 'expired',
+      }));
+
+      const response = await request(app)
+        .post('/v1/auth/spotify/import')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+        .send({
+          cookies: [
+            {
+              domain: '.spotify.com',
+              name: 'sp_dc',
+              path: '/',
+              value: 'stale-cookie',
+            },
+          ],
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('rejected by Spotify');
     });
   });
 });
@@ -329,8 +420,15 @@ describe('Status Endpoint', () => {
   beforeAll(async () => {
     daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
     await daemon.start();
-    stubConnectedSpotify(daemon);
     app = (daemon as any).app;
+  });
+
+  beforeEach(() => {
+    stubConnectedSpotify(daemon);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   afterAll(async () => {
@@ -365,6 +463,44 @@ describe('Status Endpoint', () => {
         search: expect.any(Boolean),
       }),
       status: expect.any(String),
+    });
+  });
+
+  it('marks Spotify as degraded when auth material cannot produce an access token', async () => {
+    const spotifyAuth = (daemon as any).spotifyAuth;
+    vi.spyOn(spotifyAuth, 'getAuthMode').mockReturnValue('cookies');
+    vi.spyOn(spotifyAuth, 'getAccessToken').mockRejectedValue(new Error('Spotify cookie token failed: 401 expired'));
+
+    const response = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.spotifyConnected).toBe(false);
+    expect(response.body.providers.spotify).toMatchObject({
+      auth: 'cookies',
+      connected: false,
+      status: 'degraded',
+    });
+  });
+
+  it('does not report Apple playback as ready without a configured runtime', async () => {
+    (daemon as any).appleCatalogEnabled = false;
+    (daemon as any).appleLibraryEnabled = false;
+    (daemon as any).applePlaybackEnabled = true;
+    (daemon as any).appleRuntime = undefined;
+
+    const response = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.providers.apple).toMatchObject({
+      connected: false,
+      status: 'missing',
+      capabilities: expect.objectContaining({
+        playback: false,
+      }),
     });
   });
 
@@ -439,8 +575,29 @@ describe('Command Endpoint', () => {
       });
     });
 
+    it('starts Spotify playback when a session is created', async () => {
+      const spotifyPlayback = (daemon as any).spotifyRuntime.playback;
+      const playSpy = vi.spyOn(spotifyPlayback, 'play').mockResolvedValue(undefined);
+
+      const response = await request(app)
+        .post('/v1/command')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+        .send({
+          id: 'c_start_autoplay',
+          ts: Date.now(),
+          source: { kind: 'cli', device: 'linux' },
+          type: 'session.start',
+          payload: { policy: mockSessionPolicy },
+        });
+
+      expect(response.status).toBe(200);
+      expect(playSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('requires a connected Spotify backend', async () => {
-      vi.spyOn((daemon as any).spotifyClient, 'isConnected').mockReturnValue(false);
+      const spotifyAuth = (daemon as any).spotifyAuth;
+      vi.spyOn(spotifyAuth, 'getAuthMode').mockReturnValue('none');
+      vi.spyOn(spotifyAuth, 'getAccessToken').mockResolvedValue(null);
 
       const response = await request(app)
         .post('/v1/command')
@@ -456,6 +613,29 @@ describe('Command Endpoint', () => {
       expect(response.status).toBe(503);
       expect(response.body.code).toBe('PROVIDER_UNAVAILABLE');
       expect(response.body.error).toContain('Spotify is not connected');
+    });
+
+    it('rejects session start when Spotify auth exists but cannot produce a live access token', async () => {
+      const spotifyAuth = (daemon as any).spotifyAuth;
+      vi.spyOn(spotifyAuth, 'getAuthMode').mockReturnValue('cookies');
+      vi.spyOn(spotifyAuth, 'getAccessToken').mockRejectedValue(
+        new Error('Spotify cookie token failed: 401 expired'),
+      );
+
+      const response = await request(app)
+        .post('/v1/command')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+        .send({
+          id: 'c_start_stale_auth',
+          ts: Date.now(),
+          source: { kind: 'cli', device: 'linux' },
+          type: 'session.start',
+          payload: { policy: mockSessionPolicy },
+        });
+
+      expect(response.status).toBe(503);
+      expect(response.body.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(response.body.error).toContain('Spotify is not ready');
     });
 
     it('validates policy schema', async () => {
@@ -859,6 +1039,33 @@ describe('Rate Limiting', () => {
 // ============================================================================
 
 describe('CORS', () => {
+  describe('with default local web origins', () => {
+    let daemon: Harmond;
+    let app: any;
+
+    beforeAll(async () => {
+      daemon = createTestDaemon({
+        apiToken: TEST_API_TOKEN,
+      });
+      await daemon.start();
+      app = (daemon as any).app;
+    });
+
+    afterAll(async () => {
+      await daemon.stop();
+    });
+
+    it('allows the default local harmon-web origin in non-production mode', async () => {
+      const response = await request(app)
+        .get('/v1/status')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+        .set('Origin', 'http://127.0.0.1:4173');
+
+      expect(response.status).toBe(200);
+      expect(response.headers['access-control-allow-origin']).toBe('http://127.0.0.1:4173');
+    });
+  });
+
   describe('with allowed origins', () => {
     let daemon: Harmond;
     let app: any;
@@ -1042,6 +1249,32 @@ describe('Journal Endpoints', () => {
     expect(response.status).toBe(400);
     expect(response.body.error).toContain('context exceeds 2000 bytes');
   });
+
+  it('redacts unexpected journal read failures in production', async () => {
+    await withProductionDaemon(async (daemon, app) => {
+      vi.spyOn((daemon as any).store, 'getJournalEntries').mockRejectedValue(new Error('sqlite exploded'));
+
+      const response = await request(app)
+        .get('/v1/journal')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Internal server error');
+    });
+  });
+
+  it('redacts unexpected stats failures in production', async () => {
+    await withProductionDaemon(async (daemon, app) => {
+      vi.spyOn((daemon as any).store, 'getStats').mockRejectedValue(new Error('stats exploded'));
+
+      const response = await request(app)
+        .get('/v1/stats')
+        .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Internal server error');
+    });
+  });
 });
 
 // ============================================================================
@@ -1158,6 +1391,1079 @@ describe('Spotify Endpoints', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error).toContain('Invalid state');
+  });
+
+  it('GET /v1/spotify/recommendations falls back to personal listening history when no explicit seed is provided', async () => {
+    stubConnectedSpotify(daemon);
+    const provider = (daemon as any).spotifyRuntime.provider;
+    const getTopTracks = vi.spyOn(provider, 'getTopTracks').mockResolvedValue([
+      { ...mockProviderTracks[0] },
+    ]);
+    vi.spyOn(provider, 'getRecentlyPlayed').mockResolvedValue([]);
+    vi.spyOn(provider, 'getLibraryTracks').mockResolvedValue([]);
+    const getRecommendations = vi.spyOn(provider, 'getRecommendations').mockResolvedValue([
+      { ...mockProviderTracks[1] },
+    ]);
+
+    const response = await request(app)
+      .get('/v1/spotify/recommendations')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 3 });
+
+    expect(response.status).toBe(200);
+    expect(getTopTracks).toHaveBeenCalledWith({ limit: 1 });
+    expect(getRecommendations).toHaveBeenCalledWith({
+      seedTrackIds: ['track-1'],
+      limit: 3,
+    });
+    expect(response.body).toHaveLength(1);
+  });
+});
+
+// ============================================================================
+// Apple Endpoints Tests
+// ============================================================================
+
+describe('Apple Endpoints', () => {
+  let daemon: Harmond;
+  let app: any;
+
+  beforeEach(async () => {
+    daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
+    await daemon.start();
+    app = (daemon as any).app;
+  });
+
+  afterEach(async () => {
+    await daemon.stop().catch(() => undefined);
+    vi.restoreAllMocks();
+  });
+
+  it('GET /v1/apple/search forwards catalog results from the configured Apple client', async () => {
+    const search = vi.fn().mockResolvedValue({
+      songs: [{ id: 'song-1', name: 'Song One', artistName: 'Artist One' }],
+      albums: [],
+      artists: [],
+      playlists: [],
+    });
+    (daemon as any).appleMusicClient = {
+      search,
+    };
+    (daemon as any).appleCatalogEnabled = true;
+
+    const response = await request(app)
+      .get('/v1/apple/search')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ q: 'focus', type: 'songs', offset: 10 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.songs).toHaveLength(1);
+    expect(search).toHaveBeenCalledWith('focus', ['songs'], expect.objectContaining({ offset: 10 }));
+  });
+
+  it('GET /v1/apple/library/songs returns 503 when the Apple user token surface is unavailable', async () => {
+    (daemon as any).appleMusicClient = {
+      getLibrarySongs: vi.fn().mockRejectedValue(new Error('Apple Music user token required for library endpoints')),
+    };
+    (daemon as any).appleCatalogEnabled = true;
+    (daemon as any).appleLibraryEnabled = false;
+
+    const response = await request(app)
+      .get('/v1/apple/library/songs')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('PROVIDER_UNAVAILABLE');
+  });
+
+  it('GET /v1/apple/playlists/:id/tracks forwards playlist tracks from the configured Apple client', async () => {
+    const getPlaylistTracks = vi.fn().mockResolvedValue([
+      { id: 'apple-track-1', name: 'Apple Track', artistName: 'Apple Artist' },
+    ]);
+    (daemon as any).appleMusicClient = {
+      getPlaylistTracks,
+    };
+    (daemon as any).appleCatalogEnabled = true;
+
+    const response = await request(app)
+      .get('/v1/apple/playlists/pl.apple.test/tracks')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 20 });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveLength(1);
+    expect(getPlaylistTracks).toHaveBeenCalledWith('pl.apple.test', { limit: 20 });
+  });
+
+  it('GET /v1/apple/history forwards recent tracks from the configured Apple provider surface', async () => {
+    const getRecentlyPlayed = vi.fn().mockResolvedValue([
+      { id: 'apple-track-1', name: 'Recent Apple Track', artistName: 'Apple Artist' },
+    ]);
+    (daemon as any).appleRuntime = {
+      provider: {
+        getRecentlyPlayed,
+      },
+    };
+    (daemon as any).appleCatalogEnabled = true;
+    (daemon as any).appleLibraryEnabled = true;
+
+    const response = await request(app)
+      .get('/v1/apple/history')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 10 });
+
+    expect(response.status).toBe(200);
+    expect(getRecentlyPlayed).toHaveBeenCalledWith({ limit: 10 });
+    expect(response.body).toHaveLength(1);
+  });
+
+  it('accepts Apple topTracks sessions when the daemon provides local history-backed signals', async () => {
+    let engineState: { id: string; queuedTracks: Array<{ id: string }> } | null = null;
+    (daemon as any).appleCatalogEnabled = true;
+    (daemon as any).appleLibraryEnabled = false;
+    (daemon as any).appleMusicClient = {};
+    (daemon as any).appleRuntime = {
+      name: 'apple',
+      provider: {
+        getTopTracks: vi.fn().mockResolvedValue([{ id: 'apple-track-1' }]),
+      },
+      playback: {
+        play: vi.fn().mockResolvedValue(undefined),
+        resetSessionState: vi.fn().mockResolvedValue(undefined),
+      },
+      playbackMode: 'applescript',
+      autoStartSession: true,
+    };
+    (daemon as any).engines.set('apple', {
+      getState: vi.fn().mockImplementation(() => engineState),
+      start: vi.fn().mockImplementation(async () => {
+        engineState = {
+          id: 'sess_apple_top_tracks',
+          queuedTracks: [{ id: 'apple-track-1' }],
+        };
+      }),
+      stop: vi.fn().mockImplementation(async () => {
+        engineState = null;
+      }),
+    });
+
+    const response = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_apple_top_tracks',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'apple',
+            mode: 'focus',
+            sources: { topTracks: true },
+          },
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      sessionId: 'sess_apple_top_tracks',
+    });
+  });
+
+  it('GET /v1/apple/recommendations supports catalog-only seeded recommendations without a playback runtime', async () => {
+    const getSong = vi.fn().mockResolvedValue({
+      id: 'song-1',
+      name: 'Seed Song',
+      artistName: 'Seed Artist',
+      albumName: 'Seed Album',
+      url: 'https://music.apple.com/us/song/song-1',
+    });
+    const search = vi.fn().mockResolvedValue({
+      songs: [{
+        id: 'apple-track-1',
+        name: 'Recommended Apple Track',
+        artistName: 'Apple Artist',
+        albumName: 'Apple Album',
+        url: 'https://music.apple.com/us/song/apple-track-1',
+      }],
+      albums: [],
+      artists: [],
+      playlists: [],
+    });
+    (daemon as any).appleCatalogEnabled = true;
+    (daemon as any).appleLibraryEnabled = false;
+    (daemon as any).appleRuntime = undefined;
+    (daemon as any).appleMusicClient = {
+      getSong,
+      getRecentlyPlayedTracks: vi.fn(),
+      search,
+    };
+
+    const response = await request(app)
+      .get('/v1/apple/recommendations')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 5, seed: 'song-1' });
+
+    expect(response.status).toBe(200);
+    expect(getSong).toHaveBeenCalledWith('song-1');
+    expect(search).toHaveBeenCalled();
+    expect(response.body).toHaveLength(1);
+  });
+});
+
+describe('Apple Remote Endpoints', () => {
+  let daemon: Harmond;
+  let app: any;
+  const previousDeveloperToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
+  const previousRemoteToken = process.env.APPLE_MUSIC_REMOTE_TOKEN;
+  const remoteToken = 'apple-remote-token';
+
+  beforeEach(async () => {
+    delete process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
+    process.env.APPLE_MUSIC_REMOTE_TOKEN = remoteToken;
+    daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
+    await daemon.start();
+    app = (daemon as any).app;
+  });
+
+  afterEach(async () => {
+    await daemon.stop().catch(() => undefined);
+    if (previousDeveloperToken === undefined) {
+      delete process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
+    } else {
+      process.env.APPLE_MUSIC_DEVELOPER_TOKEN = previousDeveloperToken;
+    }
+    if (previousRemoteToken === undefined) {
+      delete process.env.APPLE_MUSIC_REMOTE_TOKEN;
+    } else {
+      process.env.APPLE_MUSIC_REMOTE_TOKEN = previousRemoteToken;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('GET /v1/status reports Apple remote playback only after a companion connects', async () => {
+    const beforeConnect = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(beforeConnect.status).toBe(200);
+    expect(beforeConnect.body.providers.apple).toMatchObject({
+      playbackMode: 'remote',
+      status: 'configured',
+      capabilities: expect.objectContaining({
+        companion: false,
+        playback: false,
+        sessionControl: false,
+      }),
+    });
+
+    const connectResponse = await request(app)
+      .post('/v1/apple/remote/connect')
+      .set('Authorization', `Bearer ${remoteToken}`)
+      .send({ deviceId: 'iphone-1', name: 'Srinu iPhone', platform: 'ios' });
+
+    expect(connectResponse.status).toBe(200);
+
+    const afterConnect = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(afterConnect.status).toBe(200);
+    expect(afterConnect.body.providers.apple).toMatchObject({
+      playbackMode: 'remote',
+      status: 'ready',
+      capabilities: expect.objectContaining({
+        companion: true,
+        playback: true,
+      }),
+    });
+  });
+
+  it('queues Apple remote playback commands for the iOS companion and reports verified now-playing state', async () => {
+    const connectResponse = await request(app)
+      .post('/v1/apple/remote/connect')
+      .set('Authorization', `Bearer ${remoteToken}`)
+      .send({ deviceId: 'iphone-1', name: 'Srinu iPhone', platform: 'ios' });
+
+    expect(connectResponse.status).toBe(200);
+
+    const playResponse = await request(app)
+      .post('/v1/apple/play')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({ url: 'https://music.apple.com/us/song/apple-track-1' });
+
+    expect(playResponse.status).toBe(200);
+
+    const commandsResponse = await request(app)
+      .get('/v1/apple/remote/commands')
+      .set('Authorization', `Bearer ${remoteToken}`)
+      .query({ deviceId: 'iphone-1' });
+
+    expect(commandsResponse.status).toBe(200);
+    expect(commandsResponse.body.commands).toEqual([
+      expect.objectContaining({
+        type: 'play',
+        uri: 'https://music.apple.com/us/song/apple-track-1',
+      }),
+    ]);
+
+    const [command] = commandsResponse.body.commands;
+    const stateResponse = await request(app)
+      .post('/v1/apple/remote/state')
+      .set('Authorization', `Bearer ${remoteToken}`)
+      .send({
+        ackCommandId: command.id,
+        currentTrack: {
+          album: '',
+          artist: 'Apple Music',
+          durationMs: 0,
+          id: 'apple-track-1',
+          name: 'apple-track-1',
+          provider: 'apple',
+          uri: 'https://music.apple.com/us/song/apple-track-1',
+        },
+        deviceId: 'iphone-1',
+        playbackState: 'playing',
+      });
+
+    expect(stateResponse.status).toBe(200);
+
+    const nowPlayingResponse = await request(app)
+      .get('/v1/apple/now-playing')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(nowPlayingResponse.status).toBe(200);
+    expect(nowPlayingResponse.body).toMatchObject({
+      id: 'apple-track-1',
+      playbackTruth: 'verified',
+      provider: 'apple',
+    });
+  });
+
+  it('rejects daemon API tokens on Apple companion-only remote endpoints', async () => {
+    const response = await request(app)
+      .post('/v1/apple/remote/connect')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({ deviceId: 'iphone-1', name: 'Srinu iPhone', platform: 'ios' });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects non-Apple provider payloads on Apple remote state updates', async () => {
+    const connectResponse = await request(app)
+      .post('/v1/apple/remote/connect')
+      .set('Authorization', `Bearer ${remoteToken}`)
+      .send({ deviceId: 'iphone-1', name: 'Srinu iPhone', platform: 'ios' });
+
+    expect(connectResponse.status).toBe(200);
+
+    const stateResponse = await request(app)
+      .post('/v1/apple/remote/state')
+      .set('Authorization', `Bearer ${remoteToken}`)
+      .send({
+        currentTrack: {
+          album: '',
+          artist: 'Spotify Artist',
+          durationMs: 0,
+          id: 'spotify-track-1',
+          name: 'Spotify Track',
+          provider: 'spotify',
+        },
+        deviceId: 'iphone-1',
+        playbackState: 'playing',
+      });
+
+    expect(stateResponse.status).toBe(400);
+    expect(stateResponse.body.error).toContain('provider apple');
+  });
+});
+
+// ============================================================================
+// YouTube Endpoints Tests
+// ============================================================================
+
+describe('YouTube Endpoints', () => {
+  let daemon: Harmond;
+  let app: any;
+  const previousApiKey = process.env.YOUTUBE_MUSIC_API_KEY;
+
+  beforeEach(async () => {
+    process.env.YOUTUBE_MUSIC_API_KEY = 'yt-test-key';
+    daemon = createTestDaemon({ apiToken: TEST_API_TOKEN });
+    await daemon.start();
+    app = (daemon as any).app;
+  });
+
+  afterEach(async () => {
+    await daemon.stop().catch(() => undefined);
+    if (previousApiKey === undefined) {
+      delete process.env.YOUTUBE_MUSIC_API_KEY;
+    } else {
+      process.env.YOUTUBE_MUSIC_API_KEY = previousApiKey;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('GET /v1/status reports the configured YouTube runtime', async () => {
+    const response = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    const youtubeRuntime = (daemon as any).youtubeRuntime;
+    expect(response.status).toBe(200);
+    expect(response.body.providers.youtube).toMatchObject({
+      auth: 'api-key',
+      connected: true,
+      playbackMode: youtubeRuntime ? 'browser-handoff' : undefined,
+      status: youtubeRuntime ? 'ready' : 'configured',
+      capabilities: expect.objectContaining({
+        playback: Boolean(youtubeRuntime),
+        recentPlays: true,
+        search: true,
+        sessionControl: Boolean(youtubeRuntime),
+        topTracks: true,
+      }),
+    });
+  });
+
+  it('GET /v1/status keeps YouTube read surfaces available when browser handoff is unavailable', async () => {
+    (daemon as any).youtubeRuntime = undefined;
+    (daemon as any).youtubeBrowserSupport = {
+      available: false,
+      reason: 'Browser handoff requires xdg-open on PATH.',
+    };
+
+    const response = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.providers.youtube).toMatchObject({
+      connected: true,
+      status: 'configured',
+      capabilities: expect.objectContaining({
+        playback: false,
+        queue: false,
+        recentPlays: true,
+        search: true,
+        sessionControl: false,
+        topTracks: true,
+      }),
+    });
+    expect(response.body.providers.youtube.playbackMode).toBeUndefined();
+  });
+
+  it('GET /v1/youtube/now-playing returns daemon-managed playback truth for browser handoff', async () => {
+    const youtubeRuntime = (daemon as any).youtubeRuntime;
+    (youtubeRuntime.playback as any).currentTrack = {
+      id: 'yt-track-1',
+      name: 'Focus Stream',
+      artist: 'Focus Channel',
+      album: '',
+      durationMs: 0,
+      provider: 'youtube',
+      uri: 'https://music.youtube.com/watch?v=yt-track-1',
+    };
+
+    const response = await request(app)
+      .get('/v1/youtube/now-playing')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: 'yt-track-1',
+      playbackTruth: 'daemon-managed',
+    });
+  });
+
+  it('GET /v1/youtube/search forwards the configured YouTube client', async () => {
+    (daemon as any).youtubeMusicClient = {
+      search: vi.fn().mockResolvedValue({
+        songs: [{ id: 'yt-song-1', name: 'Focus Song', artistName: 'Focus Artist' }],
+        albums: [],
+        artists: [],
+        playlists: [],
+      }),
+      getSong: vi.fn(),
+    };
+
+    const response = await request(app)
+      .get('/v1/youtube/search')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ q: 'focus', type: 'songs' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.songs).toHaveLength(1);
+  });
+
+  it('GET /v1/youtube/playlists/:id/tracks forwards playlist tracks from the configured YouTube client', async () => {
+    const getPlaylistTracks = vi.fn().mockResolvedValue([
+      { id: 'yt-song-1', name: 'Playlist Song', artistName: 'Playlist Artist' },
+    ]);
+    (daemon as any).youtubeMusicClient = {
+      getPlaylistTracks,
+      getSong: vi.fn(),
+      search: vi.fn(),
+    };
+
+    const response = await request(app)
+      .get('/v1/youtube/playlists/PL123/tracks')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 15 });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveLength(1);
+    expect(getPlaylistTracks).toHaveBeenCalledWith('PL123', { limit: 15 });
+  });
+
+  it('GET /v1/youtube/playlists forwards the configured YouTube client', async () => {
+    const getPlaylists = vi.fn().mockResolvedValue([
+      { id: 'playlist-1', name: 'Focus Playlist', author: 'Owner' },
+    ]);
+    (daemon as any).youtubeMusicClient = {
+      getPlaylists,
+      getPlaylistTracks: vi.fn(),
+      getSong: vi.fn(),
+      search: vi.fn(),
+    };
+
+    const response = await request(app)
+      .get('/v1/youtube/playlists')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 12 });
+
+    expect(response.status).toBe(200);
+    expect(getPlaylists).toHaveBeenCalledWith({ limit: 12 });
+    expect(response.body).toHaveLength(1);
+  });
+
+  it('GET /v1/youtube/library/tracks forwards the configured YouTube client', async () => {
+    const getLibrarySongs = vi.fn().mockResolvedValue([
+      { id: 'yt-song-1', name: 'Liked Song', artistName: 'Liked Artist' },
+    ]);
+    (daemon as any).youtubeMusicClient = {
+      getLibrarySongs,
+      getPlaylists: vi.fn(),
+      getPlaylistTracks: vi.fn(),
+      getSong: vi.fn(),
+      search: vi.fn(),
+    };
+
+    const response = await request(app)
+      .get('/v1/youtube/library/tracks')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 8 });
+
+    expect(response.status).toBe(200);
+    expect(getLibrarySongs).toHaveBeenCalledWith({ limit: 8 });
+    expect(response.body).toHaveLength(1);
+  });
+
+  it('GET /v1/youtube/recommendations uses the YouTube runtime provider surface', async () => {
+    const getRecommendations = vi.fn().mockResolvedValue([
+      {
+        id: 'yt-track-1',
+        name: 'Recommended Track',
+        artist: 'Recommendation Engine',
+        album: '',
+        durationMs: 0,
+        provider: 'youtube',
+      },
+    ]);
+    (daemon as any).youtubeRuntime = {
+      provider: { getRecommendations },
+    };
+
+    const response = await request(app)
+      .get('/v1/youtube/recommendations')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 6, seed: 'video-1' });
+
+    expect(response.status).toBe(200);
+    expect(getRecommendations).toHaveBeenCalledWith({
+      seedTrackIds: ['video-1'],
+      limit: 6,
+    });
+    expect(response.body).toHaveLength(1);
+  });
+
+  it('GET /v1/youtube/recommendations still works without a YouTube playback runtime', async () => {
+    const getRecommendations = vi.fn().mockResolvedValue([
+      {
+        id: 'yt-track-read-only',
+        name: 'Read Only Recommendation',
+        artist: 'Recommendation Engine',
+        album: '',
+        durationMs: 0,
+        provider: 'youtube',
+      },
+    ]);
+    (daemon as any).youtubeRuntime = undefined;
+    (daemon as any).youtubeMusicClient = {
+      getRecommendations,
+      getWatchPlaylist: vi.fn().mockResolvedValue([]),
+      isConnected: vi.fn().mockReturnValue(true),
+    };
+
+    const response = await request(app)
+      .get('/v1/youtube/recommendations')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .query({ limit: 4 });
+
+    expect(response.status).toBe(200);
+    expect(getRecommendations).toHaveBeenCalledWith({ limit: 4 });
+    expect(response.body).toHaveLength(1);
+  });
+
+  it('starts a YouTube-backed session and records the active provider', async () => {
+    const youtubeRuntime = (daemon as any).youtubeRuntime;
+    vi.spyOn((daemon as any).youtubeMusicClient, 'search').mockResolvedValue({
+      songs: [{ id: 'yt-song-1', name: 'Focus Song', artistName: 'Focus Artist' }],
+      albums: [],
+      artists: [],
+      playlists: [],
+    });
+    vi.spyOn(youtubeRuntime.provider, 'search').mockResolvedValue([
+      {
+        id: 'yt-track-1',
+        name: 'Focus Stream',
+        artist: 'Calm Channel',
+        album: '',
+        durationMs: 0,
+        uri: 'youtube:video:yt-track-1',
+        provider: 'youtube',
+      },
+    ]);
+    vi.spyOn(youtubeRuntime.playback, 'play').mockResolvedValue(undefined);
+
+    const commandResponse = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_start',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'youtube',
+            mode: 'focus',
+            sources: { searchQueries: ['focus music'] },
+          },
+        },
+      });
+
+    expect(commandResponse.status).toBe(200);
+    expect(youtubeRuntime.playback.play).toHaveBeenCalledTimes(1);
+
+    const statusResponse = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(statusResponse.status).toBe(200);
+    expect(statusResponse.body.session).toMatchObject({
+      isActive: true,
+      provider: 'youtube',
+    });
+  });
+
+  it('rejects feature-dependent YouTube policies up front', async () => {
+    const response = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_invalid_policy',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'youtube',
+            mode: 'focus',
+            hard: { noVocals: true },
+            sources: { searchQueries: ['focus music'] },
+          },
+        },
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('do not support audio-feature hard constraints');
+  });
+
+  it('accepts YouTube topTracks sessions when the daemon uses local playback history', async () => {
+    let engineState: { id: string; queuedTracks: Array<{ id: string }> } | null = null;
+    (daemon as any).youtubeAccessToken = undefined;
+    (daemon as any).youtubeMusicClient = {};
+    (daemon as any).youtubeRuntime = {
+      name: 'youtube',
+      provider: {
+        getTopTracks: vi.fn().mockResolvedValue([{ id: 'yt-track-1' }]),
+      },
+      playback: {
+        play: vi.fn().mockResolvedValue(undefined),
+        resetSessionState: vi.fn().mockResolvedValue(undefined),
+      },
+      playbackMode: 'browser-handoff',
+      autoStartSession: true,
+    };
+    (daemon as any).engines.set('youtube', {
+      getState: vi.fn().mockImplementation(() => engineState),
+      start: vi.fn().mockImplementation(async () => {
+        engineState = {
+          id: 'sess_youtube_top_tracks',
+          queuedTracks: [{ id: 'yt-track-1' }],
+        };
+      }),
+      stop: vi.fn().mockImplementation(async () => {
+        engineState = null;
+      }),
+    });
+
+    const response = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_top_tracks',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'youtube',
+            mode: 'focus',
+            sources: { topTracks: true },
+          },
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      sessionId: 'sess_youtube_top_tracks',
+    });
+  });
+
+  it('starts a YouTube-backed session from playlist seeds', async () => {
+    const youtubeRuntime = (daemon as any).youtubeRuntime;
+    vi.spyOn((daemon as any).youtubeMusicClient, 'getPlaylistTracks').mockResolvedValue([
+      {
+        id: 'yt-playlist-song-1',
+        name: 'Playlist Song',
+        artistName: 'Playlist Artist',
+      },
+    ]);
+    vi.spyOn(youtubeRuntime.provider, 'getPlaylistTracks').mockResolvedValue([
+      {
+        id: 'yt-track-playlist-1',
+        name: 'Playlist Stream',
+        artist: 'Playlist Channel',
+        album: '',
+        durationMs: 0,
+        uri: 'youtube:video:yt-track-playlist-1',
+        provider: 'youtube',
+      },
+    ]);
+    vi.spyOn(youtubeRuntime.playback, 'play').mockResolvedValue(undefined);
+
+    const response = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_playlist_start',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'youtube',
+            mode: 'focus',
+            sources: { seedPlaylists: ['https://music.youtube.com/playlist?list=PL123'] },
+          },
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(youtubeRuntime.provider.getPlaylistTracks).toHaveBeenCalledWith('PL123', { limit: 36 });
+  });
+
+  it('rolls back a YouTube session when browser handoff startup fails', async () => {
+    const youtubeRuntime = (daemon as any).youtubeRuntime;
+    vi.spyOn((daemon as any).youtubeMusicClient, 'search').mockResolvedValue({
+      songs: [{ id: 'yt-song-rollback', name: 'Rollback Song', artistName: 'Focus Artist' }],
+      albums: [],
+      artists: [],
+      playlists: [],
+    });
+    vi.spyOn(youtubeRuntime.provider, 'search').mockResolvedValue([
+      {
+        id: 'yt-track-rollback',
+        name: 'Rollback Stream',
+        artist: 'Focus Channel',
+        album: '',
+        durationMs: 0,
+        uri: 'youtube:video:yt-track-rollback',
+        provider: 'youtube',
+      },
+    ]);
+    vi.spyOn(youtubeRuntime.playback, 'play').mockRejectedValue(new Error('xdg-open failed'));
+
+    const commandResponse = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_rollback',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'youtube',
+            mode: 'focus',
+            sources: { searchQueries: ['focus music'] },
+          },
+        },
+      });
+
+    expect(commandResponse.status).toBe(500);
+
+    const statusResponse = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(statusResponse.status).toBe(200);
+    expect(statusResponse.body.session).toBeUndefined();
+  });
+
+  it('surfaces rollback failures when session autoplay teardown cannot persist cleanly', async () => {
+    const youtubeRuntime = (daemon as any).youtubeRuntime;
+    vi.spyOn((daemon as any).youtubeMusicClient, 'search').mockResolvedValue({
+      songs: [{ id: 'yt-song-rollback-stop', name: 'Rollback Song', artistName: 'Focus Artist' }],
+      albums: [],
+      artists: [],
+      playlists: [],
+    });
+    vi.spyOn(youtubeRuntime.provider, 'search').mockResolvedValue([
+      {
+        id: 'yt-track-rollback-stop',
+        name: 'Rollback Stream',
+        artist: 'Focus Channel',
+        album: '',
+        durationMs: 0,
+        uri: 'youtube:video:yt-track-rollback-stop',
+        provider: 'youtube',
+      },
+    ]);
+    vi.spyOn(youtubeRuntime.playback, 'play').mockRejectedValue(new Error('xdg-open failed'));
+    vi
+      .spyOn((daemon as any).store, 'endSession')
+      .mockRejectedValueOnce(new Error('session persistence failed'));
+
+    const commandResponse = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_rollback_stop_failure',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'youtube',
+            mode: 'focus',
+            sources: { searchQueries: ['focus music'] },
+          },
+        },
+      });
+
+    expect(commandResponse.status).toBe(500);
+    expect(commandResponse.body.error).toContain('session persistence failed');
+
+    const statusResponse = await request(app)
+      .get('/v1/status')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+
+    expect(statusResponse.status).toBe(200);
+    expect(statusResponse.body.session).toBeUndefined();
+  });
+
+  it('clears YouTube runtime queue state before a nudge refill', async () => {
+    const youtubeRuntime = (daemon as any).youtubeRuntime;
+    vi.spyOn((daemon as any).youtubeMusicClient, 'search').mockResolvedValue({
+      songs: [{ id: 'yt-song-reset', name: 'Reset Song', artistName: 'Focus Artist' }],
+      albums: [],
+      artists: [],
+      playlists: [],
+    });
+    vi.spyOn(youtubeRuntime.provider, 'search').mockResolvedValue([
+      {
+        id: 'yt-track-reset',
+        name: 'Reset Stream',
+        artist: 'Focus Channel',
+        album: '',
+        durationMs: 0,
+        uri: 'youtube:video:yt-track-reset',
+        provider: 'youtube',
+      },
+    ]);
+    vi.spyOn(youtubeRuntime.playback, 'play').mockResolvedValue(undefined);
+    const resetSpy = vi.spyOn(youtubeRuntime.playback, 'resetSessionState');
+
+    const startResponse = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_reset',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'youtube',
+            mode: 'focus',
+            sources: { searchQueries: ['focus music'] },
+          },
+        },
+      });
+
+    expect(startResponse.status).toBe(200);
+
+    const nudgeResponse = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_nudge',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.nudge',
+        payload: { direction: 'calmer', amount: 0.1 },
+      });
+
+    expect(nudgeResponse.status).toBe(200);
+    expect(resetSpy).toHaveBeenCalledWith({
+      preserveCurrentTrack: true,
+      preserveHistory: true,
+    });
+  });
+
+  it('restores the previous YouTube queue when nudge refill fails', async () => {
+    const youtubeRuntime = (daemon as any).youtubeRuntime;
+    const searchSpy = vi.spyOn(youtubeRuntime.provider, 'search').mockResolvedValue([
+      {
+        id: 'yt-track-rollback-nudge',
+        name: 'Rollback Nudge Track',
+        artist: 'Focus Channel',
+        album: '',
+        durationMs: 0,
+        uri: 'youtube:video:yt-track-rollback-nudge',
+        provider: 'youtube',
+      },
+    ]);
+    vi.spyOn(youtubeRuntime.playback, 'play').mockResolvedValue(undefined);
+
+    const startResponse = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_nudge_rollback_start',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.start',
+        payload: {
+          policy: {
+            version: 1,
+            provider: 'youtube',
+            mode: 'focus',
+            sources: { searchQueries: ['focus music'] },
+          },
+        },
+      });
+
+    expect(startResponse.status).toBe(200);
+
+    searchSpy
+      .mockResolvedValueOnce([
+        {
+          id: 'yt-track-rollback-nudge',
+          name: 'Rollback Nudge Track',
+          artist: 'Focus Channel',
+          album: '',
+          durationMs: 0,
+          uri: 'youtube:video:yt-track-rollback-nudge',
+          provider: 'youtube',
+        },
+      ])
+      .mockRejectedValueOnce(new Error('provider unavailable'));
+    const addToQueueSpy = vi.spyOn(youtubeRuntime.playback, 'addToQueue');
+
+    const nudgeResponse = await request(app)
+      .post('/v1/command')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({
+        id: 'c_youtube_nudge_rollback',
+        ts: Date.now(),
+        source: { kind: 'cli', device: 'linux' },
+        type: 'session.nudge',
+        payload: { direction: 'calmer', amount: 0.1 },
+      });
+
+    expect(nudgeResponse.status).toBe(500);
+    expect(addToQueueSpy).toHaveBeenCalledWith(
+      'youtube:video:yt-track-rollback-nudge',
+      expect.objectContaining({ id: 'yt-track-rollback-nudge' }),
+    );
+  });
+});
+
+// ============================================================================
+// Shutdown Tests
+// ============================================================================
+
+describe('Shutdown', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('surfaces engine stop failures instead of swallowing them', async () => {
+    const daemon = createTestDaemon();
+    await daemon.start();
+
+    vi
+      .spyOn((daemon as any).engines.get('spotify'), 'stop')
+      .mockRejectedValue(new Error('session persistence failed'));
+
+    await expect(daemon.stop()).rejects.toThrow('session persistence failed');
+  });
+
+  it('destroys lingering sockets when server close misses the shutdown deadline', async () => {
+    vi.useFakeTimers();
+
+    const daemon = createTestDaemon();
+    await daemon.start();
+
+    let closeCallback: (() => void) | undefined;
+    const destroy = vi.fn(() => {
+      closeCallback?.();
+    });
+    (daemon as any).openSockets.add({ destroy });
+    (daemon as any).server.close = vi.fn((callback) => {
+      closeCallback = callback;
+    });
+
+    const stopPromise = daemon.stop();
+    await vi.advanceTimersByTimeAsync(5000);
+    await stopPromise;
+
+    expect(destroy).toHaveBeenCalledTimes(1);
   });
 });
 

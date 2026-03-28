@@ -1,6 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <circle cx="32" cy="32" r="28" fill="none" stroke="#1a1a2e" stroke-width="2.5"/>
-  <ellipse cx="28" cy="42" rx="8" ry="6" fill="none" stroke="#FC3C44" stroke-width="2.5"/>
-  <line x1="36" y1="42" x2="36" y2="16" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
-  <path d="M36,16 C36,16 44,14 46,20" fill="none" stroke="#FC3C44" stroke-width="2.5" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <!-- I am the Apple mark: a person reaching toward a playback phone. -->
+  <rect width="64" height="64" rx="16" fill="#F3E7D4"/>
+  <g stroke="#171513" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="34" y="14" width="14" height="30" rx="4.5"/>
+    <path d="M39.5 20V30"/>
+    <path d="M39.5 21L45 19V27"/>
+    <circle cx="37.5" cy="32" r="3.5"/>
+    <circle cx="45" cy="28" r="3.5"/>
+    <path d="M17 49L19 37"/>
+    <path d="M18 31L28 26"/>
+  </g>
+  <g fill="#171513">
+    <circle cx="18" cy="23" r="5"/>
+    <path d="M12 36C14 31 22 31 24 36V42H12V36Z"/>
+  </g>
 </svg>

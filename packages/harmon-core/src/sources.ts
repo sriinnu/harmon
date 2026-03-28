@@ -2,7 +2,7 @@
  * Candidate fetching from music providers (provider-agnostic)
  */
 
-import type { TrackInfo } from '@athena/harmon-protocol';
+import type { TrackInfo } from '@sriinnu/harmon-protocol';
 import type { MusicProvider, SourcesConfig, TrackWithFeatures, AudioFeatures } from './types.js';
 
 /** Default features for tracks from providers without audio analysis (Apple Music, YouTube Music) */
@@ -28,64 +28,115 @@ export async function fetchCandidates(
   const candidates: TrackWithFeatures[] = [];
   const perSource = Math.ceil(targetCount / countActiveSources(sources));
 
-  try {
-    // Liked/library tracks
-    if (sources.likedTracks) {
-      const tracks = await provider.getLibraryTracks({ limit: perSource });
-      const withFeatures = await enrichWithFeatures(provider, tracks);
-      candidates.push(...withFeatures);
-    }
-
-    // Top tracks
-    if (sources.topTracks) {
-      const tracks = await provider.getTopTracks({ limit: perSource });
-      const withFeatures = await enrichWithFeatures(provider, tracks);
-      candidates.push(...withFeatures);
-    }
-
-    // Recent plays
-    if (sources.recentPlays) {
-      const tracks = await provider.getRecentlyPlayed({ limit: perSource });
-      const withFeatures = await enrichWithFeatures(provider, tracks);
-      candidates.push(...withFeatures);
-    }
-
-    // Seed playlists
-    if (sources.seedPlaylists && sources.seedPlaylists.length > 0) {
-      for (const playlistId of sources.seedPlaylists.slice(0, 3)) {
-        const tracks = await provider.getPlaylistTracks(
-          extractId(playlistId),
-          { limit: Math.ceil(perSource / sources.seedPlaylists.length) }
-        );
-        const withFeatures = await enrichWithFeatures(provider, tracks);
-        candidates.push(...withFeatures);
-      }
-    }
-
-    // Discovery via recommendations
-    if (sources.discovery?.enabled) {
-      const discoveryCount = Math.ceil(
-        targetCount * (sources.discovery.ratio || 0.15)
-      );
-
-      const seedTracks = candidates.slice(0, 5).map(t => t.id);
-
-      if (seedTracks.length > 0) {
-        const recommendations = await provider.getRecommendations({
-          seedTrackIds: seedTracks,
-          limit: discoveryCount,
-        });
-        const withFeatures = await enrichWithFeatures(provider, recommendations);
-        candidates.push(...withFeatures);
-      }
-    }
-
-    // Deduplicate by track ID
-    return deduplicateTracks(candidates);
-  } catch (error) {
-    console.error('Error fetching candidates:', error);
-    return candidates;  // Return what we have
+  // Liked/library tracks
+  if (sources.likedTracks) {
+    const tracks = await fetchSourceTracks(
+      'liked tracks',
+      () => provider.getLibraryTracks({ limit: perSource }),
+    );
+    const withFeatures = await enrichWithFeatures(provider, tracks);
+    candidates.push(...withFeatures);
   }
+
+  // Top tracks
+  if (sources.topTracks) {
+    const tracks = await fetchSourceTracks(
+      'top tracks',
+      () => provider.getTopTracks({ limit: perSource }),
+    );
+    const withFeatures = await enrichWithFeatures(provider, tracks);
+    candidates.push(...withFeatures);
+  }
+
+  // Recent plays
+  if (sources.recentPlays) {
+    const tracks = await fetchSourceTracks(
+      'recent plays',
+      () => provider.getRecentlyPlayed({ limit: perSource }),
+    );
+    const withFeatures = await enrichWithFeatures(provider, tracks);
+    candidates.push(...withFeatures);
+  }
+
+  // Search-seeded sources
+  if (sources.searchQueries && sources.searchQueries.length > 0) {
+    for (const query of sources.searchQueries.slice(0, 5)) {
+      const tracks = await fetchSourceTracks(
+        `search ${query}`,
+        () => provider.search(query, perSource),
+      );
+      const withFeatures = await enrichWithFeatures(provider, tracks);
+      candidates.push(...withFeatures);
+    }
+  }
+
+  // Seed playlists
+  if (sources.seedPlaylists && sources.seedPlaylists.length > 0) {
+    const seedPlaylists = sources.seedPlaylists;
+    for (const playlistId of sources.seedPlaylists.slice(0, 3)) {
+      const tracks = await fetchSourceTracks(
+        `playlist ${playlistId}`,
+        () =>
+          provider.getPlaylistTracks(
+            extractId(playlistId),
+            { limit: Math.ceil(perSource / seedPlaylists.length) },
+          ),
+      );
+      const withFeatures = await enrichWithFeatures(provider, tracks);
+      candidates.push(...withFeatures);
+    }
+  }
+
+  // Discovery via recommendations
+  if (sources.discovery?.enabled) {
+    const discoveryCount = Math.ceil(
+      targetCount * (sources.discovery.ratio || 0.15)
+    );
+
+    const seedTracks = candidates.slice(0, 5).map((track) => track.id);
+
+    if (seedTracks.length > 0) {
+      const recommendations = await fetchSourceTracks(
+        'recommendations',
+        () =>
+          provider.getRecommendations({
+            seedTrackIds: seedTracks,
+            limit: discoveryCount,
+          }),
+      );
+      const withFeatures = await enrichWithFeatures(provider, recommendations);
+      candidates.push(...withFeatures);
+    }
+  }
+
+  // Deduplicate by track ID
+  return deduplicateTracks(candidates);
+}
+
+/**
+ * I isolate one provider source failure so one unsupported capability does not
+ * wipe out the rest of the candidate collection pass.
+ */
+async function fetchSourceTracks(
+  sourceName: string,
+  loader: () => Promise<TrackInfo[]>
+): Promise<TrackInfo[]> {
+  try {
+    return await loader();
+  } catch (error) {
+    if (!isExplicitlyUnsupportedSourceError(error)) {
+      throw error;
+    }
+    console.warn(`Skipping source ${sourceName}:`, error);
+    return [];
+  }
+}
+
+function isExplicitlyUnsupportedSourceError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /not implemented|not available/i.test(error.message);
 }
 
 /**
@@ -154,6 +205,7 @@ function countActiveSources(sources: SourcesConfig): number {
   if (sources.likedTracks) count++;
   if (sources.topTracks) count++;
   if (sources.recentPlays) count++;
+  if (sources.searchQueries && sources.searchQueries.length > 0) count++;
   if (sources.seedPlaylists && sources.seedPlaylists.length > 0) count++;
   if (sources.discovery?.enabled) count++;
 
@@ -168,10 +220,23 @@ function extractId(uri: string): string {
   if (uri.startsWith('spotify:')) {
     return uri.split(':').pop() || uri;
   }
+  if (uri.startsWith('youtube:playlist:')) {
+    return uri.split(':').pop() || uri;
+  }
   // Spotify/YouTube URLs
   if (uri.includes('spotify.com/') || uri.includes('youtube.com/') || uri.includes('music.apple.com/')) {
-    const parts = uri.split('/');
-    return parts[parts.length - 1].split('?')[0];
+    try {
+      const url = new URL(uri);
+      const playlistId = url.searchParams.get('list');
+      if (playlistId) {
+        return playlistId;
+      }
+      const parts = url.pathname.split('/').filter(Boolean);
+      return parts[parts.length - 1] || uri;
+    } catch {
+      const parts = uri.split('/');
+      return parts[parts.length - 1].split('?')[0];
+    }
   }
   return uri;
 }

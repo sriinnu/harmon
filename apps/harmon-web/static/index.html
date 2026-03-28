@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Harmon Web</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">Harmon Web</p>
+        <h1>I browse and launch Spotify, Apple Music, and YouTube Music.</h1>
+      </header>
+
+      <section class="panel controls">
+        <label>
+          Daemon URL
+          <input id="daemon-url" type="url" value="http://127.0.0.1:17373" />
+        </label>
+        <label>
+          API Token
+          <input id="api-token" type="password" placeholder="Optional bearer token" />
+        </label>
+        <p class="hint">I only send bearer tokens to HTTPS or loopback daemon URLs.</p>
+        <label>
+          Provider
+          <select id="provider">
+            <option value="spotify">Spotify</option>
+            <option value="apple">Apple Music</option>
+            <option value="youtube">YouTube Music</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button id="refresh-status">Refresh Status</button>
+          <button id="previous-button">Prev</button>
+          <button id="pause-button">Pause</button>
+          <button id="next-button">Next</button>
+        </div>
+        <p id="transport-note" class="hint" aria-live="polite"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Status</h2>
+        <div id="status" role="status" aria-live="polite"></div>
+        <div id="now-playing" role="status" aria-live="polite"></div>
+        <p id="error" class="error" role="alert" aria-live="assertive"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Search</h2>
+        <form id="search-form" class="search-bar">
+          <label class="sr-only" for="search-query">Search query</label>
+          <input id="search-query" type="search" placeholder="Search tracks, albums, artists, playlists" />
+          <label class="sr-only" for="search-kind">Search kind</label>
+          <select id="search-kind">
+            <option value="song">Song</option>
+            <option value="album">Album</option>
+            <option value="artist">Artist</option>
+            <option value="playlist">Playlist</option>
+          </select>
+          <button id="search-button" type="submit">Search</button>
+        </form>
+        <div id="search-results" class="grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <h2>Library</h2>
+          <button id="load-library">Load Library</button>
+        </div>
+        <div id="library-results" class="grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <h2>Playlists</h2>
+          <button id="load-playlists">Load Playlists</button>
+        </div>
+        <div id="playlists" class="grid"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Playlist Tracks</h2>
+        <p id="playlist-context" class="panel-subtle"></p>
+        <div id="playlist-tracks" class="grid"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

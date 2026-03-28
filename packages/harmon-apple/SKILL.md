@@ -19,6 +19,12 @@ version: 0.1.0
 ## What this does
 harmon-apple provides a typed client for the Apple Music API, covering both the public catalog (search, get song/album/artist/playlist) and the authenticated user library. It maps Apple Music song data to the provider-agnostic TrackInfo format and implements the MusicProvider interface so harmon-core can treat Apple Music as a first-class track source alongside Spotify and YouTube Music.
 
+## Pack auth
+- `npm run auth` resolves a developer token and opens a local MusicKit bootstrap page for the user token
+- `npm run auth:refresh` refreshes the developer-token side and validates any stored user token
+- `npm run auth:status` prints the current Apple Music auth posture and local auth file path
+- `.chitragupta-ecosystem/.profile.json` is the explicit loader contract for this pack
+
 ## When to use
 - Searching the Apple Music catalog or reading a user's Apple Music library
 - Adding Apple Music as a track source in a harmon session
@@ -26,14 +32,14 @@ harmon-apple provides a typed client for the Apple Music API, covering both the 
 
 ## Key exports
 - `createAppleMusicClient` — factory that returns an AppleMusicClient for catalog and library calls
-- `AppleMusicProvider` — MusicProvider adapter for harmon-core
+- `createAppleMusicProvider` — MusicProvider adapter for harmon-core
 
 ## Example
 ```typescript
-import { createAppleMusicClient, AppleMusicProvider } from '@athena/harmon-apple';
+import { createAppleMusicClient, createAppleMusicProvider } from '@sriinnu/harmon-apple';
 
 const client = createAppleMusicClient({ developerToken, userToken });
 const results = await client.search('Nils Frahm', ['songs'], { limit: 10 });
-const provider = new AppleMusicProvider(client);
+const provider = createAppleMusicProvider(client);
 const tracks = await provider.search('Nils Frahm', 10);
 ```

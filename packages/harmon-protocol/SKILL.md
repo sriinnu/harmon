@@ -34,7 +34,7 @@ harmon-protocol defines the shared type contract between the daemon, CLI, and en
 
 ## Example
 ```typescript
-import { validateCommand, SessionPolicy } from '@athena/harmon-protocol';
+import { validateCommand, SessionPolicy } from '@sriinnu/harmon-protocol';
 
 const cmd = validateCommand({
   id: 'c_1', ts: Date.now(),

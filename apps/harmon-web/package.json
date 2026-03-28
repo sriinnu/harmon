@@ -1,0 +1,20 @@
+{
+  "name": "@sriinnu/harmon-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Small multi-provider web control surface for Harmon daemon",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc -p ./tsconfig.json && node --experimental-strip-types ./scripts/copy-static.ts",
+    "dev": "pnpm build && node --experimental-strip-types ./scripts/serve.ts",
+    "serve": "node --experimental-strip-types ./scripts/serve.ts",
+    "start": "pnpm build && pnpm serve",
+    "lint": "tsc -p ./tsconfig.json --noEmit",
+    "test": "vitest --root ../.. apps/harmon-web/src/api.test.ts apps/harmon-web/src/ui.test.ts apps/harmon-web/scripts/serve.test.ts",
+    "test:run": "vitest --root ../.. run apps/harmon-web/src/api.test.ts apps/harmon-web/src/ui.test.ts apps/harmon-web/scripts/serve.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

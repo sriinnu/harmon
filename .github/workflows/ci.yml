@@ -38,7 +38,26 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Smoke published entrypoints
-        run: |
-          node --input-type=module -e "const cli = await import('./apps/harmon-cli/dist/index.js'); if (typeof cli.createCLI !== 'function') throw new Error('Missing CLI export');"
-          node --input-type=module -e "const daemon = await import('./apps/harmond/dist/src/index.js'); if (typeof daemon.createDaemon !== 'function') throw new Error('Missing daemon export');"
+      - name: Verify packed publish surfaces
+        run: pnpm verify:pack
+
+  verify-companion:
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode toolchain
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Swift build
+        run: swift build
+        working-directory: apps/harmon-companion
+
+      - name: Swift test
+        run: swift test
+        working-directory: apps/harmon-companion

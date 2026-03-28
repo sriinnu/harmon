@@ -3,7 +3,7 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
-import type { Logger } from '@athena/harmon-logger';
+import type { Logger } from '@sriinnu/harmon-logger';
 
 /**
  * I use ApiError as the canonical HTTP error envelope for the daemon.

@@ -14,10 +14,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": ".",
-    "paths": {
-      "@athena/*": ["packages/*/src"]
-    }
+    "baseUrl": "."
   },
   "exclude": ["node_modules", "dist"]
 }

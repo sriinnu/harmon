@@ -1,16 +1,16 @@
 
 App Name: **Harmon** ✅
-Your naming convention **`@athena/harmon`** fits perfectly. I’d make `@athena/harmon` the *user-facing CLI package*, and keep the daemon/core split behind it so you can evolve without breaking users.
+Your naming convention **`@sriinnu/harmon`** fits perfectly. I’d make `@sriinnu/harmon` the *user-facing CLI package*, and keep the daemon/core split behind it so you can evolve without breaking users.
 
 ## Naming contract (so everything stays crisp)
 
-* NPM scope: `@athena/*`
-* CLI package: `@athena/harmon` → installs binary `harmon`
-* Daemon package: `@athena/harmond` → binary `harmond`
-* Shared protocol/types: `@athena/harmon-protocol`
-* Core engine (policy/ranker/state machine): `@athena/harmon-core`
-* Spotify integration: `@athena/harmon-spotify`
-* Local DB/store: `@athena/harmon-store`
+* NPM scope: `@sriinnu/*`
+* CLI package: `@sriinnu/harmon` → installs binary `harmon`
+* Daemon package: `@sriinnu/harmond` → binary `harmond`
+* Shared protocol/types: `@sriinnu/harmon-protocol`
+* Core engine (policy/ranker/state machine): `@sriinnu/harmon-core`
+* Spotify integration: `@sriinnu/harmon-spotify`
+* Local DB/store: `@sriinnu/harmon-store`
 * macOS menubar app (separate repo/app): `harmon-menubar` (not necessarily published to npm)
 
 This keeps your public surface minimal: users think “Harmon,” you keep internals modular.
@@ -181,4 +181,3 @@ The daemon stays identical. Voice is just another client.
 8. Implement “nudge calmer/sharper” (weight deltas) + “skip(reason)”.
 9. Add macOS menubar client (status + start/stop).
 10. Add push-to-talk STT + map to bounded policy.
-

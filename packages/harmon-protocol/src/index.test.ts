@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { DaemonStatus, DeviceKind, DeviceOS, Event, SourceInfo, HardConstraints, TrackInfo, validateCommand } from './index.js'
+import { DaemonStatus, DeviceKind, DeviceOS, Event, SourceInfo, HardConstraints, MusicProviderName, TrackInfo, validateCommand, validatePolicy } from './index.js'
 
 describe('harmon-protocol', () => {
   describe('DeviceKind', () => {
@@ -7,6 +7,7 @@ describe('harmon-protocol', () => {
       expect(() => DeviceKind.parse('cli')).not.toThrow()
       expect(() => DeviceKind.parse('menubar')).not.toThrow()
       expect(() => DeviceKind.parse('voice')).not.toThrow()
+      expect(() => DeviceKind.parse('mcp')).not.toThrow()
     })
 
     it('should reject invalid device kinds', () => {
@@ -42,6 +43,18 @@ describe('harmon-protocol', () => {
         device: 'macos',
       }
       expect(() => SourceInfo.parse(invalidSource)).toThrow()
+    })
+  })
+
+  describe('MusicProviderName', () => {
+    it('should accept supported provider names', () => {
+      expect(() => MusicProviderName.parse('spotify')).not.toThrow()
+      expect(() => MusicProviderName.parse('apple')).not.toThrow()
+      expect(() => MusicProviderName.parse('youtube')).not.toThrow()
+    })
+
+    it('should reject unsupported provider names', () => {
+      expect(() => MusicProviderName.parse('tidal')).toThrow()
     })
   })
 
@@ -85,6 +98,7 @@ describe('harmon-protocol', () => {
           artist: 'Artist Name',
           album: 'Album Name',
           durationMs: 123000,
+          playbackTruth: 'verified',
         })
       ).not.toThrow()
     })
@@ -182,11 +196,27 @@ describe('harmon-protocol', () => {
               connected: true,
               status: 'configured',
               auth: 'oauth',
+              playbackMode: 'native',
               capabilities: {
                 playback: true,
                 search: true,
               },
             },
+          },
+        })
+      ).not.toThrow()
+    })
+  })
+
+  describe('SessionPolicy', () => {
+    it('should accept provider-selected sessions with search-seeded sources', () => {
+      expect(() =>
+        validatePolicy({
+          version: 1,
+          provider: 'youtube',
+          mode: 'focus',
+          sources: {
+            searchQueries: ['focus music'],
           },
         })
       ).not.toThrow()

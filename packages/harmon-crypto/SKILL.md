@@ -30,7 +30,7 @@ harmon-crypto provides authenticated encryption for sensitive data stored by har
 
 ## Example
 ```typescript
-import { createEncryptor } from '@athena/harmon-crypto';
+import { createEncryptor } from '@sriinnu/harmon-crypto';
 
 const enc = createEncryptor({ secret: process.env.HARMON_ENCRYPTION_SECRET! });
 const cipher = enc.encrypt('my-refresh-token');

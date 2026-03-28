@@ -58,6 +58,17 @@ harmon/
 │   │   │   └── harmond.js         # Daemon entry point
 │   │   └── package.json
 │   │
+│   ├── harmon-companion/          # Swift mobile companion vertical
+│   │   ├── Sources/
+│   │   │   └── HarmonCompanion/
+│   │   ├── Tests/
+│   │   └── Package.swift
+│   │
+│   ├── harmon-web/                # Small static web control surface
+│   │   ├── src/
+│   │   ├── static/
+│   │   └── package.json
+│   │
 │   └── harmon-menubar/            # macOS client (Tauri) + voice
 │       └── (future)
 │
@@ -117,13 +128,13 @@ harmon/
 
 | Package | Binary | Purpose |
 |---------|--------|---------|
-| `@athena/harmon` | `harmon` | User-facing CLI |
-| `@athena/harmond` | `harmond` | Daemon (engine + store + spotify) |
-| `@athena/harmon-protocol` | — | Command/Event types + Zod schemas |
-| `@athena/harmon-core` | — | Session engine, ranking, adaptation |
-| `@athena/harmon-store` | — | SQLite + migrations |
-| `@athena/harmon-spotify` | — | Spotify API client + OAuth |
-| `@athena/harmon-voice` | — | macOS STT + intent parsing |
+| `@sriinnu/harmon` | `harmon` | User-facing CLI |
+| `@sriinnu/harmond` | `harmond` | Daemon (engine + store + spotify) |
+| `@sriinnu/harmon-protocol` | — | Command/Event types + Zod schemas |
+| `@sriinnu/harmon-core` | — | Session engine, ranking, adaptation |
+| `@sriinnu/harmon-store` | — | SQLite + migrations |
+| `@sriinnu/harmon-spotify` | — | Spotify API client + OAuth |
+| `@sriinnu/harmon-voice` | — | macOS STT + intent parsing |
 
 ## Data Flow
 

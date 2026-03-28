@@ -1,9 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <rect x="6" y="6" rx="8" ry="8" width="52" height="52" fill="none" stroke="#1a1a2e" stroke-width="2.5"/>
-  <line x1="14" y1="44" x2="14" y2="28" stroke="#1a1a2e" stroke-width="3" stroke-linecap="round"/>
-  <line x1="22" y1="44" x2="22" y2="20" stroke="#1DB954" stroke-width="3" stroke-linecap="round"/>
-  <line x1="30" y1="44" x2="30" y2="14" stroke="#1a1a2e" stroke-width="3" stroke-linecap="round"/>
-  <line x1="38" y1="44" x2="38" y2="22" stroke="#1DB954" stroke-width="3" stroke-linecap="round"/>
-  <line x1="46" y1="44" x2="46" y2="30" stroke="#1a1a2e" stroke-width="3" stroke-linecap="round"/>
-  <line x1="54" y1="44" x2="54" y2="36" stroke="#1DB954" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <!-- I am the Spotify mark: a listener with headphones and streaming arcs. -->
+  <rect width="64" height="64" rx="16" fill="#F3E7D4"/>
+  <g stroke="#171513" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 48C20 40 26 35 32 35C38 35 44 40 46 48"/>
+    <path d="M21 28C21 21 26 16 32 16C38 16 43 21 43 28"/>
+    <path d="M19 28V32"/>
+    <path d="M45 28V32"/>
+    <path d="M25 25C29 23 35 23 39 25"/>
+    <path d="M25 30C29 28.5 34 28.5 38 30"/>
+    <path d="M26 35C29 34 33 34 36 35.5"/>
+  </g>
+  <g fill="#171513">
+    <circle cx="32" cy="27" r="8.5"/>
+  </g>
 </svg>

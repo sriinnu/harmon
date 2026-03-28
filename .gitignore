@@ -30,6 +30,8 @@ DerivedData/
 
 # Runtime data
 .harmon.db
+.harmon.db-shm
+.harmon.db-wal
 *.sqlite
 *.sqlite3
 dist/
@@ -44,3 +46,6 @@ node_modules/*
 
 # MCP config (contains local paths)
 .mcp.json
+
+# Provider pack auth state
+**/.chitragupta-ecosystem/auth/*.json

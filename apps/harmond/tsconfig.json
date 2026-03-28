@@ -5,10 +5,7 @@
     "rootDir": ".",
     "tsBuildInfoFile": "./tsconfig.tsbuildinfo",
     "outDir": "./dist",
-    "composite": true,
-    "paths": {
-      "@athena/*": ["packages/*/src/index.ts"]
-    }
+    "composite": true
   },
   "references": [
     { "path": "../../packages/harmon-protocol" },
@@ -16,6 +13,7 @@
     { "path": "../../packages/harmon-core" },
     { "path": "../../packages/harmon-spotify" },
     { "path": "../../packages/harmon-apple" },
+    { "path": "../../packages/harmon-youtube" },
     { "path": "../../packages/harmon-logger" },
     { "path": "../../packages/harmon-crypto" }
   ],

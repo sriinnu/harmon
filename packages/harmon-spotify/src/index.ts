@@ -3,12 +3,14 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import type { DeviceInfo, TrackInfo } from '@athena/harmon-protocol';
-import type { MusicProvider, PlaybackController, AudioFeatures as CoreAudioFeatures } from '@athena/harmon-core';
+import type { DeviceInfo, TrackInfo } from '@sriinnu/harmon-protocol';
+import type { MusicProvider, PlaybackController, AudioFeatures as CoreAudioFeatures } from '@sriinnu/harmon-core';
 
 const SPOTIFY_ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 const SPOTIFY_WEB_BASE = 'https://open.spotify.com';
+const LOGIN_ATTEMPT_TTL_MS = 10 * 60_000;
+const MAX_PENDING_LOGIN_ATTEMPTS = 10;
 const DEFAULT_SCOPES = [
   'user-read-playback-state',
   'user-modify-playback-state',
@@ -17,6 +19,7 @@ const DEFAULT_SCOPES = [
   'playlist-read-collaborative',
   'user-read-recently-played',
   'user-library-read',
+  'user-top-read',
 ];
 
 // ============================================================================
@@ -86,8 +89,7 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private cookies: SpotifyCookieRecord[] | null = null;
   private cookiesLoaded = false;
   private refreshPromise: Promise<void> | null = null;
-  private codeVerifier: string | null = null;
-  private state: string | null = null;
+  private pendingLoginAttempts = new Map<string, { codeVerifier: string; createdAt: number }>();
 
   constructor(config: SpotifyAuthConfig) {
     this.clientId = config.clientId;
@@ -131,17 +133,24 @@ class SpotifyAuthImpl implements SpotifyAuth {
   getLoginUrl(): string {
     this.ensureConfigured();
 
-    this.codeVerifier = generateCodeVerifier();
-    this.state = generateState();
+    this.cleanupPendingLoginAttempts();
+
+    const codeVerifier = generateCodeVerifier();
+    const state = generateState();
+    this.pendingLoginAttempts.set(state, {
+      codeVerifier,
+      createdAt: Date.now(),
+    });
+    this.trimPendingLoginAttempts();
 
     const params = new URLSearchParams({
       client_id: this.clientId,
       response_type: 'code',
       redirect_uri: this.redirectUri,
       code_challenge_method: 'S256',
-      code_challenge: generateCodeChallenge(this.codeVerifier),
+      code_challenge: generateCodeChallenge(codeVerifier),
       scope: this.scopes.join(' '),
-      state: this.state,
+      state,
     });
 
     return `${SPOTIFY_ACCOUNTS_BASE}/authorize?${params.toString()}`;
@@ -153,22 +162,18 @@ class SpotifyAuthImpl implements SpotifyAuth {
     if (!code) {
       throw new Error('Missing authorization code');
     }
-    if (!this.codeVerifier) {
-      throw new Error('Login flow expired. Request a new login URL.');
+    if (!state) {
+      throw new Error('Missing OAuth state parameter');
     }
-    if (this.state) {
-      if (!state) {
-        throw new Error('Missing OAuth state parameter');
-      }
-      if (state !== this.state) {
-        throw new Error('Invalid OAuth state');
-      }
+    this.cleanupPendingLoginAttempts();
+    const pending = this.pendingLoginAttempts.get(state);
+    if (!pending) {
+      throw new Error('Invalid OAuth state');
     }
 
-    const tokens = await this.exchangeCodeForToken(code, this.codeVerifier);
+    const tokens = await this.exchangeCodeForToken(code, pending.codeVerifier);
     await this.saveTokens(tokens);
-    this.codeVerifier = null;
-    this.state = null;
+    this.pendingLoginAttempts.delete(state);
   }
 
   async refresh(): Promise<void> {
@@ -390,6 +395,9 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private async ensureCookiesLoaded(force = false): Promise<void> {
     if (this.cookiesLoaded && !force) return;
     this.cookiesLoaded = true;
+    if (!this.cookieStore) {
+      return;
+    }
     const cookies = this.cookieStore ? await this.cookieStore.get() : null;
     this.cookies = cookies ? sanitizeSpotifyCookies(cookies) : null;
   }
@@ -398,6 +406,34 @@ class SpotifyAuthImpl implements SpotifyAuth {
     this.tokens = tokens;
     this.tokensLoaded = true;
     await this.tokenStore?.set(tokens);
+  }
+
+  /**
+   * I expire stale OAuth attempts so concurrent logins stay valid without
+   * retaining verifier state indefinitely.
+   */
+  private cleanupPendingLoginAttempts(): void {
+    const cutoff = Date.now() - LOGIN_ATTEMPT_TTL_MS;
+
+    for (const [state, attempt] of this.pendingLoginAttempts.entries()) {
+      if (attempt.createdAt < cutoff) {
+        this.pendingLoginAttempts.delete(state);
+      }
+    }
+  }
+
+  /**
+   * I bound pending login state so repeated login requests cannot grow memory
+   * without limit.
+   */
+  private trimPendingLoginAttempts(): void {
+    while (this.pendingLoginAttempts.size > MAX_PENDING_LOGIN_ATTEMPTS) {
+      const oldestState = this.pendingLoginAttempts.keys().next().value;
+      if (!oldestState) {
+        return;
+      }
+      this.pendingLoginAttempts.delete(oldestState);
+    }
   }
 }
 
@@ -579,7 +615,7 @@ class SpotifyClientImpl implements SpotifyClient {
   async transferTo(deviceId: string): Promise<void> {
     await this.request('PUT', '/me/player', {
       device_ids: [deviceId],
-      play: true,
+      play: false,
     });
   }
 
@@ -1524,7 +1560,7 @@ export class SpotifyPlaybackController implements PlaybackController {
     return this.client.getNowPlaying();
   }
 
-  async addToQueue(trackUri: string): Promise<void> {
+  async addToQueue(trackUri: string, _track?: TrackInfo): Promise<void> {
     await this.client.addToQueue(trackUri);
   }
 }

@@ -1,5 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <circle cx="32" cy="32" r="28" fill="none" stroke="#1a1a2e" stroke-width="2.5"/>
-  <polyline points="6,32 18,32 24,18 30,44 36,26 42,38 48,32 58,32" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="32" cy="32" r="3" fill="#ef4444"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <!-- I am the daemon mark: a conductor around a pulse and broadcast arcs. -->
+  <rect width="64" height="64" rx="16" fill="#F3E7D4"/>
+  <g stroke="#171513" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="35" cy="30" r="9"/>
+    <circle cx="35" cy="30" r="16" opacity="0.22"/>
+    <path d="M13 48C18 41 25 38 35 38C45 38 51 41 56 48"/>
+    <path d="M49 18L55 14"/>
+    <path d="M15 27H18"/>
+    <path d="M52 27H55"/>
+    <path d="M43 49L47 37"/>
+  </g>
+  <g fill="#171513">
+    <circle cx="20" cy="20" r="5"/>
+    <path d="M15 33C17 28 24 28 26 33V39H15V33Z"/>
+  </g>
 </svg>

@@ -37,7 +37,7 @@ HARMON_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ### Start the Daemon
 
 ```
-pnpm --filter @athena/harmond start
+pnpm --filter @sriinnu/harmond start
 ```
 
 ### Authenticate Spotify

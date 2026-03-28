@@ -2,7 +2,7 @@
  * Internal types for harmon-core
  */
 
-import type { TrackInfo, SessionPolicy } from '@athena/harmon-protocol';
+import type { TrackInfo, SessionPolicy } from '@sriinnu/harmon-protocol';
 
 /**
  * Audio features for track ranking.
@@ -85,7 +85,7 @@ export interface PlaybackController {
   setShuffle?(state: boolean): Promise<void>;
   setRepeat?(state: 'off' | 'track' | 'context'): Promise<void>;
   getNowPlaying(): Promise<TrackInfo | null>;
-  addToQueue(trackUri: string): Promise<void>;
+  addToQueue(trackUri: string, track?: TrackInfo): Promise<void>;
 }
 
 // ============================================================================
@@ -157,6 +157,7 @@ export interface SourcesConfig {
   likedTracks?: boolean;
   topTracks?: boolean;
   recentPlays?: boolean;
+  searchQueries?: string[];
   seedPlaylists?: string[];
   seedArtists?: string[];
   discovery?: {

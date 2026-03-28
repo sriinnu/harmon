@@ -13,6 +13,7 @@ export interface DaemonEnvironmentOptions {
   host: string;
   nodeEnv?: string;
   port: number;
+  spotifyClientId?: string;
   spotifyRedirectUri?: string;
 }
 
@@ -28,6 +29,9 @@ export function validateDaemonEnvironment(
   options: DaemonEnvironmentOptions,
 ): ValidatedDaemonEnvironment {
   const isProduction = options.nodeEnv === 'production';
+  const spotifyClientId = normalizeOptionalString(options.spotifyClientId);
+  const spotifyRedirectUri = normalizeOptionalString(options.spotifyRedirectUri);
+  const spotifyOAuthConfigured = Boolean(spotifyClientId || spotifyRedirectUri);
 
   if (isProduction && !options.apiToken) {
     throw new Error('HARMON_API_TOKEN is required in production.');
@@ -41,9 +45,13 @@ export function validateDaemonEnvironment(
     throw new Error('HARMON_CORS_ORIGINS cannot include "*" in production.');
   }
 
+  if (isProduction && spotifyRedirectUri && !spotifyClientId) {
+    throw new Error('SPOTIFY_CLIENT_ID is required when SPOTIFY_REDIRECT_URI is set in production.');
+  }
+
   return {
     isProduction,
-    spotifyRedirectUri: resolveSpotifyRedirectUri(options, isProduction),
+    spotifyRedirectUri: resolveSpotifyRedirectUri(options, isProduction, spotifyOAuthConfigured),
   };
 }
 
@@ -54,12 +62,13 @@ export function validateDaemonEnvironment(
 function resolveSpotifyRedirectUri(
   options: DaemonEnvironmentOptions,
   isProduction: boolean,
+  spotifyOAuthConfigured: boolean,
 ): string {
   const redirectUri =
     options.spotifyRedirectUri ||
     `http://${options.host}:${options.port}${SPOTIFY_CALLBACK_PATH}`;
 
-  if (isProduction && !options.spotifyRedirectUri) {
+  if (isProduction && spotifyOAuthConfigured && !options.spotifyRedirectUri) {
     throw new Error('SPOTIFY_REDIRECT_URI is required in production.');
   }
 
@@ -87,4 +96,17 @@ function resolveSpotifyRedirectUri(
  */
 function isLoopbackHostname(hostname: string): boolean {
   return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+/**
+ * I normalize blank environment strings so validation can reason about intent
+ * instead of raw shell values.
+ */
+function normalizeOptionalString(value?: string): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }

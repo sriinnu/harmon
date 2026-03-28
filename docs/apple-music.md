@@ -25,7 +25,7 @@ Notes:
 ### Start the Daemon
 
 ```
-pnpm --filter @athena/harmond start
+pnpm --filter @sriinnu/harmond start
 ```
 
 ### Endpoints

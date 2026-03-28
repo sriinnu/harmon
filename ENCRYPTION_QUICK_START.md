@@ -254,7 +254,7 @@ If you're still having issues:
 1. Check logs: `LOG_LEVEL=debug harmond`
 2. Verify environment: `env | grep HARMON`
 3. Test encryption: See "Check If Encryption Is Enabled" above
-4. Open an issue: [GitHub Issues](https://github.com/athena/harmon/issues)
+4. Open an issue: [GitHub Issues](https://github.com/sriinnu/harmon/issues)
 
 ---
 
