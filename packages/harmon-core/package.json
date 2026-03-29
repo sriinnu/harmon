@@ -1,6 +1,6 @@
 {
   "name": "@sriinnu/harmon-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Session engine + ranking + adaptation for Harmon",
   "license": "AGPL-3.0-only",
   "repository": {
