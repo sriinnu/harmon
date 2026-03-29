@@ -1,0 +1,16 @@
+node_modules
+.git
+dist
+*.test.ts
+*.test.js
+*.spec.ts
+coverage
+.turbo
+apps/harmon-web
+apps/harmon-cli
+apps/harmon-companion
+tools
+brand
+docs
+*.md
+!README.md

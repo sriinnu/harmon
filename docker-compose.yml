@@ -1,0 +1,29 @@
+# docker-compose.yml — Harmon daemon stack
+#
+# Usage:
+#   cp .env.example .env  # Fill in your credentials
+#   docker compose up -d
+#
+# Persistent data stored in ./data/ (SQLite DB with encrypted credentials)
+
+services:
+  harmond:
+    build: .
+    image: sriinnu/harmond:latest
+    ports:
+      - "17373:17373"
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - HARMON_DB_PATH=/data/harmon.db
+      - HARMON_BIND_ADDRESS=0.0.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:17373/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

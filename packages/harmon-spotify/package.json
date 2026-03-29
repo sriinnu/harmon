@@ -22,6 +22,15 @@
     "SKILL.md",
     "logo.svg"
   ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "auth": "node ./dist/auth-cli.js bootstrap",
     "auth:refresh": "node ./dist/auth-cli.js refresh",
@@ -29,6 +38,7 @@
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build",
     "test": "vitest --root ../.. packages/harmon-spotify/src/index.test.ts",
     "test:run": "vitest --root ../.. run packages/harmon-spotify/src/index.test.ts"
   },
