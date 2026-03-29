@@ -21,10 +21,20 @@
     "SKILL.md",
     "logo.svg"
   ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build",
     "test": "vitest --root ../.. packages/harmon-core/src",
     "test:run": "vitest --root ../.. run packages/harmon-core/src",
     "test:coverage": "vitest --root ../.. run --coverage packages/harmon-core/src"

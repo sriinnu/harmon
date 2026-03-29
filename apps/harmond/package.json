@@ -31,11 +31,15 @@
   "bin": {
     "harmond": "./bin/harmond.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc -b",
     "dev": "tsc --watch",
     "start": "node ./dist/src/index.js",
     "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build",
     "test": "vitest --root ../.. apps/harmond/src",
     "test:run": "vitest --root ../.. run apps/harmond/src",
     "test:coverage": "vitest --root ../.. run --coverage apps/harmond/src"

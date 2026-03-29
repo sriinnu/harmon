@@ -130,6 +130,23 @@ harmond
 - Implementation: `@sriinnu/harmon-crypto` package
 - Storage: Encrypted data stored in SQLite `settings` table
 
+### Ciphertext Format (v2)
+
+Encrypted values use the format:
+```
+keyFingerprint:salt:iv:authTag:encrypted
+```
+
+- **keyFingerprint**: First 4 bytes of SHA-256(derived key), hex-encoded. Used to detect key mismatches on decrypt.
+- **salt**: 32 random bytes for scrypt key derivation
+- **iv**: 12 random bytes for AES-256-GCM
+- **authTag**: 16-byte authentication tag
+- **encrypted**: The ciphertext
+
+Legacy v1 format (`salt:iv:authTag:encrypted`) is still supported for backward compatibility.
+
+If you change `HARMON_ENCRYPTION_SECRET`, existing credentials cannot be decrypted. The daemon will log a clear "key mismatch" warning and treat stored tokens as degraded.
+
 ## Migration Guide
 
 If you're upgrading from a previous version:

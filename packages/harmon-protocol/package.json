@@ -27,10 +27,14 @@
       "import": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build",
     "test": "vitest --root ../.. packages/harmon-protocol/src/index.test.ts",
     "test:run": "vitest --root ../.. run packages/harmon-protocol/src/index.test.ts",
     "test:coverage": "vitest --root ../.. run --coverage packages/harmon-protocol/src/index.test.ts"

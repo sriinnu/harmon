@@ -35,6 +35,9 @@
       "import": "./dist/graph/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
@@ -42,6 +45,7 @@
     "start:http": "node ./dist/mcp/cli.js --transport http",
     "start:stdio": "node ./dist/mcp/cli.js --transport stdio",
     "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build",
     "test": "vitest --root ../.. packages/harmon-flow/src",
     "test:run": "vitest --root ../.. run packages/harmon-flow/src"
   },

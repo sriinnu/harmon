@@ -22,6 +22,7 @@ export type {
   SessionState,
   EngineEvent,
   EventCallback,
+  EngineLogger,
   RankedTrack,
   SessionStore,
   SourcesConfig,

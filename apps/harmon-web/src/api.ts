@@ -87,21 +87,34 @@ export class HarmonWebClient {
   ): Promise<T> {
     const url = buildDaemonUrl(this.config.baseUrl, path, Boolean(this.config.token));
     Object.entries(query ?? {}).forEach(([key, value]) => url.searchParams.set(key, value));
-    const response = await fetch(url, {
-      body: body ? JSON.stringify(body) : undefined,
-      headers: {
-        Accept: 'application/json',
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-        ...(this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {}),
-      },
-      method,
-    });
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        body: body ? JSON.stringify(body) : undefined,
+        headers: {
+          Accept: 'application/json',
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {}),
+        },
+        method,
+      });
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error('Cannot reach daemon — check the URL and ensure harmond is running.');
+      }
+      throw error;
+    }
 
     if (!response.ok) {
       throw new Error((await response.text()) || `${response.status} ${response.statusText}`);
     }
 
-    return response.json() as Promise<T>;
+    try {
+      return await response.json() as T;
+    } catch {
+      throw new Error(`Daemon returned invalid JSON (HTTP ${response.status})`);
+    }
   }
 }
 

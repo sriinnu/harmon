@@ -26,10 +26,14 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc -b",
     "dev": "tsc --watch",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
     "pino": "^9.6.0",

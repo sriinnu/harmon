@@ -19,6 +19,19 @@
 
 ---
 
+> **New to Harmon?** Start with the [Getting Started guide](docs/getting-started.md) -- clone, install, connect a provider, and play music in under 5 minutes.
+
+### Highlights
+
+- **Smart Play** -- search all connected providers in parallel and play the best match: `harmon smart-play "Bohemian Rhapsody"`
+- **Smart Search** -- compare results across Spotify, Apple Music, and YouTube Music side by side
+- **Song Recognition** -- `harmon listen` records ambient audio and identifies the song via AudD or Chromaprint, with `--play` to immediately queue it
+- **YouTube Mini Player** -- open `http://localhost:17373/player/youtube` for an embedded player that auto-syncs with daemon sessions
+- **MCP for AI Assistants** -- full tool surface for Claude and ChatGPT via local stdio or remote HTTP MCP servers
+- **Cross-provider sessions** -- policy-driven curation (focus, relax, energize, meditate, workout) on any provider
+
+---
+
 ## Overview
 
 Harmon is a **daemon-first music runtime** that lets a human, a local app, or an AI assistant ask for music in one contract and route it to the right provider surface.
@@ -142,6 +155,8 @@ At runtime, Harmon stays honest about each provider:
 | `apps/harmon-web` | Small static web app for provider browse, playlists, and playback handoff or daemon-side play | 🚧 New vertical |
 
 ## Quick Start
+
+For the full walkthrough (provider auth, smart play, listen, sessions, MCP, and all env vars), see **[docs/getting-started.md](docs/getting-started.md)**.
 
 ### Prerequisites
 

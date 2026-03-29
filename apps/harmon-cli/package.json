@@ -16,8 +16,6 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "bin/harmon.js",
-    "bin/runtime.js",
     "dist/",
     "README.md",
     "SKILL.md",
@@ -30,21 +28,27 @@
     }
   },
   "bin": {
-    "harmon": "./bin/harmon.js"
+    "harmon": "./dist/bin/harmon.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
+    "build:bundle": "node --experimental-strip-types scripts/bundle.ts",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build && pnpm build:bundle",
     "test": "vitest --root ../.. apps/harmon-cli/bin/runtime.test.js apps/harmon-cli/src/index.test.ts",
     "test:run": "vitest --root ../.. run apps/harmon-cli/bin/runtime.test.js apps/harmon-cli/src/index.test.ts"
   },
   "dependencies": {
-    "@sriinnu/harmon-protocol": "workspace:*",
     "commander": "^14.0.2"
   },
   "devDependencies": {
+    "@sriinnu/harmon-protocol": "workspace:*",
     "@types/node": "^25.0.8",
+    "esbuild": "^0.27.4",
     "typescript": "^5.9.3"
   }
 }

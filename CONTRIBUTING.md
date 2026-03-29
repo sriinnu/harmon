@@ -53,6 +53,36 @@ pnpm --filter @sriinnu/harmon-core test  # Single package
 - Use `MusicProvider`/`PlaybackController` for new music service integrations
 - Keep packages focused — one responsibility per package
 
+## Daemon Architecture
+
+The daemon (`apps/harmond/src/`) uses an extracted route module pattern:
+
+```
+apps/harmond/src/
+  ├── index.ts              — Harmond class (orchestrator, ~980 LOC)
+  ├── daemon-context.ts     — DaemonContext interface (route contract)
+  ├── helpers.ts            — Pure parsing/validation utilities
+  ├── middleware.ts          — Rate limiting, CORS, auth, security headers
+  ├── error-classification.ts — Error → HTTP response mapping
+  ├── provider-status.ts    — Provider readiness probes
+  ├── credential-stores.ts  — Encrypted token persistence
+  ├── session-policy.ts     — Policy validation and normalization
+  ├── youtube-auth.ts       — YouTube OAuth with auto-refresh
+  ├── apple-auth.ts         — Apple JWT auto-regeneration
+  ├── main.ts               — Entry point with signal handlers
+  └── routes/
+      ├── auth.ts           — OAuth login/callback/logout for all providers
+      ├── session.ts        — Session lifecycle, command dispatch, SSE
+      ├── spotify.ts        — Spotify browse/playback/library
+      ├── apple.ts          — Apple Music browse/playback/remote
+      ├── youtube.ts        — YouTube Music browse/playback
+      ├── smart.ts          — Cross-provider smart play/search
+      ├── recognize.ts      — Song recognition
+      └── player.ts         — Embedded YouTube mini player
+```
+
+Route modules receive a `DaemonContext` object. Add new routes by creating a file in `routes/` and registering it in `index.ts:setupRoutes()`.
+
 ## Adding a New Music Provider
 
 1. Create `packages/harmon-<provider>/` with `package.json`, `tsconfig.json`

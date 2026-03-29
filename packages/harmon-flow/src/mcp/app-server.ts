@@ -255,9 +255,51 @@ export class HarmonAppMCPServer {
       });
     });
 
+    this.server.registerTool('auth_status', {
+      annotations: { openWorldHint: false, readOnlyHint: true, title: 'Auth Status' },
+      description:
+        'Get authentication status for all music providers (Spotify, Apple Music, YouTube Music). Shows which providers are connected, their auth mode, and capabilities.',
+    }, async (extra) => {
+      assertToolScopesFromExtra(extra, this.auth.readScopes, authEnabled);
+      const status = await this.daemonClient.getStatus();
+      return this.jsonResult({
+        providers: status.providers ?? {},
+      });
+    });
+
+    this.server.registerTool('smart_search', {
+      annotations: { openWorldHint: false, readOnlyHint: true, title: 'Smart Search' },
+      description:
+        'Search for a song, artist, or album across ALL connected music providers (Spotify, Apple Music, YouTube Music) simultaneously. Returns results from each provider so you can compare availability. Use this when the user says "find this song" or "who has this track".',
+      inputSchema: {
+        query: z.string().min(1).describe('The song, artist, or album to search for'),
+        limit: z.number().int().min(1).max(25).optional().describe('Max results per provider (default: 5)'),
+      },
+    }, async ({ query, limit }, extra) => {
+      assertToolScopesFromExtra(extra, this.auth.readScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.smartSearch(query, limit));
+    });
+
     if (!canExposeWriteTools) {
       return;
     }
+
+    this.server.registerTool('recognize_song', {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: true,
+        readOnlyHint: false,
+        title: 'Recognize Song',
+      },
+      description:
+        'Identify a song from audio data. Send base64-encoded WAV audio (3-10 seconds). Returns song title, artist, album, and links to Spotify/Apple Music. Requires AUDD_API_TOKEN to be configured on the daemon.',
+      inputSchema: {
+        audio: z.string().min(1).describe('Base64-encoded WAV audio data (3-10 seconds, 16kHz mono)'),
+      },
+    }, async ({ audio }, extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.recognizeSong(audio));
+    });
 
     this.server.registerTool('play_music', {
       annotations: {
@@ -285,6 +327,57 @@ export class HarmonAppMCPServer {
         success: true,
         target: resolvedTarget,
       });
+    });
+
+    this.server.registerTool('smart_play', {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Smart Play',
+      },
+      description:
+        'Play a song by searching all connected providers and playing on the first match. If a specific provider is requested but needs authentication, returns an auth URL. Use this when the user says "play this song" without specifying a provider, or "play X on YouTube".',
+      inputSchema: {
+        query: z.string().min(1).optional().describe('Song name or search query to find and play'),
+        uri: z.string().min(1).optional().describe('Direct track URI (spotify:track:..., youtube URL, apple URL)'),
+        provider: z.enum(['spotify', 'apple', 'youtube']).optional().describe('Preferred provider (optional — if omitted, searches all)'),
+      },
+    }, async ({ query, uri, provider }, extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      const result = await this.daemonClient.smartPlay({
+        query,
+        uri,
+        provider,
+      });
+
+      if (result.needsAuth) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `${result.provider} needs authentication. ${result.authUrl ? `The user should open this URL: ${result.authUrl}` : `Use the auth_${result.provider}_login tool to start authentication.`}`,
+          }],
+        };
+      }
+
+      if (!result.success) {
+        return {
+          content: [{ type: 'text' as const, text: result.error || 'Playback failed.' }],
+          isError: true,
+        };
+      }
+
+      const track = result.track;
+      let text = `Now playing on ${result.provider}`;
+      if (track) {
+        text += `: ${track.artist} - ${track.name}`;
+        if (track.album) text += ` (${track.album})`;
+      }
+      if (result.alternateProviders?.length > 0) {
+        text += `\n\nAlso available on: ${result.alternateProviders.map((a: { provider: string }) => a.provider).join(', ')}`;
+      }
+
+      return { content: [{ type: 'text' as const, text }] };
     });
 
     this.server.registerTool('pause_music', {
@@ -388,6 +481,123 @@ export class HarmonAppMCPServer {
     }, async (extra) => {
       assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
       return this.jsonResult(await this.daemonClient.stopSession());
+    });
+
+    // ---- Auth write tools ----
+
+    this.server.registerTool('auth_youtube_login', {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: true,
+        readOnlyHint: false,
+        title: 'YouTube Login',
+      },
+      description:
+        'Start YouTube Music OAuth login. Returns a URL the user must open in their browser to authorize Harmon.',
+    }, async (extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.youtubeAuthLogin());
+    });
+
+    this.server.registerTool('auth_youtube_refresh', {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'YouTube Refresh Token',
+      },
+      description:
+        'Refresh the YouTube Music access token using the stored refresh token.',
+    }, async (extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.youtubeAuthRefresh());
+    });
+
+    this.server.registerTool('auth_youtube_logout', {
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'YouTube Logout',
+      },
+      description: 'Clear YouTube Music authentication tokens.',
+    }, async (extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.youtubeAuthLogout());
+    });
+
+    this.server.registerTool('auth_spotify_login', {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: true,
+        readOnlyHint: false,
+        title: 'Spotify Login',
+      },
+      description:
+        'Start Spotify OAuth login. Returns a URL the user must open in their browser to authorize Harmon.',
+    }, async (extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.spotifyAuthLogin());
+    });
+
+    this.server.registerTool('auth_spotify_logout', {
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Spotify Logout',
+      },
+      description: 'Clear Spotify authentication tokens and cookies.',
+    }, async (extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.spotifyAuthLogout());
+    });
+
+    this.server.registerTool('auth_apple_set_token', {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Apple Set User Token',
+      },
+      description:
+        "Set the Apple Music user token (obtained via MusicKit JS in a browser). Required for accessing the user's Apple Music library.",
+      inputSchema: {
+        token: z.string().min(1),
+      },
+    }, async ({ token }, extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.appleAuthSetUserToken(token));
+    });
+
+    this.server.registerTool('auth_apple_refresh', {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Apple Refresh Token',
+      },
+      description:
+        'Refresh the Apple Music developer token. Requires key material (APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID, APPLE_MUSIC_PRIVATE_KEY) to be configured.',
+    }, async (extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.appleAuthRefresh());
+    });
+
+    this.server.registerTool('auth_apple_logout', {
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Apple Logout',
+      },
+      description: 'Clear Apple Music authentication tokens.',
+    }, async (extra) => {
+      assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      return this.jsonResult(await this.daemonClient.appleAuthLogout());
     });
   }
 
