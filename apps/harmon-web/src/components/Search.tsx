@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { useDaemon } from '../lib/DaemonContext';
+import { useClient } from '../lib/DaemonContext';
 import type { HarmonClient } from '../lib/api';
 
 export function Search() {
-  const { client, provider } = useDaemon();
+  const { client, provider } = useClient();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResultItem[]>([]);
   const [busy, setBusy] = useState(false);

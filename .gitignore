@@ -47,5 +47,8 @@ node_modules/*
 # MCP config (contains local paths)
 .mcp.json
 
+# Backup files
+*.old
+
 # Provider pack auth state
 **/.chitragupta-ecosystem/auth/*.json

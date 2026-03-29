@@ -34,7 +34,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
+    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc && pnpm build:bundle",
     "build:bundle": "node --experimental-strip-types scripts/bundle.ts",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",

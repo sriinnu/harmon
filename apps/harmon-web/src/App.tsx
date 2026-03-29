@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { DaemonProvider } from './lib/DaemonContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Onboarding, shouldShowOnboarding, resetOnboarding } from './components/Onboarding';
 import { Header } from './components/Header';
 import { ConnectionPanel } from './components/ConnectionPanel';
@@ -23,7 +24,7 @@ export function App() {
   };
 
   return (
-    <>
+    <ErrorBoundary>
       {showOnboarding && <Onboarding onComplete={handleOnboardingComplete} />}
       <DaemonProvider>
         <div className="shell">
@@ -41,6 +42,6 @@ export function App() {
           </footer>
         </div>
       </DaemonProvider>
-    </>
+    </ErrorBoundary>
   );
 }
