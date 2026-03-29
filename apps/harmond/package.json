@@ -1,6 +1,6 @@
 {
   "name": "@sriinnu/harmond",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Harmon daemon - multi-provider engine, store, and playback runtime",
   "license": "AGPL-3.0-only",
   "repository": {
