@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div id="onboarding"></div>
     <main class="shell">
       <header class="hero">
         <p class="eyebrow">Harmon Web</p>
@@ -36,8 +37,41 @@
           <button id="previous-button">Prev</button>
           <button id="pause-button">Pause</button>
           <button id="next-button">Next</button>
+          <button class="icon-btn" id="reset-onboarding" title="Re-run setup wizard" aria-label="Re-run setup wizard">&#x2699;</button>
         </div>
         <p id="transport-note" class="hint" aria-live="polite"></p>
+      </section>
+
+      <section class="panel auth-panel" id="auth-panel" hidden>
+        <h3>Provider Auth</h3>
+        <div class="provider-auth-grid" id="auth-grid"></div>
+      </section>
+
+      <section class="panel session-panel" id="session-panel">
+        <h3>Session</h3>
+        <div class="session-controls">
+          <select id="session-mode">
+            <option value="focus">Focus</option>
+            <option value="relax">Relax</option>
+            <option value="energize">Energize</option>
+            <option value="meditate">Meditate</option>
+            <option value="workout">Workout</option>
+          </select>
+          <button class="action-btn" id="session-start">Start Session</button>
+          <button class="action-btn" id="session-nudge-calmer" disabled>Calmer</button>
+          <button class="action-btn" id="session-nudge-sharper" disabled>Sharper</button>
+          <button class="action-btn danger" id="session-stop" disabled>Stop</button>
+        </div>
+        <div id="session-status" class="session-status-text"></div>
+      </section>
+
+      <section class="panel smart-panel">
+        <h3>Smart Play</h3>
+        <form class="smart-play-form" id="smart-play-form">
+          <input type="text" id="smart-query" placeholder="Play anything — searches all providers" aria-label="Smart play search" />
+          <button type="submit" class="action-btn accent">Play</button>
+        </form>
+        <div id="smart-result" aria-live="polite"></div>
       </section>
 
       <section class="panel">

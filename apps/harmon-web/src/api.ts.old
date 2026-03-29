@@ -76,6 +76,76 @@ export class HarmonWebClient {
     await this.requestJson(`/v1/${provider}/prev`, undefined, 'POST');
   }
 
+  // ── Auth methods ───────────────────────────────────────────────────
+
+  async spotifyLogin(): Promise<{ url: string }> {
+    return this.requestJson<{ url: string }>('/v1/auth/spotify/login', undefined, 'POST');
+  }
+
+  async youtubeLogin(): Promise<{ url: string }> {
+    return this.requestJson<{ url: string }>('/v1/auth/youtube/login', undefined, 'POST');
+  }
+
+  async appleSetUserToken(token: string): Promise<{ success: boolean }> {
+    return this.requestJson<{ success: boolean }>('/v1/auth/apple/set-user-token', undefined, 'POST', { token });
+  }
+
+  async youtubeRefresh(): Promise<{ success: boolean }> {
+    return this.requestJson<{ success: boolean }>('/v1/auth/youtube/refresh', undefined, 'POST');
+  }
+
+  async appleRefresh(): Promise<{ success: boolean }> {
+    return this.requestJson<{ success: boolean }>('/v1/auth/apple/refresh', undefined, 'POST');
+  }
+
+  // ── Session methods ────────────────────────────────────────────────
+
+  async sessionStart(provider: string, mode: string): Promise<unknown> {
+    return this.requestJson('/v1/command', undefined, 'POST', {
+      id: `c_${Date.now().toString(36)}`,
+      ts: Date.now(),
+      source: { kind: 'cli', device: 'linux' },
+      type: 'session.start',
+      payload: {
+        policy: {
+          version: 1,
+          provider,
+          mode,
+        },
+      },
+    });
+  }
+
+  async sessionStop(): Promise<unknown> {
+    return this.requestJson('/v1/command', undefined, 'POST', {
+      id: `c_${Date.now().toString(36)}`,
+      ts: Date.now(),
+      source: { kind: 'cli', device: 'linux' },
+      type: 'session.stop',
+      payload: {},
+    });
+  }
+
+  async sessionNudge(direction: 'calmer' | 'sharper'): Promise<unknown> {
+    return this.requestJson('/v1/command', undefined, 'POST', {
+      id: `c_${Date.now().toString(36)}`,
+      ts: Date.now(),
+      source: { kind: 'cli', device: 'linux' },
+      type: 'session.nudge',
+      payload: { direction },
+    });
+  }
+
+  // ── Smart play ─────────────────────────────────────────────────────
+
+  async smartPlay(query: string): Promise<unknown> {
+    return this.requestJson('/v1/smart/play', undefined, 'POST', { query });
+  }
+
+  async smartSearch(query: string): Promise<unknown> {
+    return this.requestJson('/v1/smart/search', { q: query });
+  }
+
   /**
    * I send one authenticated request and keep error handling short and readable for the UI.
    */
