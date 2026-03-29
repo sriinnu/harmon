@@ -50,6 +50,25 @@ public enum CompanionPlaybackLauncherError: Error, LocalizedError, Sendable {
     }
 }
 
+/// Known music-provider hosts that we allow the companion to open.
+private let allowedPlaybackHosts: Set<String> = [
+    "open.spotify.com",
+    "music.apple.com",
+    "music.youtube.com",
+    "youtube.com",
+    "www.youtube.com",
+    "youtu.be",
+]
+
+/// Only opens URLs whose host belongs to a known music-provider domain.
+/// Returns `false` (and refuses to open) for any other host.
+func isAllowedPlaybackURL(_ url: URL) -> Bool {
+    guard let host = url.host?.lowercased() else { return false }
+    // Allow spotify: deep links (no HTTP host) through unchanged.
+    if url.scheme == "spotify" { return true }
+    return allowedPlaybackHosts.contains(host)
+}
+
 /// I provide the smallest cross-platform launcher that can hand all three
 /// providers off to truthful local playback surfaces.
 public struct SystemPlaybackLauncher: CompanionPlaybackLaunching, Sendable {
@@ -76,6 +95,10 @@ public struct SystemPlaybackLauncher: CompanionPlaybackLaunching, Sendable {
             throw item.provider == .apple
                 ? CompanionPlaybackLauncherError.unsupportedAppleFallback
                 : CompanionPlaybackLauncherError.missingPlayableReference
+        }
+
+        guard isAllowedPlaybackURL(url) else {
+            throw CompanionPlaybackLauncherError.missingPlayableReference
         }
 
         #if canImport(UIKit)
@@ -106,6 +129,10 @@ public struct SystemPlaybackLauncher: CompanionPlaybackLaunching, Sendable {
         #endif
 
         guard let url = playbackURL(for: item) else {
+            throw CompanionPlaybackLauncherError.unsupportedAppleFallback
+        }
+
+        guard isAllowedPlaybackURL(url) else {
             throw CompanionPlaybackLauncherError.unsupportedAppleFallback
         }
 

@@ -161,17 +161,17 @@ class SessionEngineImpl implements SessionEngine {
     const currentWeights = policy.soft?.weights || {};
     const newWeights = { ...currentWeights };
 
-    // Adjust energy and valence — always clamp to [0,1]
+    // Adjust energy and valence — clamp to protocol range [-1, 1]
     if (typeof newWeights.energy === 'number') {
-      newWeights.energy = clamp(newWeights.energy + sign * amount, 0, 1);
+      newWeights.energy = clamp(newWeights.energy + sign * amount, -1, 1);
     } else {
-      newWeights.energy = clamp(0.5 + sign * amount, 0, 1);
+      newWeights.energy = clamp(0.5 + sign * amount, -1, 1);
     }
 
     if (typeof newWeights.valence === 'number') {
-      newWeights.valence = clamp(newWeights.valence + sign * amount * 0.5, 0, 1);
+      newWeights.valence = clamp(newWeights.valence + sign * amount * 0.5, -1, 1);
     } else {
-      newWeights.valence = clamp(0.5 + sign * amount * 0.5, 0, 1);
+      newWeights.valence = clamp(0.5 + sign * amount * 0.5, -1, 1);
     }
 
     // Update policy

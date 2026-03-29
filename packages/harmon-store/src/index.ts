@@ -174,16 +174,27 @@ export class HarmonStore {
     const result = await this.client.execute('SELECT MAX(version) as v FROM _migrations');
     const currentVersion = (result.rows[0]?.v as number) || 0;
 
-    // Run pending migrations
+    // Run pending migrations (each wrapped in a transaction for atomicity).
+    // PRAGMA statements cannot execute inside a transaction, so they are
+    // run separately and the version is recorded in its own batch.
     for (const migration of MIGRATIONS) {
       if (migration.version > currentVersion) {
-        for (const statement of migration.statements) {
-          await this.client.execute(statement.trim());
+        const pragmas = migration.statements.filter((s) => /^\s*PRAGMA\b/i.test(s));
+        const regular = migration.statements.filter((s) => !/^\s*PRAGMA\b/i.test(s));
+
+        // Execute PRAGMA statements outside a transaction
+        for (const pragma of pragmas) {
+          await this.client.execute(pragma.trim());
         }
-        await this.client.execute({
-          sql: 'INSERT INTO _migrations (version) VALUES (?)',
-          args: [migration.version],
-        });
+
+        // Batch the remaining DDL/DML with the version bookmark
+        await this.client.batch(
+          [
+            ...regular.map((s) => s.trim()),
+            { sql: 'INSERT INTO _migrations (version) VALUES (?)', args: [migration.version] },
+          ],
+          'write',
+        );
       }
     }
 

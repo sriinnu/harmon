@@ -308,7 +308,7 @@ export class HarmonAppMCPServer {
         readOnlyHint: false,
         title: 'Play Music',
       },
-      description: 'Play a track immediately by URI/URL, or search and play the first matching result.',
+      description: 'Play a track on the active provider. Accepts a Spotify URI, Apple Music URL, or YouTube URL. For Apple Music, a direct URL is required — query-based playback is not supported.',
       inputSchema: {
         kind: z.enum(['track', 'song']).default('song'),
         provider: z.enum(['spotify', 'apple', 'youtube']),
@@ -317,6 +317,12 @@ export class HarmonAppMCPServer {
       },
     }, async ({ kind, provider, query, target }, extra) => {
       assertToolScopesFromExtra(extra, this.auth.writeScopes, authEnabled);
+      if (provider === 'apple' && !target && query) {
+        return {
+          content: [{ type: 'text' as const, text: 'Apple Music requires a direct URL for playback. Search for the track first using search_music, then use the returned URL.' }],
+          isError: true,
+        };
+      }
       const resolvedTarget = target ?? await this.resolvePlayTarget(provider, kind, query);
       if (!resolvedTarget) {
         throw new Error('play_music requires a target or a query that resolves to a playable track.');
