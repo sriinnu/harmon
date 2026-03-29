@@ -1,0 +1,107 @@
+:root {
+  --bg: #f4efe5;
+  --ink: #16212f;
+  --accent: #ca5a2e;
+  --accent-ink: #fff8f1;
+  --muted: #5f6b77;
+  --line: rgba(22, 33, 47, 0.14);
+  --panel: rgba(255, 255, 255, 0.72);
+  --radius: 16px;
+  --radius-sm: 10px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  min-height: 100vh;
+  background-image:
+    radial-gradient(ellipse 60% 40% at 15% 10%, rgba(202, 90, 46, 0.09), transparent),
+    linear-gradient(170deg, rgba(202, 90, 46, 0.04) 0%, transparent 40%);
+}
+
+.panel {
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25em;
+  margin-bottom: 1em;
+}
+
+.panel h3 {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 0.8em;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: transparent;
+  padding: 0.5em 1em;
+  border-radius: var(--radius-sm);
+  font-size: 0.9em;
+  transition: all 0.16s ease;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-danger {
+  background: #c62828;
+  color: white;
+  border-color: #c62828;
+}
+
+input, select {
+  padding: 0.5em 0.8em;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 0.9em;
+  background: rgba(255,255,255,0.9);
+  color: var(--ink);
+}
+
+input:focus, select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.status-ok { color: #2e7d32; font-weight: 600; }
+.status-err { color: #c62828; }
+.status-pending { color: var(--accent); }
+
+.shell {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 1.5em 1em;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 0.8em;
+}
+
+@media (max-width: 640px) {
+  .shell { padding: 1em 0.5em; }
+}

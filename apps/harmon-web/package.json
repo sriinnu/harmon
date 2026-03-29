@@ -6,15 +6,23 @@
   "description": "Small multi-provider web control surface for Harmon daemon",
   "license": "AGPL-3.0-only",
   "scripts": {
-    "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc -p ./tsconfig.json && node --experimental-strip-types ./scripts/copy-static.ts",
-    "dev": "pnpm build && node --experimental-strip-types ./scripts/serve.ts",
-    "serve": "node --experimental-strip-types ./scripts/serve.ts",
-    "start": "pnpm build && pnpm serve",
-    "lint": "tsc -p ./tsconfig.json --noEmit",
-    "test": "vitest --root ../.. apps/harmon-web/src/api.test.ts apps/harmon-web/src/ui.test.ts apps/harmon-web/scripts/serve.test.ts",
-    "test:run": "vitest --root ../.. run apps/harmon-web/src/api.test.ts apps/harmon-web/src/ui.test.ts apps/harmon-web/scripts/serve.test.ts"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "vite preview --port 4173",
+    "lint": "tsc --noEmit",
+    "test": "vitest --root ../.. run apps/harmon-web/src/**/*.test.{ts,tsx}",
+    "test:run": "vitest --root ../.. run apps/harmon-web/src/**/*.test.{ts,tsx}"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.3"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   }
 }
