@@ -31,6 +31,7 @@ interface SpotifyPagedResponse<T> {
 export function createCLI(config: CLIConfig) {
   const authHeaders = config.token ? { Authorization: `Bearer ${config.token}` } : {};
   const timeoutMs = config.timeoutMs ?? 10000;
+  let insecureWarned = false;
 
   const requestJson = async <T = unknown>(
     path: string,
@@ -40,6 +41,18 @@ export function createCLI(config: CLIConfig) {
       query?: Record<string, string | number | undefined>;
     } = {}
   ): Promise<T> => {
+    if (!insecureWarned && config.endpoint.startsWith('http://')) {
+      const parsed = new URL(config.endpoint);
+      const loopback = ['127.0.0.1', '::1', 'localhost'].includes(parsed.hostname);
+      if (!loopback && config.token) {
+        console.warn(
+          'WARNING: Sending auth token over insecure HTTP to %s. Use HTTPS for remote daemons.',
+          parsed.hostname,
+        );
+        insecureWarned = true;
+      }
+    }
+
     const url = new URL(`${config.endpoint}${path}`);
     if (options.query) {
       for (const [key, value] of Object.entries(options.query)) {

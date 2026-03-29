@@ -40,12 +40,20 @@ export const HardConstraints = z.object({
       min: z.number().optional(),
       max: z.number().optional(),
     })
+    .refine(
+      (data) => data.min === undefined || data.max === undefined || data.min <= data.max,
+      { message: 'tempo.min must be <= tempo.max' },
+    )
     .optional(),
   energy: z
     .object({
       min: z.number().min(0).max(1).optional(),
       max: z.number().min(0).max(1).optional(),
     })
+    .refine(
+      (data) => data.min === undefined || data.max === undefined || data.min <= data.max,
+      { message: 'energy.min must be <= energy.max' },
+    )
     .optional(),
   instrumentalnessMin: z.number().min(0).max(1).optional(),
 });
@@ -129,7 +137,10 @@ export type DevicePreferences = z.infer<typeof DevicePreferences>;
 export const QueuePreferences = z.object({
   target: z.number().int().min(1).max(100).optional(),
   refillWhenBelow: z.number().int().min(0).max(100).optional(),
-});
+}).refine(
+  (data) => data.refillWhenBelow === undefined || data.target === undefined || data.refillWhenBelow <= data.target,
+  { message: 'queue.refillWhenBelow must be <= queue.target' },
+);
 export type QueuePreferences = z.infer<typeof QueuePreferences>;
 
 /** Session mode */

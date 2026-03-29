@@ -88,8 +88,21 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
   const endpoint = config.endpoint ?? process.env.HARMON_ENDPOINT ?? DEFAULT_DAEMON_ENDPOINT;
   const token = config.token ?? process.env.HARMON_API_TOKEN;
   const timeoutMs = config.timeoutMs ?? 10_000;
+  let insecureWarned = false;
 
   const requestJson = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
+    if (!insecureWarned && endpoint.startsWith('http://')) {
+      const parsed = new URL(endpoint);
+      const loopback = ['127.0.0.1', '::1', 'localhost'].includes(parsed.hostname);
+      if (!loopback && token) {
+        console.warn(
+          'WARNING: Sending auth token over insecure HTTP to %s. Use HTTPS for remote daemons.',
+          parsed.hostname,
+        );
+        insecureWarned = true;
+      }
+    }
+
     const url = buildDaemonUrl(endpoint, path);
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) {

@@ -662,7 +662,7 @@ export class Harmond implements DaemonContext {
       if (!state || state.queuedTracks.length === 0) {
         await this.rollbackFailedSessionStart(engine, provider);
         throw new ProviderUnavailableError(
-          `No tracks were available from ${provider} for this session policy. Adjust the policy sources and try again.`,
+          `No tracks were queued for ${provider}. Possible causes: provider not authenticated, policy too restrictive, or all sources returned empty. Check 'harmon auth status' and review your session policy.`,
         );
       }
 
