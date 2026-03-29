@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useDaemon } from '../lib/DaemonContext';
 import type { HarmonClient } from '../lib/api';
 
@@ -28,6 +28,8 @@ interface ProviderRowProps {
 
 function ProviderRow({ name, status, client, onRefresh }: ProviderRowProps) {
   const [busy, setBusy] = useState(false);
+  const abortRef = useRef(false);
+  useEffect(() => () => { abortRef.current = true; }, []);
 
   const connect = async () => {
     setBusy(true);
@@ -37,14 +39,18 @@ function ProviderRow({ name, status, client, onRefresh }: ProviderRowProps) {
         window.open(url, '_blank', 'noopener,noreferrer');
         // Poll for completion
         for (let i = 0; i < 30; i++) {
+          if (abortRef.current) return;
           await new Promise(r => setTimeout(r, 2000));
+          if (abortRef.current) return;
           await onRefresh();
         }
       } else if (name === 'youtube') {
         const { url } = await client.youtubeLogin();
         window.open(url, '_blank', 'noopener,noreferrer');
         for (let i = 0; i < 30; i++) {
+          if (abortRef.current) return;
           await new Promise(r => setTimeout(r, 2000));
+          if (abortRef.current) return;
           await onRefresh();
         }
       } else if (name === 'apple') {

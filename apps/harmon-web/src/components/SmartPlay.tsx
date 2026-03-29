@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useDaemon } from '../lib/DaemonContext';
+import { useClient } from '../lib/DaemonContext';
 
 export function SmartPlay() {
-  const { client } = useDaemon();
+  const { client } = useClient();
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { HarmonClient } from '../lib/api';
 
 const ONBOARDING_KEY = 'harmon-onboarding-complete';
@@ -16,6 +16,9 @@ interface Props {
 }
 
 export function Onboarding({ onComplete }: Props) {
+  const abortRef = useRef(false);
+  useEffect(() => () => { abortRef.current = true; }, []);
+
   const [step, setStep] = useState(0);
   const [url, setUrl] = useState('http://127.0.0.1:17373');
   const [token, setToken] = useState('');
@@ -116,7 +119,9 @@ export function Onboarding({ onComplete }: Props) {
           setStatus(`Opening ${name} login...`);
           // Poll
           for (let i = 0; i < 30; i++) {
+            if (abortRef.current) return;
             await new Promise(r => setTimeout(r, 2000));
+            if (abortRef.current) return;
             const s = await client.getStatus();
             if (s.providers?.[name]?.connected) {
               setConnected(prev => [...new Set([...prev, name])]);
@@ -129,7 +134,9 @@ export function Onboarding({ onComplete }: Props) {
           window.open(authUrl, '_blank', 'noopener,noreferrer');
           setStatus(`Opening ${name} login...`);
           for (let i = 0; i < 30; i++) {
+            if (abortRef.current) return;
             await new Promise(r => setTimeout(r, 2000));
+            if (abortRef.current) return;
             const s = await client.getStatus();
             if (s.providers?.[name]?.connected) {
               setConnected(prev => [...new Set([...prev, name])]);

@@ -1,9 +1,9 @@
-import { useDaemon } from '../lib/DaemonContext';
+import { useClient } from '../lib/DaemonContext';
 import { useState, useEffect } from 'react';
 import type { TrackInfo } from '../lib/api';
 
 export function NowPlaying() {
-  const { client, provider } = useDaemon();
+  const { client, provider } = useClient();
   const [track, setTrack] = useState<TrackInfo | null>(null);
 
   useEffect(() => {
