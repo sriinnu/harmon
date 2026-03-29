@@ -132,7 +132,7 @@ export interface SessionState {
  * Event emitted by engine
  */
 export interface EngineEvent {
-  type: 'session.started' | 'session.stopped' | 'queue.refilled' | 'error';
+  type: 'session.started' | 'session.stopped' | 'session.nudged' | 'track.started' | 'queue.refilled' | 'error';
   payload: Record<string, unknown>;
 }
 
@@ -140,6 +140,16 @@ export interface EngineEvent {
  * Event callback type
  */
 export type EventCallback = (event: EngineEvent) => void;
+
+/**
+ * Minimal logger contract for engine internals.
+ * Matches the subset of pino that harmon-core actually uses,
+ * so the core package stays decoupled from any concrete logger.
+ */
+export interface EngineLogger {
+  warn(obj: Record<string, unknown>, msg: string): void;
+  error(obj: Record<string, unknown>, msg: string): void;
+}
 
 /**
  * Ranking result with score

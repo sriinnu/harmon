@@ -12,7 +12,7 @@ import type { SessionPolicy } from '@sriinnu/harmon-protocol';
 // ============================================================================
 
 function createTrack(overrides?: Partial<TrackWithFeatures>): TrackWithFeatures {
-  return {
+  const result: TrackWithFeatures = {
     id: overrides?.id || 'track-1',
     name: overrides?.name || 'Test Track',
     artist: overrides?.artist || 'Test Artist',
@@ -35,6 +35,10 @@ function createTrack(overrides?: Partial<TrackWithFeatures>): TrackWithFeatures 
       ...overrides?.features,
     },
   };
+  if (overrides?.explicit !== undefined) {
+    result.explicit = overrides.explicit;
+  }
+  return result;
 }
 
 function createPolicy(overrides?: Partial<SessionPolicy>): SessionPolicy {
@@ -201,6 +205,101 @@ describe('rankTracks - Hard Constraints', () => {
 
     expect(ranked).toHaveLength(1);
     expect(ranked[0].track.id).toBe('track-2');
+  });
+});
+
+// ============================================================================
+// Explicit Content Filtering Tests
+// ============================================================================
+
+describe('rankTracks - Explicit Content Filtering', () => {
+  it('filters explicit tracks when policy says avoid', async () => {
+    const candidates = [
+      createTrack({ id: 'track-clean', name: 'Clean Song', explicit: false }),
+      createTrack({ id: 'track-explicit', name: 'Explicit Song', explicit: true }),
+      createTrack({ id: 'track-also-clean', name: 'Also Clean', explicit: false }),
+    ];
+
+    const policy = createPolicy({
+      hard: { explicit: 'avoid' },
+    });
+
+    const ranked = await rankTracks(candidates, policy, [], 0);
+
+    expect(ranked).toHaveLength(2);
+    expect(ranked.map(r => r.track.id)).toContain('track-clean');
+    expect(ranked.map(r => r.track.id)).toContain('track-also-clean');
+    expect(ranked.map(r => r.track.id)).not.toContain('track-explicit');
+  });
+
+  it('requires explicit tracks when policy says require', async () => {
+    const candidates = [
+      createTrack({ id: 'track-clean', name: 'Clean Song', explicit: false }),
+      createTrack({ id: 'track-explicit', name: 'Explicit Song', explicit: true }),
+      createTrack({ id: 'track-also-clean', name: 'Also Clean', explicit: false }),
+    ];
+
+    const policy = createPolicy({
+      hard: { explicit: 'require' },
+    });
+
+    const ranked = await rankTracks(candidates, policy, [], 0);
+
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0].track.id).toBe('track-explicit');
+  });
+
+  it('allows all tracks when policy says allow', async () => {
+    const candidates = [
+      createTrack({ id: 'track-clean', name: 'Clean Song', explicit: false }),
+      createTrack({ id: 'track-explicit', name: 'Explicit Song', explicit: true }),
+    ];
+
+    const policy = createPolicy({
+      hard: { explicit: 'allow' },
+    });
+
+    const ranked = await rankTracks(candidates, policy, [], 0);
+
+    expect(ranked).toHaveLength(2);
+    expect(ranked.map(r => r.track.id)).toContain('track-clean');
+    expect(ranked.map(r => r.track.id)).toContain('track-explicit');
+  });
+
+  it('allows all tracks when explicit field is undefined', async () => {
+    const candidates = [
+      createTrack({ id: 'track-no-field', name: 'No Explicit Field' }),
+      createTrack({ id: 'track-explicit', name: 'Explicit Song', explicit: true }),
+    ];
+
+    // Policy says avoid, but tracks without explicit field should still pass
+    const policy = createPolicy({
+      hard: { explicit: 'avoid' },
+    });
+
+    const ranked = await rankTracks(candidates, policy, [], 0);
+
+    // track-no-field passes because explicit is undefined (not true)
+    // track-explicit is filtered because explicit === true
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0].track.id).toBe('track-no-field');
+  });
+
+  it('treats tracks without explicit field as non-explicit for require policy', async () => {
+    const candidates = [
+      createTrack({ id: 'track-no-field', name: 'No Explicit Field' }),
+      createTrack({ id: 'track-explicit', name: 'Explicit Song', explicit: true }),
+    ];
+
+    const policy = createPolicy({
+      hard: { explicit: 'require' },
+    });
+
+    const ranked = await rankTracks(candidates, policy, [], 0);
+
+    // Only track-explicit passes because explicit === true
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0].track.id).toBe('track-explicit');
   });
 });
 

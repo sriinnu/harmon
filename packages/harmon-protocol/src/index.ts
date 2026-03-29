@@ -142,12 +142,14 @@ export const SessionPolicy = z.object({
   mode: SessionMode.optional(),
   provider: MusicProviderName.optional(),
   durationMs: z.number().int().min(1000).max(86400000).optional(), // 1s to 24h
+  /** Device preferences (reserved — not yet implemented in session engine). */
   device: DevicePreferences.optional(),
   queue: QueuePreferences.optional(),
   hard: HardConstraints.optional(),
   soft: SoftPreferences.optional(),
   sources: MusicSources.optional(),
   limits: RepetitionLimits.optional(),
+  /** Meditation/breathing settings (reserved — not yet implemented in session engine). */
   dhyana: DhyanaSettings.optional(),
 });
 export type SessionPolicy = z.infer<typeof SessionPolicy>;
@@ -207,6 +209,7 @@ export const TrackInfo = z.object({
   provider: z.enum(['spotify', 'apple', 'youtube', 'local']).optional(),
   imageUrl: z.string().optional(),
   isrc: z.string().optional(),
+  explicit: z.boolean().optional(),
   playbackTruth: z.enum(['verified', 'daemon-managed']).optional(),
 });
 export type TrackInfo = z.infer<typeof TrackInfo>;
@@ -273,9 +276,12 @@ export const Event = z.object({
     'device.changed',
     'spotify.connected',
     'spotify.disconnected',
+    'youtube.connected',
+    'youtube.disconnected',
+    'apple.connected',
+    'apple.disconnected',
     'connected',
     'heartbeat',
-    'command',
     'error',
   ]),
   payload: z.record(z.string(), z.unknown()).optional(),

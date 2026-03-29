@@ -1517,16 +1517,13 @@ describe('Apple Endpoints', () => {
     expect(response.body).toHaveLength(1);
   });
 
-  it('accepts Apple topTracks sessions when the daemon provides local history-backed signals', async () => {
-    let engineState: { id: string; queuedTracks: Array<{ id: string }> } | null = null;
+  it('rejects Apple topTracks sessions because Apple Music does not support top tracks', async () => {
     (daemon as any).appleCatalogEnabled = true;
     (daemon as any).appleLibraryEnabled = false;
     (daemon as any).appleMusicClient = {};
     (daemon as any).appleRuntime = {
       name: 'apple',
-      provider: {
-        getTopTracks: vi.fn().mockResolvedValue([{ id: 'apple-track-1' }]),
-      },
+      provider: {},
       playback: {
         play: vi.fn().mockResolvedValue(undefined),
         resetSessionState: vi.fn().mockResolvedValue(undefined),
@@ -1535,16 +1532,9 @@ describe('Apple Endpoints', () => {
       autoStartSession: true,
     };
     (daemon as any).engines.set('apple', {
-      getState: vi.fn().mockImplementation(() => engineState),
-      start: vi.fn().mockImplementation(async () => {
-        engineState = {
-          id: 'sess_apple_top_tracks',
-          queuedTracks: [{ id: 'apple-track-1' }],
-        };
-      }),
-      stop: vi.fn().mockImplementation(async () => {
-        engineState = null;
-      }),
+      getState: vi.fn().mockReturnValue(null),
+      start: vi.fn(),
+      stop: vi.fn(),
     });
 
     const response = await request(app)
@@ -1565,11 +1555,8 @@ describe('Apple Endpoints', () => {
         },
       });
 
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      success: true,
-      sessionId: 'sess_apple_top_tracks',
-    });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('does not support top tracks');
   });
 
   it('GET /v1/apple/recommendations supports catalog-only seeded recommendations without a playback runtime', async () => {
@@ -2091,37 +2078,12 @@ describe('YouTube Endpoints', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.body.error).toContain('do not support audio-feature hard constraints');
+    expect(response.body.error).toContain('do not support audio-feature constraints');
   });
 
-  it('accepts YouTube topTracks sessions when the daemon uses local playback history', async () => {
-    let engineState: { id: string; queuedTracks: Array<{ id: string }> } | null = null;
+  it('rejects YouTube topTracks sessions because YouTube Music does not support top tracks', async () => {
     (daemon as any).youtubeAccessToken = undefined;
     (daemon as any).youtubeMusicClient = {};
-    (daemon as any).youtubeRuntime = {
-      name: 'youtube',
-      provider: {
-        getTopTracks: vi.fn().mockResolvedValue([{ id: 'yt-track-1' }]),
-      },
-      playback: {
-        play: vi.fn().mockResolvedValue(undefined),
-        resetSessionState: vi.fn().mockResolvedValue(undefined),
-      },
-      playbackMode: 'browser-handoff',
-      autoStartSession: true,
-    };
-    (daemon as any).engines.set('youtube', {
-      getState: vi.fn().mockImplementation(() => engineState),
-      start: vi.fn().mockImplementation(async () => {
-        engineState = {
-          id: 'sess_youtube_top_tracks',
-          queuedTracks: [{ id: 'yt-track-1' }],
-        };
-      }),
-      stop: vi.fn().mockImplementation(async () => {
-        engineState = null;
-      }),
-    });
 
     const response = await request(app)
       .post('/v1/command')
@@ -2141,11 +2103,8 @@ describe('YouTube Endpoints', () => {
         },
       });
 
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      success: true,
-      sessionId: 'sess_youtube_top_tracks',
-    });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('does not support top tracks');
   });
 
   it('starts a YouTube-backed session from playlist seeds', async () => {

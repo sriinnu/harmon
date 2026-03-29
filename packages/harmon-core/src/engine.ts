@@ -11,6 +11,7 @@ import type {
   SessionState,
   EventCallback,
   EngineEvent,
+  EngineLogger,
   PlayRecord,
   SessionStore,
 } from './types.js';
@@ -34,6 +35,8 @@ export interface EngineConfig {
   playback: PlaybackController;
   store: SessionStore;
   onEvent?: EventCallback;
+  /** Optional logger for engine internals. Falls back to no-op if omitted. */
+  logger?: EngineLogger;
 }
 
 class SessionEngineImpl implements SessionEngine {
@@ -41,6 +44,7 @@ class SessionEngineImpl implements SessionEngine {
   private playback: PlaybackController;
   private store: SessionStore;
   private onEvent: EventCallback;
+  private logger: EngineLogger;
   private state: SessionState | null = null;
   private refillInterval: ReturnType<typeof setInterval> | null = null;
   private refilling = false;
@@ -53,6 +57,7 @@ class SessionEngineImpl implements SessionEngine {
     this.playback = config.playback;
     this.store = config.store;
     this.onEvent = config.onEvent || (() => {});
+    this.logger = config.logger || { warn: () => {}, error: () => {} };
   }
 
   async start(policy: SessionPolicy): Promise<void> {
@@ -193,6 +198,16 @@ class SessionEngineImpl implements SessionEngine {
       { direction, amount, newWeights },
       this.state.id
     );
+
+    this.emit({
+      type: 'session.nudged',
+      payload: {
+        sessionId: this.state.id,
+        direction,
+        amount,
+        newWeights,
+      },
+    });
   }
 
   getQueue(): TrackInfo[] {
@@ -227,7 +242,8 @@ class SessionEngineImpl implements SessionEngine {
       const candidates = await fetchCandidates(
         this.provider,
         policy.sources || {},
-        needed * 3  // Fetch 3x needed for filtering
+        needed * 3,  // Fetch 3x needed for filtering
+        this.logger,
       );
 
       if (candidates.length === 0) {
@@ -301,10 +317,30 @@ class SessionEngineImpl implements SessionEngine {
     };
 
     this.state.history.push(record);
+
+    // Trim history to last 48 hours to prevent unbounded memory growth.
+    // 48h covers the widest repetition limit (repeatTrackWithinDays: 1 = 24h)
+    // plus a generous safety margin.
+    const HISTORY_RETENTION_MS = 48 * 60 * 60 * 1000;
+    const cutoff = Date.now() - HISTORY_RETENTION_MS;
+    if (this.state.history.length > 100) {
+      this.state.history = this.state.history.filter(r => r.playedAt >= cutoff);
+    }
+
     this.state.currentTrack = track;
 
     // Remove from queue
     this.state.queuedTracks = this.state.queuedTracks.filter(t => t.id !== track.id);
+
+    // Emit engine event so the daemon can broadcast to SSE clients
+    this.emit({
+      type: 'track.started',
+      payload: {
+        sessionId: this.state.id,
+        playedAt: record.playedAt,
+        track,
+      },
+    });
 
     await this.store.logEvent(
       'track.started',
@@ -323,7 +359,7 @@ class SessionEngineImpl implements SessionEngine {
 
     this.refillInterval = setInterval(() => {
       this.refillQueue().catch(err => {
-        console.error('Auto-refill failed:', err);
+        this.logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Auto-refill failed');
       });
     }, this.REFILL_CHECK_INTERVAL_MS);
   }
@@ -339,7 +375,7 @@ class SessionEngineImpl implements SessionEngine {
     try {
       this.onEvent(event);
     } catch (error) {
-      console.error('Event callback error:', error);
+      this.logger.error({ error: error instanceof Error ? error.message : String(error) }, 'Event callback error');
     }
   }
 

@@ -67,9 +67,12 @@ function passesHardConstraints(
   }
 
   // Explicit content check
-  // Note: Would need explicit flag on track - skipping for now
-  // if (hard.explicit === 'avoid' && track.explicit) return false;
-  // if (hard.explicit === 'require' && !track.explicit) return false;
+  if (hard.explicit === 'avoid' && track.explicit === true) {
+    return false;
+  }
+  if (hard.explicit === 'require' && track.explicit !== true) {
+    return false;
+  }
 
   // Tempo range
   if (hard.tempo) {

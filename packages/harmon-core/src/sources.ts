@@ -3,7 +3,7 @@
  */
 
 import type { TrackInfo } from '@sriinnu/harmon-protocol';
-import type { MusicProvider, SourcesConfig, TrackWithFeatures, AudioFeatures } from './types.js';
+import type { MusicProvider, SourcesConfig, TrackWithFeatures, AudioFeatures, EngineLogger } from './types.js';
 
 /** Default features for tracks from providers without audio analysis (Apple Music, YouTube Music) */
 const DEFAULT_FEATURES: AudioFeatures = {
@@ -23,7 +23,8 @@ const DEFAULT_FEATURES: AudioFeatures = {
 export async function fetchCandidates(
   provider: MusicProvider,
   sources: SourcesConfig,
-  targetCount: number
+  targetCount: number,
+  logger?: EngineLogger,
 ): Promise<TrackWithFeatures[]> {
   const candidates: TrackWithFeatures[] = [];
   const perSource = Math.ceil(targetCount / countActiveSources(sources));
@@ -33,8 +34,9 @@ export async function fetchCandidates(
     const tracks = await fetchSourceTracks(
       'liked tracks',
       () => provider.getLibraryTracks({ limit: perSource }),
+      logger,
     );
-    const withFeatures = await enrichWithFeatures(provider, tracks);
+    const withFeatures = await enrichWithFeatures(provider, tracks, logger);
     candidates.push(...withFeatures);
   }
 
@@ -43,8 +45,9 @@ export async function fetchCandidates(
     const tracks = await fetchSourceTracks(
       'top tracks',
       () => provider.getTopTracks({ limit: perSource }),
+      logger,
     );
-    const withFeatures = await enrichWithFeatures(provider, tracks);
+    const withFeatures = await enrichWithFeatures(provider, tracks, logger);
     candidates.push(...withFeatures);
   }
 
@@ -53,8 +56,9 @@ export async function fetchCandidates(
     const tracks = await fetchSourceTracks(
       'recent plays',
       () => provider.getRecentlyPlayed({ limit: perSource }),
+      logger,
     );
-    const withFeatures = await enrichWithFeatures(provider, tracks);
+    const withFeatures = await enrichWithFeatures(provider, tracks, logger);
     candidates.push(...withFeatures);
   }
 
@@ -64,8 +68,9 @@ export async function fetchCandidates(
       const tracks = await fetchSourceTracks(
         `search ${query}`,
         () => provider.search(query, perSource),
+        logger,
       );
-      const withFeatures = await enrichWithFeatures(provider, tracks);
+      const withFeatures = await enrichWithFeatures(provider, tracks, logger);
       candidates.push(...withFeatures);
     }
   }
@@ -81,8 +86,9 @@ export async function fetchCandidates(
             extractId(playlistId),
             { limit: Math.ceil(perSource / seedPlaylists.length) },
           ),
+        logger,
       );
-      const withFeatures = await enrichWithFeatures(provider, tracks);
+      const withFeatures = await enrichWithFeatures(provider, tracks, logger);
       candidates.push(...withFeatures);
     }
   }
@@ -103,8 +109,9 @@ export async function fetchCandidates(
             seedTrackIds: seedTracks,
             limit: discoveryCount,
           }),
+        logger,
       );
-      const withFeatures = await enrichWithFeatures(provider, recommendations);
+      const withFeatures = await enrichWithFeatures(provider, recommendations, logger);
       candidates.push(...withFeatures);
     }
   }
@@ -119,7 +126,8 @@ export async function fetchCandidates(
  */
 async function fetchSourceTracks(
   sourceName: string,
-  loader: () => Promise<TrackInfo[]>
+  loader: () => Promise<TrackInfo[]>,
+  logger?: EngineLogger,
 ): Promise<TrackInfo[]> {
   try {
     return await loader();
@@ -127,7 +135,7 @@ async function fetchSourceTracks(
     if (!isExplicitlyUnsupportedSourceError(error)) {
       throw error;
     }
-    console.warn(`Skipping source ${sourceName}:`, error);
+    logger?.warn({ source: sourceName, error: error instanceof Error ? error.message : String(error) }, `Skipping source ${sourceName}`);
     return [];
   }
 }
@@ -146,7 +154,8 @@ function isExplicitlyUnsupportedSourceError(error: unknown): boolean {
  */
 async function enrichWithFeatures(
   provider: MusicProvider,
-  tracks: TrackInfo[]
+  tracks: TrackInfo[],
+  logger?: EngineLogger,
 ): Promise<TrackWithFeatures[]> {
   if (tracks.length === 0) {
     return [];
@@ -159,8 +168,9 @@ async function enrichWithFeatures(
   // a safe full fallback over silently attaching the wrong features
   // to the wrong tracks.
   if (featureResults.length !== tracks.length) {
-    console.warn(
-      `Feature result length mismatch: expected ${tracks.length}, received ${featureResults.length}. Falling back to defaults.`
+    logger?.warn(
+      { expected: tracks.length, received: featureResults.length },
+      'Feature result length mismatch — falling back to defaults',
     );
     featureResults = Array.from({ length: tracks.length }, () => null);
   }

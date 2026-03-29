@@ -26,15 +26,16 @@ describe('Encryptor', () => {
     expect(a).not.toBe(b);
   });
 
-  it('ciphertext format is salt:iv:authTag:encrypted', () => {
+  it('ciphertext format is fingerprint:salt:iv:authTag:encrypted', () => {
     const enc = createEncryptor({ secret: validSecret });
     const ct = enc.encrypt('test');
     const parts = ct.split(':');
-    expect(parts).toHaveLength(4);
-    expect(parts[0]).toHaveLength(64);  // salt: 32 bytes = 64 hex
-    expect(parts[1]).toHaveLength(24);  // iv: 12 bytes = 24 hex
-    expect(parts[2]).toHaveLength(32);  // authTag: 16 bytes = 32 hex
-    expect(parts[3].length).toBeGreaterThan(0);
+    expect(parts).toHaveLength(5);
+    expect(parts[0]).toHaveLength(8);   // fingerprint: first 4 bytes of SHA-256 = 8 hex
+    expect(parts[1]).toHaveLength(64);  // salt: 32 bytes = 64 hex
+    expect(parts[2]).toHaveLength(24);  // iv: 12 bytes = 24 hex
+    expect(parts[3]).toHaveLength(32);  // authTag: 16 bytes = 32 hex
+    expect(parts[4].length).toBeGreaterThan(0);
   });
 
   it('decrypts across different Encryptor instances (same secret)', () => {
@@ -48,20 +49,16 @@ describe('Encryptor', () => {
     const enc1 = createEncryptor({ secret: validSecret });
     const ciphertext = enc1.encrypt('secret data');
     const enc2 = createEncryptor({ secret: 'b'.repeat(32) });
-    expect(() => enc2.decrypt(ciphertext)).toThrow();
+    expect(() => enc2.decrypt(ciphertext)).toThrow(/key mismatch/i);
   });
 
   it('fails to decrypt tampered ciphertext', () => {
     const enc = createEncryptor({ secret: validSecret });
     const ct = enc.encrypt('sensitive');
     const parts = ct.split(':');
-    parts[3] = 'ff' + parts[3].slice(2);
+    // Tamper with the encrypted data (index 4 in the new 5-part format)
+    parts[4] = 'ff' + parts[4].slice(2);
     expect(() => enc.decrypt(parts.join(':'))).toThrow();
-  });
-
-  it('fails on invalid format (too few parts)', () => {
-    const enc = createEncryptor({ secret: validSecret });
-    expect(() => enc.decrypt('aabbcc:ddeeff')).toThrow('Invalid encrypted format');
   });
 
   it('handles empty string plaintext', () => {
@@ -93,5 +90,36 @@ describe('Encryptor', () => {
     const ct = enc.encrypt('before destroy');
     enc.destroy();
     expect(() => enc.decrypt(ct)).toThrow('destroyed');
+  });
+
+  it('detects key mismatch on decrypt', () => {
+    const enc1 = createEncryptor({ secret: 'aaaa'.repeat(8) });
+    const enc2 = createEncryptor({ secret: 'bbbb'.repeat(8) });
+    const ciphertext = enc1.encrypt('hello');
+    expect(() => enc2.decrypt(ciphertext)).toThrow(/key mismatch/i);
+    enc1.destroy();
+    enc2.destroy();
+  });
+
+  it('decrypts legacy format without fingerprint', () => {
+    // Manually construct a legacy 4-part ciphertext (salt:iv:authTag:encrypted)
+    // by encrypting with the current code and stripping the fingerprint
+    const enc = createEncryptor({ secret: validSecret });
+    const ct = enc.encrypt('legacy test');
+    const parts = ct.split(':');
+    // Remove the fingerprint (first part) to simulate the old format
+    const legacyCt = parts.slice(1).join(':');
+    expect(legacyCt.split(':')).toHaveLength(4);
+    expect(enc.decrypt(legacyCt)).toBe('legacy test');
+  });
+
+  it('fails on invalid format (too few parts)', () => {
+    const enc = createEncryptor({ secret: validSecret });
+    expect(() => enc.decrypt('aabbcc:ddeeff')).toThrow(/invalid encrypted format/i);
+  });
+
+  it('fails on invalid format (too many parts)', () => {
+    const enc = createEncryptor({ secret: validSecret });
+    expect(() => enc.decrypt('a:b:c:d:e:f')).toThrow(/invalid encrypted format/i);
   });
 });
