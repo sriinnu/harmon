@@ -5,11 +5,13 @@
 
 import { Command } from 'commander';
 import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createCLI, getDefaultEndpoint } from '../dist/index.js';
+import { listen } from './listen.js';
 import {
   assertSafeAuthImportEndpoint,
   classifyCliError,
@@ -675,6 +677,148 @@ program
   .option('-d, --debug', 'debug mode — show request/response details');
 
 program
+  .command('init')
+  .description('Interactive setup wizard — configure providers and generate .env')
+  .option('--output <path>', 'output path for .env file', '.env.harmon')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const outputPath = command.opts().output;
+
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
+
+    console.log('');
+    console.log('  Welcome to Harmon — Policy-driven music session manager');
+    console.log('  This wizard will help you configure your music providers.');
+    console.log('');
+
+    const env = {};
+
+    // Security (always required for production)
+    console.log('── Security ──────────────────────────────────────────');
+    const genSecret = await ask('  Generate encryption secret? (Y/n) ');
+    if (genSecret.toLowerCase() !== 'n') {
+      const { randomBytes } = await import('node:crypto');
+      env.HARMON_ENCRYPTION_SECRET = randomBytes(32).toString('base64');
+      console.log('  ✓ Encryption secret generated');
+    }
+
+    const genToken = await ask('  Generate API token? (Y/n) ');
+    if (genToken.toLowerCase() !== 'n') {
+      const { randomBytes } = await import('node:crypto');
+      env.HARMON_API_TOKEN = randomBytes(32).toString('base64');
+      console.log('  ✓ API token generated');
+    }
+
+    // Spotify
+    console.log('');
+    console.log('── Spotify ───────────────────────────────────────────');
+    console.log('  Create an app at https://developer.spotify.com/dashboard');
+    const spotifyId = await ask('  Client ID (or skip): ');
+    if (spotifyId.trim()) {
+      env.SPOTIFY_CLIENT_ID = spotifyId.trim();
+      const spotifySecret = await ask('  Client Secret: ');
+      if (spotifySecret.trim()) env.SPOTIFY_CLIENT_SECRET = spotifySecret.trim();
+      env.SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:17373/v1/auth/spotify/callback';
+      console.log('  ✓ Spotify configured');
+    } else {
+      console.log('  ⊘ Skipped');
+    }
+
+    // YouTube
+    console.log('');
+    console.log('── YouTube Music ─────────────────────────────────────');
+    console.log('  Option 1: API key (search only) — https://console.cloud.google.com');
+    console.log('  Option 2: OAuth (full access) — create OAuth credentials');
+    const ytMode = await ask('  Setup mode? (api-key / oauth / skip): ');
+    if (ytMode.trim() === 'api-key') {
+      const ytKey = await ask('  API Key: ');
+      if (ytKey.trim()) {
+        env.YT_API_KEY = ytKey.trim();
+        console.log('  ✓ YouTube configured (API key mode)');
+      }
+    } else if (ytMode.trim() === 'oauth') {
+      const ytClientId = await ask('  Client ID: ');
+      if (ytClientId.trim()) {
+        env.YOUTUBE_MUSIC_CLIENT_ID = ytClientId.trim();
+        const ytSecret = await ask('  Client Secret (optional): ');
+        if (ytSecret.trim()) env.YOUTUBE_MUSIC_CLIENT_SECRET = ytSecret.trim();
+        env.YOUTUBE_MUSIC_REDIRECT_URI = 'http://127.0.0.1:17373/v1/auth/youtube/callback';
+        console.log('  ✓ YouTube configured (OAuth mode)');
+      }
+    } else {
+      console.log('  ⊘ Skipped');
+    }
+
+    // Apple Music
+    console.log('');
+    console.log('── Apple Music ───────────────────────────────────────');
+    console.log('  Option 1: Static token — paste a developer JWT');
+    console.log('  Option 2: Auto-JWT — provide signing key material');
+    const appleMode = await ask('  Setup mode? (token / auto-jwt / skip): ');
+    if (appleMode.trim() === 'token') {
+      const appleDev = await ask('  Developer Token: ');
+      if (appleDev.trim()) {
+        env.APPLE_MUSIC_DEVELOPER_TOKEN = appleDev.trim();
+        const appleUser = await ask('  User Token (optional, for library): ');
+        if (appleUser.trim()) env.APPLE_MUSIC_USER_TOKEN = appleUser.trim();
+        console.log('  ✓ Apple Music configured (static token)');
+      }
+    } else if (appleMode.trim() === 'auto-jwt') {
+      const teamId = await ask('  Team ID: ');
+      const keyId = await ask('  Key ID: ');
+      const keyPath = await ask('  Private key path (.p8 file): ');
+      if (teamId.trim() && keyId.trim() && keyPath.trim()) {
+        env.APPLE_MUSIC_TEAM_ID = teamId.trim();
+        env.APPLE_MUSIC_KEY_ID = keyId.trim();
+        try {
+          const { readFileSync: readSync } = await import('node:fs');
+          env.APPLE_MUSIC_PRIVATE_KEY = readSync(keyPath.trim(), 'utf8').replace(/\n/g, '\\n');
+          console.log('  ✓ Apple Music configured (auto-JWT)');
+        } catch {
+          console.log('  ✗ Could not read key file: ' + keyPath.trim());
+        }
+      }
+    } else {
+      console.log('  ⊘ Skipped');
+    }
+
+    // Song recognition
+    console.log('');
+    console.log('── Song Recognition (optional) ───────────────────────');
+    const auddToken = await ask('  AudD API token (or skip): ');
+    if (auddToken.trim()) {
+      env.AUDD_API_TOKEN = auddToken.trim();
+      console.log('  ✓ Song recognition configured');
+    } else {
+      console.log('  ⊘ Skipped (use Chromaprint for free recognition)');
+    }
+
+    // Write .env file
+    console.log('');
+    const lines = Object.entries(env).map(([k, v]) => `${k}=${v}`);
+    const content = '# Generated by harmon init\n' + lines.join('\n') + '\n';
+    await fs.writeFile(outputPath, content, { mode: 0o600 });
+    console.log(`  ✓ Config written to ${outputPath} (permissions: 600)`);
+
+    // Next steps
+    console.log('');
+    console.log('── Next Steps ────────────────────────────────────────');
+    console.log(`  1. Source the config:  export $(cat ${outputPath} | xargs)`);
+    console.log('  2. Start the daemon:  pnpm start:daemon');
+    console.log('  3. Check status:      harmon status');
+    if (env.SPOTIFY_CLIENT_ID) {
+      console.log('  4. Login to Spotify:  harmon auth import --browser chrome');
+    }
+    if (env.YOUTUBE_MUSIC_CLIENT_ID) {
+      console.log('  5. Login to YouTube:  harmon auth youtube login');
+    }
+    console.log('');
+
+    rl.close();
+  });
+
+program
   .command('status')
   .description('Show daemon and playback status')
   .action(async (...args) => {
@@ -801,6 +945,95 @@ auth
     outputResult(opts, result, {
       plain: () => 'ok',
       human: () => 'Spotify auth cleared.',
+    });
+  });
+
+const authYoutube = auth.command('youtube').description('YouTube Music authentication');
+
+authYoutube
+  .command('login')
+  .description('Start YouTube Music OAuth login (opens browser)')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.youtubeAuthLogin();
+    outputResult(opts, result, {
+      plain: (data) => data.url || '',
+      human: (data) => data.url
+        ? `Open this URL to authenticate:\n${data.url}`
+        : 'YouTube OAuth login initiated.',
+    });
+  });
+
+authYoutube
+  .command('refresh')
+  .description('Refresh YouTube Music access token')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.youtubeAuthRefresh();
+    outputResult(opts, result, {
+      plain: () => 'ok',
+      human: () => 'YouTube Music token refreshed.',
+    });
+  });
+
+authYoutube
+  .command('logout')
+  .description('Clear YouTube Music authentication')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.youtubeAuthLogout();
+    outputResult(opts, result, {
+      plain: () => 'ok',
+      human: () => 'YouTube Music auth cleared.',
+    });
+  });
+
+const authApple = auth.command('apple').description('Apple Music authentication');
+
+authApple
+  .command('set-token <token>')
+  .description('Set Apple Music user token (from MusicKit JS)')
+  .action(async (token, ...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    if (!token || typeof token !== 'string' || token.trim().length === 0) {
+      throw new CliUsageError('User token is required.');
+    }
+    const result = await cli.appleAuthSetUserToken(token.trim());
+    outputResult(opts, result, {
+      plain: () => 'ok',
+      human: () => 'Apple Music user token set.',
+    });
+  });
+
+authApple
+  .command('refresh')
+  .description('Refresh Apple Music developer token (requires key material)')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.appleAuthRefresh();
+    outputResult(opts, result, {
+      plain: () => 'ok',
+      human: (data) => data.hasToken
+        ? 'Apple Music developer token refreshed.'
+        : 'Apple Music developer token refresh failed (no key material configured).',
+    });
+  });
+
+authApple
+  .command('logout')
+  .description('Clear Apple Music authentication')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.appleAuthLogout();
+    outputResult(opts, result, {
+      plain: () => 'ok',
+      human: () => 'Apple Music auth cleared.',
     });
   });
 
@@ -1328,6 +1561,148 @@ program
     }
     const result = await cli.useDevice(deviceId);
     outputResult(opts, result, { plain: () => deviceId, human: () => 'Device switched.' });
+  });
+
+// ── Smart cross-provider commands ─────────────────────────────────────────────
+program
+  .command('smart-play <query>')
+  .description('Search all connected providers and play the best match')
+  .action(async (query, ...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.smartPlay({ query });
+    outputResult(opts, result, {
+      plain: (data) => data.track ? `${data.provider}\t${data.track.name}\t${data.track.artist}` : 'not found',
+      human: (data) => {
+        if (!data.success && data.needsAuth) {
+          return `${data.provider} needs authentication.\n${data.authUrl ? `Open: ${data.authUrl}` : `Use: harmon auth ${data.provider} login`}`;
+        }
+        if (!data.success) {
+          return data.error || 'Playback failed.';
+        }
+        const track = data.track;
+        return track
+          ? `Now playing on ${data.provider}: ${track.artist} - ${track.name} (${track.album})`
+          : `Playing on ${data.provider}.`;
+      },
+    });
+  });
+
+program
+  .command('smart-search <query>')
+  .description('Search all connected providers for a track')
+  .action(async (query, ...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.smartSearch(query);
+    outputResult(opts, result, {
+      plain: (data) => {
+        if (!data.results || data.results.length === 0) return 'no results';
+        return data.results
+          .flatMap((r) => r.tracks.map((t) => `${r.provider}\t${t.name}\t${t.artist}`))
+          .join('\n');
+      },
+      human: (data) => {
+        if (!data.results || data.results.length === 0) return 'No results found.';
+        const lines = [];
+        for (const r of data.results) {
+          lines.push(`── ${r.provider} ──`);
+          for (const t of r.tracks) {
+            lines.push(`  ${t.artist} - ${t.name} (${t.album})`);
+          }
+        }
+        if (data.unavailable && data.unavailable.length > 0) {
+          lines.push('');
+          for (const u of data.unavailable) {
+            lines.push(`${u.provider}: ${u.reason}${u.authUrl ? ` (${u.authUrl})` : ''}`);
+          }
+        }
+        return lines.join('\n');
+      },
+    });
+  });
+
+// ── Song recognition ─────────────────────────────────────────────────────────
+program
+  .command('listen')
+  .description('Listen to ambient audio, recognize the song, and optionally play it')
+  .option('--duration <seconds>', 'recording duration in seconds', '5')
+  .option('--play', 'play the recognized song via smart-play')
+  .option('--provider <name>', 'preferred provider for playback')
+  .option('--backend <name>', 'recognition backend: audd, chromaprint, or auto (default: auto)')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const cmdOpts = command.opts();
+    const duration = Number.parseInt(cmdOpts.duration, 10) || 5;
+    const backend = cmdOpts.backend || 'auto';
+
+    if (duration < 3 || duration > 30) {
+      throw new CliUsageError('Duration must be between 3 and 30 seconds.');
+    }
+    if (!['auto', 'audd', 'chromaprint'].includes(backend)) {
+      throw new CliUsageError('Backend must be one of: auto, audd, chromaprint.');
+    }
+
+    if (!opts.quiet) {
+      const backendLabel = backend === 'auto' ? '' : ` (${backend})`;
+      process.stderr.write(`Listening for ${duration} seconds${backendLabel}...\n`);
+    }
+
+    const result = await listen({ duration, backend });
+
+    if (!result.recognized) {
+      outputResult(opts, { recognized: false }, {
+        plain: () => '',
+        human: () => 'Could not recognize the song. Try again with less background noise or a longer duration (--duration 10).',
+      });
+      return;
+    }
+
+    if (!opts.quiet) {
+      const via = result.backend === 'chromaprint' ? ' (via Chromaprint)' : '';
+      process.stderr.write(`Recognized${via}: ${result.artist} - ${result.title}\n`);
+    }
+
+    // If --play flag, play it
+    if (cmdOpts.play) {
+      const playUri = result.spotify?.uri;
+      const playQuery = `${result.artist} ${result.title}`;
+      const playResult = await cli.smartPlay({
+        uri: playUri,
+        query: playUri ? undefined : playQuery,
+        provider: cmdOpts.provider || opts.provider,
+      });
+
+      outputResult(opts, { ...result, playback: playResult }, {
+        plain: (data) => `${data.artist}\t${data.title}\t${data.album}\t${data.playback?.provider || ''}`,
+        human: (data) => {
+          const lines = [
+            `${data.artist} — ${data.title}`,
+            data.album ? `Album: ${data.album}` : null,
+            data.releaseDate ? `Released: ${data.releaseDate}` : null,
+            data.playback?.success ? `Now playing on ${data.playback.provider}` : null,
+          ].filter(Boolean);
+          return lines.join('\n');
+        },
+      });
+      return;
+    }
+
+    // Just output recognition result
+    outputResult(opts, result, {
+      plain: (data) => `${data.artist}\t${data.title}\t${data.album}`,
+      human: (data) => {
+        const lines = [
+          `${data.artist} — ${data.title}`,
+          data.album ? `Album: ${data.album}` : null,
+          data.releaseDate ? `Released: ${data.releaseDate}` : null,
+          data.spotify ? `Spotify: ${data.spotify.uri}` : null,
+          data.apple ? `Apple Music: ${data.apple.url}` : null,
+        ].filter(Boolean);
+        return lines.join('\n');
+      },
+    });
   });
 
 async function main() {

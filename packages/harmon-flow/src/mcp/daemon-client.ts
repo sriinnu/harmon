@@ -46,6 +46,27 @@ export interface HarmonDaemonAppClient {
   startSession(policy: SessionPolicy): Promise<{ success: boolean; sessionId?: string }>;
   nudgeSession(direction: 'calmer' | 'sharper', amount?: number, reason?: string): Promise<{ success: boolean }>;
   stopSession(): Promise<{ success: boolean }>;
+
+  // Auth: YouTube
+  youtubeAuthLogin(): Promise<{ url: string }>;
+  youtubeAuthRefresh(): Promise<{ success: boolean }>;
+  youtubeAuthLogout(): Promise<{ success: boolean }>;
+
+  // Auth: Apple
+  appleAuthSetUserToken(token: string): Promise<{ success: boolean }>;
+  appleAuthRefresh(): Promise<{ success: boolean; hasToken: boolean }>;
+  appleAuthLogout(): Promise<{ success: boolean }>;
+
+  // Auth: Spotify
+  spotifyAuthLogin(): Promise<{ url: string }>;
+  spotifyAuthLogout(): Promise<{ success: boolean }>;
+
+  // Smart play
+  smartSearch(query: string, limit?: number): Promise<any>;
+  smartPlay(options: { query?: string; uri?: string; provider?: string }): Promise<any>;
+
+  // Song recognition
+  recognizeSong(audioBase64: string): Promise<any>;
 }
 
 const DEFAULT_DAEMON_ENDPOINT = 'http://127.0.0.1:17373';
@@ -255,6 +276,51 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
         body: createCommand('session.stop'),
         method: 'POST',
       });
+    },
+
+    // Auth: YouTube
+    async youtubeAuthLogin() {
+      return requestJson('/v1/auth/youtube/login', { method: 'POST' });
+    },
+    async youtubeAuthRefresh() {
+      return requestJson('/v1/auth/youtube/refresh', { method: 'POST' });
+    },
+    async youtubeAuthLogout() {
+      return requestJson('/v1/auth/youtube/logout', { method: 'POST' });
+    },
+
+    // Auth: Apple
+    async appleAuthSetUserToken(token) {
+      return requestJson('/v1/auth/apple/set-user-token', { body: { token }, method: 'POST' });
+    },
+    async appleAuthRefresh() {
+      return requestJson('/v1/auth/apple/refresh', { method: 'POST' });
+    },
+    async appleAuthLogout() {
+      return requestJson('/v1/auth/apple/logout', { method: 'POST' });
+    },
+
+    // Auth: Spotify
+    async spotifyAuthLogin() {
+      return requestJson('/v1/auth/spotify/login', { method: 'POST' });
+    },
+    async spotifyAuthLogout() {
+      return requestJson('/v1/auth/spotify/logout', { method: 'POST' });
+    },
+
+    // Smart play
+    async smartSearch(query, limit) {
+      return requestJson('/v1/smart/search', {
+        query: { q: query, limit },
+      });
+    },
+    async smartPlay(options) {
+      return requestJson('/v1/smart/play', { body: options, method: 'POST' });
+    },
+
+    // Song recognition
+    async recognizeSong(audioBase64) {
+      return requestJson('/v1/recognize', { body: { audio: audioBase64 }, method: 'POST' });
     },
   };
 }

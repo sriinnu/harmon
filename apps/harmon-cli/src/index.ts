@@ -93,6 +93,29 @@ export function createCLI(config: CLIConfig) {
     async authImportCookies(cookies: CookieRecord[]) {
       return requestJson('/v1/auth/spotify/import', { method: 'POST', body: { cookies } });
     },
+
+    // YouTube auth
+    async youtubeAuthLogin() {
+      return requestJson('/v1/auth/youtube/login', { method: 'POST' });
+    },
+    async youtubeAuthLogout() {
+      return requestJson('/v1/auth/youtube/logout', { method: 'POST' });
+    },
+    async youtubeAuthRefresh() {
+      return requestJson('/v1/auth/youtube/refresh', { method: 'POST' });
+    },
+
+    // Apple auth
+    async appleAuthSetUserToken(token: string) {
+      return requestJson('/v1/auth/apple/set-user-token', { method: 'POST', body: { token } });
+    },
+    async appleAuthRefresh() {
+      return requestJson('/v1/auth/apple/refresh', { method: 'POST' });
+    },
+    async appleAuthLogout() {
+      return requestJson('/v1/auth/apple/logout', { method: 'POST' });
+    },
+
     async spotifySearch(query: string, type: string, options?: { limit?: number; offset?: number }) {
       return requestJson('/v1/spotify/search', {
         query: { q: query, type, limit: options?.limit, offset: options?.offset },
@@ -233,6 +256,21 @@ export function createCLI(config: CLIConfig) {
     },
     async spotifyQueueAdd(uri: string) {
       return requestJson('/v1/spotify/queue', { method: 'POST', body: { uri } });
+    },
+
+    // Smart cross-provider
+    async smartSearch(query: string, options?: { limit?: number }) {
+      return requestJson('/v1/smart/search', {
+        query: { q: query, limit: options?.limit },
+      });
+    },
+    async smartPlay(options: { query?: string; uri?: string; provider?: string }) {
+      return requestJson('/v1/smart/play', { method: 'POST', body: options as Record<string, unknown> });
+    },
+
+    // Song recognition
+    async recognize(audioBase64: string) {
+      return requestJson('/v1/recognize', { method: 'POST', body: { audio: audioBase64 } });
     },
   };
 }

@@ -53,11 +53,17 @@ Focused ambient session before deep work.`,
       'list_playlists',
       'get_playlist_tracks',
       'get_now_playing',
+      'auth_status',
+      'smart_search',
     ]));
     expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
       'play_music',
+      'smart_play',
       'start_session',
       'stop_session',
+      'auth_youtube_login',
+      'auth_spotify_login',
+      'auth_apple_set_token',
     ]));
 
     const searchResult = await client.callTool({
@@ -418,6 +424,50 @@ function createFakeDaemonClient(
     async stopSession() {
       return { success: true };
     },
+
+    // Auth: YouTube
+    async youtubeAuthLogin() {
+      return { url: 'https://accounts.google.com/o/oauth2/auth?mock=1' };
+    },
+    async youtubeAuthRefresh() {
+      return { success: true };
+    },
+    async youtubeAuthLogout() {
+      return { success: true };
+    },
+
+    // Auth: Apple
+    async appleAuthSetUserToken() {
+      return { success: true };
+    },
+    async appleAuthRefresh() {
+      return { hasToken: false, success: true };
+    },
+    async appleAuthLogout() {
+      return { success: true };
+    },
+
+    // Auth: Spotify
+    async spotifyAuthLogin() {
+      return { url: 'https://accounts.spotify.com/authorize?mock=1' };
+    },
+    async spotifyAuthLogout() {
+      return { success: true };
+    },
+
+    // Smart play
+    async smartSearch() {
+      return { results: [] };
+    },
+    async smartPlay() {
+      return { success: true, provider: 'spotify', track: null };
+    },
+
+    // Song recognition
+    async recognizeSong() {
+      return { success: true, recognized: false };
+    },
+
     ...overrides,
   };
 }

@@ -79,7 +79,48 @@ If `HARMON_API_TOKEN` is set, include:
 Authorization: Bearer $HARMON_API_TOKEN
 ```
 
+### Auto-regenerating JWT
+
+Instead of manually generating and rotating `APPLE_MUSIC_DEVELOPER_TOKEN`, the daemon can auto-generate the JWT from your Apple Music key material. Set these environment variables:
+
+```
+APPLE_MUSIC_TEAM_ID=your_apple_team_id
+APPLE_MUSIC_KEY_ID=your_musickit_key_id
+APPLE_MUSIC_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
+```
+
+When all three are present, the daemon generates a short-lived JWT on startup and regenerates it before expiry. You do not need to set `APPLE_MUSIC_DEVELOPER_TOKEN` when using auto-generation.
+
+### Daemon Auth Endpoints
+
+These endpoints manage the Apple Music user token, which is required for library and playback operations.
+
+**Set user token** (obtained via MusicKit JS in a browser):
+```
+curl -X POST http://127.0.0.1:17373/v1/auth/apple/set-user-token \
+  -H "Content-Type: application/json" \
+  -d '{"userToken": "your_musickit_user_token"}'
+```
+
+**Refresh user token** (re-validates and extends the session):
+```
+curl -X POST http://127.0.0.1:17373/v1/auth/apple/refresh
+```
+
+**Logout** (clears the stored user token):
+```
+curl -X POST http://127.0.0.1:17373/v1/auth/apple/logout
+```
+
+### CLI Commands
+
+```
+harmon auth apple set-token <user-token>   # Store a MusicKit user token
+harmon auth apple refresh                  # Refresh the current session
+harmon auth apple logout                   # Clear stored Apple credentials
+```
+
 ### Troubleshooting
 
-- "Apple Music is not configured": set `APPLE_MUSIC_DEVELOPER_TOKEN`.
-- "Apple Music user token required": set `APPLE_MUSIC_USER_TOKEN` for library endpoints.
+- "Apple Music is not configured": set `APPLE_MUSIC_DEVELOPER_TOKEN` or the auto-JWT variables.
+- "Apple Music user token required": set `APPLE_MUSIC_USER_TOKEN` or call `/v1/auth/apple/set-user-token`.
