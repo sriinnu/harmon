@@ -41,8 +41,8 @@
     "test:companion": "cd apps/harmon-companion && swift test --disable-sandbox",
     "check": "pnpm lint && pnpm test:run && pnpm test:companion && pnpm build && pnpm verify:pack",
     "verify:pack": "node --experimental-strip-types ./scripts/verify-packages.ts",
-    "publish:all": "pnpm --filter @sriinnu/harmon --filter @sriinnu/harmond publish --no-git-checks",
-    "publish:dry": "pnpm --filter @sriinnu/harmon --filter @sriinnu/harmond publish --dry-run --no-git-checks",
+    "publish:all": "pnpm --filter @sriinnu/harmon publish --no-git-checks",
+    "publish:dry": "pnpm --filter @sriinnu/harmon publish --dry-run --no-git-checks",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml}\""
   },
   "devDependencies": {

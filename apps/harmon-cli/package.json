@@ -1,7 +1,7 @@
 {
   "name": "@sriinnu/harmon",
   "version": "0.2.0",
-  "description": "CLI client for Harmon daemon",
+  "description": "Harmon — CLI + daemon for policy-driven music sessions across Spotify, Apple Music, and YouTube Music",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -28,7 +28,8 @@
     }
   },
   "bin": {
-    "harmon": "./dist/bin/harmon.js"
+    "harmon": "./dist/bin/harmon.js",
+    "harmond": "./dist/bin/harmond.js"
   },
   "publishConfig": {
     "access": "public"
@@ -43,7 +44,8 @@
     "test:run": "vitest --root ../.. run apps/harmon-cli/bin/runtime.test.js apps/harmon-cli/src/index.test.ts"
   },
   "dependencies": {
-    "commander": "^14.0.2"
+    "commander": "^14.0.2",
+    "@libsql/client": "^0.16.0"
   },
   "devDependencies": {
     "@sriinnu/harmon-protocol": "workspace:*",
