@@ -95,7 +95,34 @@ async function bundle() {
     banner: { js: '#!/usr/bin/env node\n' },
   });
 
-  console.log(`Bundled @sriinnu/harmon v${pkg.version}`);
+  // 3. Bundle the daemon binary (bin/harmond.js → dist/bin/harmond.js)
+  //    Bundles ALL dependencies including CJS packages. The banner includes
+  //    a createRequire shim so CJS modules work in the ESM bundle.
+  await build({
+    entryPoints: ['bin/harmond.js'],
+    outfile: 'dist/bin/harmond.js',
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'esm',
+    external: [
+      // libsql uses platform-specific native binaries — keep entire tree external
+      '@libsql/client',
+      '@libsql/*',
+      'libsql',
+    ],
+    plugins: [cliPlugin],
+    sourcemap: false,
+    banner: {
+      js: [
+        '#!/usr/bin/env node',
+        'import { createRequire } from "node:module";',
+        'const require = createRequire(import.meta.url);',
+      ].join('\n'),
+    },
+  });
+
+  console.log(`Bundled @sriinnu/harmon v${pkg.version} (CLI + daemon)`);
 }
 
 bundle().catch((err: unknown) => {

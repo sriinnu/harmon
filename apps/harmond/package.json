@@ -31,9 +31,6 @@
   "bin": {
     "harmond": "./bin/harmond.js"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc -b",
     "dev": "tsc --watch",
@@ -62,5 +59,6 @@
     "@types/node": "^25.0.8",
     "@types/uuid": "^11.0.0",
     "typescript": "^5.9.3"
-  }
+  },
+  "private": true
 }
