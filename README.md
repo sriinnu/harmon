@@ -154,7 +154,7 @@ At runtime, Harmon stays honest about each provider:
 | packages/harmon-crypto | AES-256-GCM encryption |
 | packages/harmon-flow | MCP server for AI assistants |
 
-Only `@sriinnu/harmon` (CLI) and `@sriinnu/harmond` (daemon) are published to npm. All other packages are internal workspace dependencies.
+One npm package: `npm install -g @sriinnu/harmon` gives you both the `harmon` CLI and the `harmond` daemon. All other packages are internal workspace dependencies.
 
 ## Quick Start
 
@@ -163,17 +163,20 @@ For the full walkthrough (provider auth, smart play, listen, sessions, MCP, and 
 ### Prerequisites
 
 - Node.js 22+
-- pnpm 10+
-- Provider credentials for the providers you want to enable
 
-### 1. Install And Build
+### 1. Install
 
 ```bash
-git clone https://github.com/sriinnu/harmon.git
-cd harmon
+npm install -g @sriinnu/harmon
+harmon init
+```
 
-pnpm install
-pnpm build
+One package gives you both the `harmon` CLI and the `harmond` daemon.
+
+Or from source:
+```bash
+git clone https://github.com/sriinnu/harmon.git && cd harmon
+pnpm install && pnpm build
 ```
 
 ### 2. Configure The Daemon
