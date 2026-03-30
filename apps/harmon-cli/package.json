@@ -1,6 +1,6 @@
 {
   "name": "@sriinnu/harmon",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Harmon — CLI + daemon for policy-driven music sessions across Spotify, Apple Music, and YouTube Music",
   "license": "AGPL-3.0-only",
   "repository": {
