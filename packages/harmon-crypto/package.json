@@ -26,9 +26,6 @@
       "default": "./dist/index.js"
     }
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc -b",
     "dev": "tsc --watch",
@@ -41,5 +38,6 @@
   "devDependencies": {
     "@types/node": "^25.0.9",
     "typescript": "^5.9.3"
-  }
+  },
+  "private": true
 }
