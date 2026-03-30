@@ -14,6 +14,18 @@ Harmon is a daemon-first music runtime that gives you one control plane for Spot
 
 ## Install
 
+### Option 1: npm (recommended)
+
+```bash
+npm install -g @sriinnu/harmon
+harmon init          # Interactive setup wizard
+harmond             # Start daemon
+```
+
+One package gives you both the `harmon` CLI and the `harmond` daemon server.
+
+### Option 2: From source
+
 ```bash
 git clone https://github.com/sriinnu/harmon.git
 cd harmon
@@ -24,7 +36,9 @@ pnpm build
 ## Start the Daemon
 
 ```bash
-pnpm start:daemon
+harmond              # If installed via npm
+# or
+pnpm start:daemon    # If running from source
 ```
 
 The daemon listens on `http://127.0.0.1:17373` by default.
