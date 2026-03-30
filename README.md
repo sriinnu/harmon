@@ -68,19 +68,19 @@ At runtime, Harmon stays honest about each provider:
 ## Features
 
 ### Session Management
-- ✅ **Start/stop music sessions** with configurable policies
-- ✅ **Provider-aware sessions**: Target Spotify, Apple Music, or YouTube Music from the same daemon and CLI contract
-- ✅ **Policy constraints**: Hard constraints (no vocals, tempo range) and soft weights (energy, valence)
-- ✅ **Energy arcs**: Ramp-up, ramp-down, flat, or wave-shaped energy progression
-- ✅ **Queue auto-refill**: Intelligent queue management with policy-driven track ranking
-- ✅ **Adaptive nudging**: Adjust session energy on-the-fly (calmer/sharper)
+- **Start/stop music sessions** with configurable policies
+- **Provider-aware sessions**: Target Spotify, Apple Music, or YouTube Music from the same daemon and CLI contract
+- **Policy constraints**: Hard constraints (no vocals, tempo range) and soft weights (energy, valence)
+- **Energy arcs**: Ramp-up, ramp-down, flat, or wave-shaped energy progression
+- **Queue auto-refill**: Intelligent queue management with policy-driven track ranking
+- **Adaptive nudging**: Adjust session energy on-the-fly (calmer/sharper)
 
 ### Track Intelligence
-- ✅ **Two-phase ranking algorithm**: Binary filtering + weighted scoring
-- ✅ **Audio feature analysis**: Energy, instrumentalness, tempo, valence, acousticness
-- ✅ **Recency penalties**: Prevent track/artist repetition
-- ✅ **Multi-source candidates**: Liked tracks, playlists, recommendations, discovery, and provider-specific recent-play signals
-- ✅ **Provider adapters**: Shared contract layer for Spotify, Apple Music, and YouTube Music packages
+- **Two-phase ranking algorithm**: Binary filtering + weighted scoring
+- **Audio feature analysis**: Energy, instrumentalness, tempo, valence, acousticness
+- **Recency penalties**: Prevent track/artist repetition
+- **Multi-source candidates**: Liked tracks, playlists, recommendations, discovery, and provider-specific recent-play signals
+- **Provider adapters**: Shared contract layer for Spotify, Apple Music, and YouTube Music packages
 
 ### Current Provider Notes
 - Spotify is the strongest end-to-end path for full playback, queue, device, and audio-feature policy control.
@@ -88,18 +88,18 @@ At runtime, Harmon stays honest about each provider:
 - YouTube Music sessions can seed from search, liked-video derived tracks, playlists, related-track discovery, and Harmon-local recent/top-track history; browser handoff still reports daemon-managed playback state rather than browser-verified truth.
 
 ### Security & Production Features
-- 🔒 **Rate limiting**: Global (120/min), Auth (5/15min), Commands (30/min)
-- 🔐 **AES-256-GCM encryption**: Secure token/cookie storage
-- 🛡️ **Timing-safe authentication**: Prevents timing attacks
-- 🚫 **Strict CORS validation**: No wildcards in production
-- 📊 **Structured logging**: Production-ready Pino logging with context
-- ⚠️ **Centralized error handling**: Proper error responses and cleanup
+- **Rate limiting**: Global (120/min), Auth (5/15min), Commands (30/min)
+- **AES-256-GCM encryption**: Secure token/cookie storage
+- **Timing-safe authentication**: Prevents timing attacks
+- **Strict CORS validation**: No wildcards in production
+- **Structured logging**: Production-ready Pino logging with context
+- **Centralized error handling**: Proper error responses and cleanup
 
 ### Data & Insights
-- 📝 **Mood journaling**: Track sessions with Markdown journal entries
-- 🔍 **Pattern detection**: AI-assisted pattern recognition for mood/energy trends
-- 📈 **Session statistics**: Comprehensive analytics on playback history
-- 🤖 **MCP integration**: Model Context Protocol server for AI assistant integration
+- **Mood journaling**: Track sessions with Markdown journal entries
+- **Pattern detection**: AI-assisted pattern recognition for mood/energy trends
+- **Session statistics**: Comprehensive analytics on playback history
+- **MCP integration**: Model Context Protocol server for AI assistant integration
 
 ## Architecture
 
@@ -136,23 +136,25 @@ At runtime, Harmon stays honest about each provider:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Packages And App Verticals
+### Packages
 
-| Surface | Description | Status |
-|---------|-------------|--------|
-| `@sriinnu/harmon-protocol` | Zod schemas for Command, Event, and Policy types | ✅ Production |
-| `@sriinnu/harmon-store` | SQLite persistence layer with migrations | ✅ Production |
-| `@sriinnu/harmon-core` | Core session engine with track ranking & queue management | ✅ Production |
-| `@sriinnu/harmon` | CLI client and terminal interface for harmond | ✅ Production |
-| `@sriinnu/harmon-spotify` | Spotify Web API integration (OAuth, playback, recommendations) | ✅ Production |
-| `@sriinnu/harmon-apple` | Apple Music integration (catalog, playlist tracks, library, provider sessions, and daemon-backed Apple playback modes) | ✅ Production |
-| `@sriinnu/harmon-youtube` | YouTube Music adapter for search, playlist tracks, provider sessions, browser-handoff playback, and session seeding | ✅ Production |
-| `@sriinnu/harmon-logger` | Structured logging with Pino | ✅ Production |
-| `@sriinnu/harmon-crypto` | AES-256-GCM encryption utilities | ✅ Production |
-| `@sriinnu/harmon-flow` | MCP servers for journal analysis and remote OpenAI/ChatGPT app integration | ✅ Production |
-| `@sriinnu/harmond` | Daemon with HTTP+SSE API, rate limiting, auth | ✅ Production |
-| `apps/harmon-companion` | Swift companion vertical with Apple remote bridge, provider-aware daemon browser, and SwiftUI shell for Spotify, Apple Music, and YouTube Music | 🚧 New vertical |
-| `apps/harmon-web` | Small static web app for provider browse, playlists, and playback handoff or daemon-side play | 🚧 New vertical |
+| Package | Description |
+|---------|-------------|
+| **apps/harmond** | Daemon server with HTTP+SSE API |
+| **apps/harmon-cli** | CLI client and SDK (`npm install -g @sriinnu/harmon`) |
+| **apps/harmon-web** | React web app with onboarding wizard |
+| **apps/harmon-companion** | Swift iOS companion with Apple remote bridge |
+| packages/harmon-protocol | Zod schemas for Command, Event, and Policy types |
+| packages/harmon-core | Session engine with track ranking and queue management |
+| packages/harmon-store | SQLite persistence layer with WAL mode |
+| packages/harmon-spotify | Spotify Web API integration |
+| packages/harmon-apple | Apple Music integration |
+| packages/harmon-youtube | YouTube Music adapter |
+| packages/harmon-logger | Structured Pino logging |
+| packages/harmon-crypto | AES-256-GCM encryption |
+| packages/harmon-flow | MCP server for AI assistants |
+
+Only `@sriinnu/harmon` (CLI) and `@sriinnu/harmond` (daemon) are published to npm. All other packages are internal workspace dependencies.
 
 ## Quick Start
 
@@ -304,14 +306,14 @@ pnpm check
 
 Harmon enforces strict security in production environments:
 
-- ✅ **API Token Required**: Set `HARMON_API_TOKEN` (required in production)
-- 🔐 **Credential Encryption REQUIRED**: Set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - **daemon will not start without it**
-- ✅ **CORS Whitelist**: No wildcard origins allowed in production
-- ✅ **Explicit OAuth Callback**: Set `SPOTIFY_CLIENT_ID` + `SPOTIFY_REDIRECT_URI` together when Spotify OAuth is enabled
-- ✅ **Rate Limiting**: Automatic protection against abuse
-- ✅ **Timing-Safe Auth**: Constant-time token comparison prevents timing attacks
+- **API Token Required**: Set `HARMON_API_TOKEN` (required in production)
+- **Credential Encryption REQUIRED**: Set `HARMON_ENCRYPTION_SECRET` (min 32 chars) - **daemon will not start without it**
+- **CORS Whitelist**: No wildcard origins allowed in production
+- **Explicit OAuth Callback**: Set `SPOTIFY_CLIENT_ID` + `SPOTIFY_REDIRECT_URI` together when Spotify OAuth is enabled
+- **Rate Limiting**: Automatic protection against abuse
+- **Timing-Safe Auth**: Constant-time token comparison prevents timing attacks
 
-**⚠️ Critical**: The daemon will **refuse to start** in production (`NODE_ENV=production`) unless `HARMON_API_TOKEN` and `HARMON_ENCRYPTION_SECRET` are set and `HARMON_CORS_ORIGINS` does not contain `*`. If Spotify OAuth is enabled, `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI` must be configured together. Cookie-only Spotify deployments remain valid without OAuth callback config. Journal, session, and event rows still remain unencrypted local SQLite data.
+**Critical**: The daemon will **refuse to start** in production (`NODE_ENV=production`) unless `HARMON_API_TOKEN` and `HARMON_ENCRYPTION_SECRET` are set and `HARMON_CORS_ORIGINS` does not contain `*`. If Spotify OAuth is enabled, `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI` must be configured together. Cookie-only Spotify deployments remain valid without OAuth callback config. Journal, session, and event rows still remain unencrypted local SQLite data.
 
 ### Generating Secrets
 
@@ -568,6 +570,10 @@ type EventType =
   | 'device.changed'      // Playback device changed
   | 'spotify.connected'   // Spotify auth successful
   | 'spotify.disconnected'// Spotify auth cleared
+  | 'youtube.connected'   // YouTube auth successful
+  | 'youtube.disconnected'// YouTube auth cleared
+  | 'apple.connected'     // Apple Music auth successful
+  | 'apple.disconnected'  // Apple Music auth cleared
   | 'error';              // Error occurred
 ```
 
@@ -651,6 +657,9 @@ These tools are exposed by the streamable HTTP server and are the app-facing sur
 | `fetch` | Fetch a full journal entry with ChatGPT-compatible MCP `fetch` output |
 | `get_status` | Get daemon/provider readiness and active session state |
 | `search_music` | Search Spotify, Apple Music, or YouTube Music catalogs |
+| `smart_search` | Compare results across all connected providers side by side |
+| `smart_play` | Search all providers in parallel and play the best match |
+| `recognize_song` | Record ambient audio and identify the song via AudD or Chromaprint |
 | `get_library_tracks` | List saved or liked tracks for a provider |
 | `list_playlists` | List playlists for a provider |
 | `get_playlist_tracks` | Fetch tracks from a playlist |
@@ -662,6 +671,10 @@ These tools are exposed by the streamable HTTP server and are the app-facing sur
 | `start_session` | Start a session using the shared `SessionPolicy` contract |
 | `nudge_session` | Nudge the active session calmer or sharper |
 | `stop_session` | Stop the active session |
+| `auth_spotify` | Initiate Spotify OAuth login flow |
+| `auth_apple` | Connect Apple Music with a developer token |
+| `auth_youtube` | Connect YouTube Music with an API key or OAuth token |
+| `auth_status` | Check authentication status for all providers |
 
 ### OpenAI App Setup
 
@@ -721,12 +734,12 @@ Set `HARMON_MCP_READ_SCOPES` and `HARMON_MCP_WRITE_SCOPES` if you want different
 
 ## Performance
 
-- ⚡ **Zero memory leaks**: Careful resource management with proper cleanup
-- 🚀 **Efficient SQLite**: Uses libsql for fast, embedded storage
-- 📡 **Streaming**: SSE for real-time updates without polling
-- 🪶 **Lightweight**: Minimal dependencies, focused on performance
-- 🔄 **Smart caching**: Audio features cached to reduce API calls
-- 📊 **Batched requests**: Spotify API calls batched up to 100 items
+- **Zero memory leaks**: Careful resource management with proper cleanup
+- **Efficient SQLite**: Uses libsql for fast, embedded storage
+- **Streaming**: SSE for real-time updates without polling
+- **Lightweight**: Minimal dependencies, focused on performance
+- **Smart caching**: Audio features cached to reduce API calls
+- **Batched requests**: Spotify API calls batched up to 100 items
 
 ## Production Checklist
 
@@ -745,7 +758,7 @@ Before deploying to production:
 - [ ] Monitor logs and error rates
 - [ ] Set up database backups
 
-**⚠️ Important**: The daemon will not start if `HARMON_API_TOKEN` or `HARMON_ENCRYPTION_SECRET` are missing in production, or if `HARMON_CORS_ORIGINS` contains `*`. If Spotify OAuth is enabled, `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI` must also be set.
+**Important**: The daemon will not start if `HARMON_API_TOKEN` or `HARMON_ENCRYPTION_SECRET` are missing in production, or if `HARMON_CORS_ORIGINS` contains `*`. If Spotify OAuth is enabled, `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI` must also be set.
 
 ## Roadmap
 
@@ -799,6 +812,6 @@ Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidel
 ---
 
 <p align="center">
-  <strong>Built with TypeScript, Express, SQLite, and ⚡</strong><br/>
-  Made with ❤️ by <a href="https://github.com/sriinnu">Sriinnu</a>
+  <strong>Built with TypeScript, Express, SQLite, and React.</strong><br/>
+  <a href="https://github.com/sriinnu">Sriinnu</a>
 </p>

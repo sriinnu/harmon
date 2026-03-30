@@ -3,6 +3,6 @@ import { getFlowServerVersion } from './version.js';
 
 describe('getFlowServerVersion', () => {
   it('reads the flow package version from package metadata', () => {
-    expect(getFlowServerVersion()).toBe('0.1.0');
+    expect(getFlowServerVersion()).toBe('0.2.0');
   });
 });

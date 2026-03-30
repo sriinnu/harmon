@@ -31,7 +31,7 @@ jobs:
       - run: pnpm exec vitest run
       - run: pnpm build
       - run: pnpm verify:pack
-      - run: pnpm -r publish --no-git-checks
+      - run: pnpm --filter @sriinnu/harmon --filter @sriinnu/harmond publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

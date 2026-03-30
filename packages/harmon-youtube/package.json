@@ -28,9 +28,6 @@
       "import": "./dist/index.js"
     }
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "auth": "node ./dist/auth-cli.js bootstrap",
     "auth:refresh": "node ./dist/auth-cli.js refresh",
@@ -49,5 +46,6 @@
   "devDependencies": {
     "@types/node": "^25.0.8",
     "typescript": "^5.9.3"
-  }
+  },
+  "private": true
 }

@@ -35,9 +35,6 @@
       "import": "./dist/graph/index.js"
     }
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "build": "node --experimental-strip-types ../../scripts/clean-build.ts ./dist ./tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
@@ -62,5 +59,6 @@
     "@types/uuid": "^11.0.0",
     "@types/node": "^25.0.8",
     "typescript": "^5.9.3"
-  }
+  },
+  "private": true
 }
