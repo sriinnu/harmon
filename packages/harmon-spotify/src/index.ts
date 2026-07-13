@@ -10,6 +10,7 @@ const SPOTIFY_ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 const SPOTIFY_WEB_BASE = 'https://open.spotify.com';
 const LOGIN_ATTEMPT_TTL_MS = 10 * 60_000;
+const MAX_RATE_LIMIT_WAIT_MS = 10_000;
 const MAX_PENDING_LOGIN_ATTEMPTS = 10;
 const DEFAULT_SCOPES = [
   'user-read-playback-state',
@@ -21,6 +22,32 @@ const DEFAULT_SCOPES = [
   'user-library-read',
   'user-top-read',
 ];
+
+// ============================================================================
+// Errors
+// ============================================================================
+
+/** Error thrown for non-OK Spotify API responses, carrying the HTTP status. */
+export class SpotifyApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, detail: string) {
+    super(`Spotify API error: ${status} ${detail}`);
+    this.name = 'SpotifyApiError';
+    this.status = status;
+  }
+}
+
+/** Error thrown when Spotify rate limits us for longer than we are willing to wait. */
+export class SpotifyRateLimitError extends Error {
+  readonly retryAfterSeconds: number;
+
+  constructor(retryAfterSeconds: number) {
+    super(`Spotify rate limited; retry after ${retryAfterSeconds}s`);
+    this.name = 'SpotifyRateLimitError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
 
 // ============================================================================
 // Auth Types
@@ -70,6 +97,11 @@ export interface SpotifyAuth {
   logout(): Promise<void>;
   getAccessToken(): Promise<string | null>;
   getAuthMode(): SpotifyAuthMode;
+  /**
+   * @deprecated Experimental/unsupported. Spotify's `get_access_token`
+   * endpoint now requires a TOTP handshake, so cookie-based token minting
+   * fails with 401. Use OAuth (PKCE) login instead.
+   */
   setCookies(cookies: SpotifyCookieRecord[] | null): Promise<void>;
   isConnected(): boolean;
   loadTokens(): Promise<void>;
@@ -89,6 +121,7 @@ class SpotifyAuthImpl implements SpotifyAuth {
   private cookies: SpotifyCookieRecord[] | null = null;
   private cookiesLoaded = false;
   private refreshPromise: Promise<void> | null = null;
+  private cookieTokenPromise: Promise<SpotifyTokens | null> | null = null;
   private pendingLoginAttempts = new Map<string, { codeVerifier: string; createdAt: number }>();
 
   constructor(config: SpotifyAuthConfig) {
@@ -170,10 +203,12 @@ class SpotifyAuthImpl implements SpotifyAuth {
     if (!pending) {
       throw new Error('Invalid OAuth state');
     }
+    // Delete before exchanging so each state is strictly single-use, even
+    // when the token exchange fails or two callbacks race.
+    this.pendingLoginAttempts.delete(state);
 
     const tokens = await this.exchangeCodeForToken(code, pending.codeVerifier);
     await this.saveTokens(tokens);
-    this.pendingLoginAttempts.delete(state);
   }
 
   async refresh(): Promise<void> {
@@ -193,7 +228,7 @@ class SpotifyAuthImpl implements SpotifyAuth {
     await this.ensureTokensLoaded();
 
     if (!this.tokens?.refreshToken) {
-      const cookieTokens = await this.fetchCookieAccessToken();
+      const cookieTokens = await this.fetchCookieAccessTokenOnce();
       if (!cookieTokens) {
         throw new Error('No refresh token available');
       }
@@ -251,7 +286,7 @@ class SpotifyAuthImpl implements SpotifyAuth {
     await this.ensureTokensLoaded();
 
     if (!this.tokens) {
-      const cookieTokens = await this.fetchCookieAccessToken();
+      const cookieTokens = await this.fetchCookieAccessTokenOnce();
       if (!cookieTokens) {
         return null;
       }
@@ -265,7 +300,17 @@ class SpotifyAuthImpl implements SpotifyAuth {
 
     const now = Date.now();
     if (tokens.expiresAt - now <= 60_000) {
-      await this.refresh();
+      if (tokens.refreshToken) {
+        await this.refresh();
+      } else {
+        // Expired with no refresh token: try cookies, otherwise report
+        // "not connected" instead of throwing.
+        const cookieTokens = await this.fetchCookieAccessTokenOnce();
+        if (!cookieTokens) {
+          return null;
+        }
+        await this.saveTokens(cookieTokens);
+      }
     }
 
     return this.tokens?.accessToken || null;
@@ -316,6 +361,19 @@ class SpotifyAuthImpl implements SpotifyAuth {
     return headers;
   }
 
+  /**
+   * I single-flight cookie token minting so two concurrent callers don't
+   * both hit `open.spotify.com/get_access_token`.
+   */
+  private fetchCookieAccessTokenOnce(): Promise<SpotifyTokens | null> {
+    if (!this.cookieTokenPromise) {
+      this.cookieTokenPromise = this.fetchCookieAccessToken().finally(() => {
+        this.cookieTokenPromise = null;
+      });
+    }
+    return this.cookieTokenPromise;
+  }
+
   private async fetchCookieAccessToken(): Promise<SpotifyTokens | null> {
     await this.ensureCookiesLoaded(true);
     if (!this.cookies || this.cookies.length === 0) {
@@ -340,6 +398,14 @@ class SpotifyAuthImpl implements SpotifyAuth {
     });
 
     if (!response.ok) {
+      if (response.status >= 400 && response.status < 500) {
+        // Spotify now requires a TOTP handshake on get_access_token, which
+        // this client deliberately does not implement.
+        throw new Error(
+          'Spotify cookie-based auth is no longer supported by Spotify ' +
+          `(get_access_token returned ${response.status}). Use OAuth (PKCE) login instead.`
+        );
+      }
       const detail = await response.text();
       throw new Error(`Spotify cookie token failed: ${response.status} ${detail}`);
     }
@@ -590,6 +656,28 @@ export interface SpotifyClient {
   getTopTracks(options?: { timeRange?: TimeRange; limit?: number; offset?: number }): Promise<SpotifyPagedResponse<TrackInfo>>;
 }
 
+/**
+ * Spotify returns 403 (or 404) for /audio-features and /recommendations on
+ * apps created after November 2024 — the endpoints are deprecated. I warn
+ * once per endpoint and degrade gracefully instead of failing callers.
+ */
+const deprecatedEndpointWarnings = new Set<string>();
+
+function isDeprecatedEndpointError(error: unknown): boolean {
+  return error instanceof SpotifyApiError && (error.status === 403 || error.status === 404);
+}
+
+function warnDeprecatedEndpointOnce(endpoint: string): void {
+  if (deprecatedEndpointWarnings.has(endpoint)) {
+    return;
+  }
+  deprecatedEndpointWarnings.add(endpoint);
+  console.warn(
+    `[harmon-spotify] Spotify's ${endpoint} endpoint is deprecated for apps created after Nov 2024 ` +
+    'and returned 403/404. Degrading gracefully with empty results.'
+  );
+}
+
 class SpotifyClientImpl implements SpotifyClient {
   private auth: SpotifyAuth;
 
@@ -689,13 +777,15 @@ class SpotifyClientImpl implements SpotifyClient {
       ...listQuery(options),
     });
 
+    // Spotify's /search can return literal null entries in items arrays
+    // (especially playlists.items), so drop them before mapping.
     return {
-      tracks: (data.tracks?.items || []).map(mapTrack),
-      albums: (data.albums?.items || []).map(mapAlbum),
-      artists: (data.artists?.items || []).map(mapArtist),
-      playlists: (data.playlists?.items || []).map(mapPlaylist),
-      episodes: (data.episodes?.items || []).map(mapEpisode),
-      shows: (data.shows?.items || []).map(mapShow),
+      tracks: (data.tracks?.items || []).filter(Boolean).map(mapTrack),
+      albums: (data.albums?.items || []).filter(Boolean).map(mapAlbum),
+      artists: (data.artists?.items || []).filter(Boolean).map(mapArtist),
+      playlists: (data.playlists?.items || []).filter(Boolean).map(mapPlaylist),
+      episodes: (data.episodes?.items || []).filter(Boolean).map(mapEpisode),
+      shows: (data.shows?.items || []).filter(Boolean).map(mapShow),
     };
   }
 
@@ -813,12 +903,22 @@ class SpotifyClientImpl implements SpotifyClient {
 
     for (let i = 0; i < trackIds.length; i += BATCH_SIZE) {
       const batch = trackIds.slice(i, i + BATCH_SIZE);
-      const data = await this.request<{ audio_features: (SpotifyAudioFeaturesRaw | null)[] }>(
-        'GET',
-        '/audio-features',
-        undefined,
-        { ids: batch.join(',') }
-      );
+      let data: { audio_features: (SpotifyAudioFeaturesRaw | null)[] };
+      try {
+        data = await this.request<{ audio_features: (SpotifyAudioFeaturesRaw | null)[] }>(
+          'GET',
+          '/audio-features',
+          undefined,
+          { ids: batch.join(',') }
+        );
+      } catch (error) {
+        if (isDeprecatedEndpointError(error)) {
+          // Endpoint deprecated: return nulls so index-based matching survives.
+          warnDeprecatedEndpointOnce('/audio-features');
+          return trackIds.map(() => null);
+        }
+        throw error;
+      }
 
       // Preserve null positions for index-based matching
       const batchFeatures = (data.audio_features || [])
@@ -893,12 +993,21 @@ class SpotifyClientImpl implements SpotifyClient {
       query.limit = Math.min(100, Math.max(1, options.limit)).toString();
     }
 
-    const data = await this.request<SpotifyRecommendationsResponse>(
-      'GET',
-      '/recommendations',
-      undefined,
-      query
-    );
+    let data: SpotifyRecommendationsResponse;
+    try {
+      data = await this.request<SpotifyRecommendationsResponse>(
+        'GET',
+        '/recommendations',
+        undefined,
+        query
+      );
+    } catch (error) {
+      if (isDeprecatedEndpointError(error)) {
+        warnDeprecatedEndpointOnce('/recommendations');
+        return [];
+      }
+      throw error;
+    }
 
     return (data.tracks || []).map(mapTrack);
   }
@@ -976,12 +1085,19 @@ class SpotifyClientImpl implements SpotifyClient {
       response = await execute(token);
     }
 
-    // Handle 429 - rate limited (retry up to 2 times)
+    // Handle 429 - rate limited (retry up to 2 times when the wait is short)
     let retries = 0;
     while (response.status === 429 && retries < 2) {
-      const retryAfter = parseInt(response.headers.get('Retry-After') || '1', 10);
-      const delayMs = Math.min(retryAfter * 1000, 10000); // Cap at 10s
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      const parsedRetryAfter = parseInt(response.headers.get('Retry-After') || '1', 10);
+      // A missing/garbage header must not become setTimeout(NaN) — that's an
+      // immediate retry with no backoff.
+      const retryAfter = Number.isFinite(parsedRetryAfter) && parsedRetryAfter > 0 ? parsedRetryAfter : 1;
+      if (retryAfter * 1000 > MAX_RATE_LIMIT_WAIT_MS) {
+        // Waiting a capped amount and retrying anyway would just fail again,
+        // so fail fast with the server-provided backoff.
+        throw new SpotifyRateLimitError(retryAfter);
+      }
+      await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
       response = await execute(token!);
       retries++;
     }
@@ -992,7 +1108,7 @@ class SpotifyClientImpl implements SpotifyClient {
 
     if (!response.ok) {
       const detail = await response.text();
-      throw new Error(`Spotify API error: ${response.status} ${detail}`);
+      throw new SpotifyApiError(response.status, detail);
     }
 
     return (await response.json()) as T;

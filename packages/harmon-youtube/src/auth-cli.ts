@@ -4,15 +4,14 @@
 
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { pathToFileURL } from 'node:url';
+import { readJson, writeJson, type JsonValue } from './token-store.js';
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-
-interface YouTubePackConfig {
+export interface YouTubePackConfig {
   clientId: string;
   clientSecret?: string;
   redirectUri: string;
@@ -20,7 +19,7 @@ interface YouTubePackConfig {
   apiKey?: string;
 }
 
-interface YouTubeAuthState {
+export interface YouTubeAuthState {
   provider: 'youtube-music';
   updatedAt: string;
   accessToken: string;
@@ -52,27 +51,6 @@ function resolveAuthPath(fileName: string): string {
     ? overrideRoot
     : path.join(os.homedir(), '.chitragupta', 'harmon', 'provider-packs');
   return path.join(stateRoot, 'harmon-youtube', fileName);
-}
-
-async function readJson<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await readFile(filePath, 'utf8')) as T;
-  } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function writeJson(filePath: string, value: JsonValue | null): Promise<void> {
-  await mkdir(path.dirname(filePath), { mode: 0o700, recursive: true });
-  if (value == null) {
-    await rm(filePath, { force: true });
-    return;
-  }
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await chmod(filePath, 0o600);
 }
 
 async function openUrl(url: string): Promise<void> {
@@ -130,7 +108,7 @@ async function exchangeCode(config: YouTubePackConfig, code: string, verifier: s
   return await response.json() as GoogleTokenPayload;
 }
 
-async function refreshToken(config: YouTubePackConfig, state: YouTubeAuthState): Promise<YouTubeAuthState> {
+export async function refreshToken(config: YouTubePackConfig, state: YouTubeAuthState): Promise<YouTubeAuthState> {
   const body = new URLSearchParams({
     client_id: config.clientId,
     grant_type: 'refresh_token',
@@ -151,6 +129,8 @@ async function refreshToken(config: YouTubePackConfig, state: YouTubeAuthState):
   return {
     ...state,
     accessToken: payload.access_token,
+    // Google may rotate the refresh token; preserve the new one when present.
+    refreshToken: payload.refresh_token ?? state.refreshToken,
     scope: payload.scope || state.scope,
     updatedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + (payload.expires_in || 3600) * 1000).toISOString(),
@@ -179,6 +159,18 @@ async function validateYouTube(state: YouTubeAuthState | null, apiKey?: string):
   if (!response.ok) {
     throw new Error(`YouTube validation failed: ${response.status} ${await response.text()}`);
   }
+}
+
+/**
+ * I escape text interpolated into locally served HTML pages.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -217,11 +209,21 @@ async function waitForCallback(
         server.close();
         return;
       }
-      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end('<h1>YouTube Music auth complete</h1><p>I saved your token locally. You can close this tab.</p>');
-      void exchangeCode(config, code, verifier).then(resolve, reject).finally(() => {
-        server.close();
-      });
+      // Only tell the browser we succeeded once the code exchange actually
+      // completed; otherwise show the failure.
+      void exchangeCode(config, code, verifier)
+        .then(payload => {
+          response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          response.end('<h1>YouTube Music auth complete</h1><p>I saved your token locally. You can close this tab.</p>');
+          resolve(payload);
+        }, (error: unknown) => {
+          response.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+          response.end(`<h1>YouTube Music auth failed</h1><pre>${escapeHtml(String(error instanceof Error ? error.message : error))}</pre>`);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        })
+        .finally(() => {
+          server.close();
+        });
     });
     server.on('error', reject);
     server.listen(Number(redirectUrl.port || 80), redirectUrl.hostname);
@@ -315,19 +317,21 @@ async function status(): Promise<void> {
   await printStatus(state, 'status', config.apiKey);
 }
 
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error !== null && typeof error === 'object' && 'code' in error;
-}
+// Only act as a CLI when executed directly, so tests can import the exported
+// helpers without triggering a bootstrap.
+const isMainModule = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 
-const action = process.argv[2] || 'bootstrap';
-const handlers: Record<string, () => Promise<void>> = { bootstrap, refresh, status };
+if (isMainModule) {
+  const action = process.argv[2] || 'bootstrap';
+  const handlers: Record<string, () => Promise<void>> = { bootstrap, refresh, status };
 
-if (!handlers[action]) {
-  console.error(`Unknown YouTube Music auth command: ${action}`);
-  process.exitCode = 1;
-} else {
-  handlers[action]().catch(error => {
-    console.error(error instanceof Error ? error.message : String(error));
+  if (!handlers[action]) {
+    console.error(`Unknown YouTube Music auth command: ${action}`);
     process.exitCode = 1;
-  });
+  } else {
+    handlers[action]().catch(error => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    });
+  }
 }

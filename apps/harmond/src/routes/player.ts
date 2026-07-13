@@ -26,13 +26,13 @@ export function registerPlayerRoutes(app: Application, ctx: DaemonContext): void
    * Connects to daemon SSE for track changes and plays tracks
    * as the session engine queues them.
    */
-  app.get('/player/youtube', (req: Request, res: Response) => {
-    // Only embed the API token for loopback requests (same-host security model).
-    // Non-loopback clients must enter the token via the UI prompt.
-    const isLoopback = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip || '');
-    const embeddedToken = isLoopback ? (ctx.apiToken || '') : '';
+  app.get('/player/youtube', (_req: Request, res: Response) => {
+    // Never embed the API token: this page is served without auth, so an
+    // embedded token would be readable by any local process and reduce the
+    // token to theater. The page prompts for it and keeps it in
+    // sessionStorage instead.
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(getYouTubePlayerHTML(embeddedToken, ctx.enableSSE));
+    res.send(getYouTubePlayerHTML(ctx.enableSSE));
   });
 }
 
@@ -40,7 +40,7 @@ export function registerPlayerRoutes(app: Application, ctx: DaemonContext): void
 // HTML generator
 // ---------------------------------------------------------------------------
 
-function getYouTubePlayerHTML(apiToken: string, sseEnabled: boolean): string {
+function getYouTubePlayerHTML(sseEnabled: boolean): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -201,19 +201,19 @@ function getYouTubePlayerHTML(apiToken: string, sseEnabled: boolean): string {
 
     <p class="queue-hint" id="queue-hint">Start a session or play a track to begin</p>
     <div class="auth-prompt" id="auth-prompt" style="display:none;">
-      <input id="token-input" type="password" placeholder="API token" />
+      <input id="token-input" type="password" placeholder="API token (HARMON_API_TOKEN)" />
       <button id="token-save">Save</button>
     </div>
     <div class="status-bar" id="status">Connecting...</div>
   </div>
 
   <script>
-    var EMBEDDED_TOKEN = ${JSON.stringify(apiToken)};
     var SSE_ENABLED = ${sseEnabled};
     var DAEMON_BASE = window.location.origin;
 
-    // Use embedded token if available (loopback), otherwise fall back to sessionStorage
-    var API_TOKEN = EMBEDDED_TOKEN || sessionStorage.getItem('harmon_api_token') || '';
+    // The daemon never embeds its API token in this page; it lives in
+    // sessionStorage after the user enters it once.
+    var API_TOKEN = sessionStorage.getItem('harmon_api_token') || '';
 
     // Show auth prompt when no token is available
     if (!API_TOKEN) {
@@ -225,6 +225,7 @@ function getYouTubePlayerHTML(apiToken: string, sseEnabled: boolean): string {
         sessionStorage.setItem('harmon_api_token', val);
         API_TOKEN = val;
         document.getElementById('auth-prompt').style.display = 'none';
+        startSSE(true);
         // Re-poll now-playing with the new token
         fetchDaemon('/v1/youtube/now-playing')
           .then(function(r) { return r.json(); })
@@ -298,9 +299,19 @@ function getYouTubePlayerHTML(apiToken: string, sseEnabled: boolean): string {
       return null;
     }
 
-    // SSE connection
-    if (SSE_ENABLED) {
-      var evtSource = new EventSource(DAEMON_BASE + '/v1/events');
+    // SSE connection. EventSource cannot send an Authorization header, so
+    // the token (when present) rides along as a query parameter which the
+    // daemon accepts for the read-only /v1/events stream.
+    var evtSource = null;
+    function startSSE(restart) {
+      if (!SSE_ENABLED) return;
+      if (evtSource) {
+        if (!restart) return;
+        evtSource.close();
+      }
+      var url = DAEMON_BASE + '/v1/events';
+      if (API_TOKEN) url += '?token=' + encodeURIComponent(API_TOKEN);
+      evtSource = new EventSource(url);
 
       evtSource.onmessage = function(event) {
         try {
@@ -315,6 +326,7 @@ function getYouTubePlayerHTML(apiToken: string, sseEnabled: boolean): string {
         updateStatus('Disconnected \\u2014 retrying...', 'disconnected');
       };
     }
+    startSSE(false);
 
     function handleDaemonEvent(event) {
       if (event.type === 'track.started' && event.payload && event.payload.track) {

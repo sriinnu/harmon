@@ -263,6 +263,43 @@ Focused ambient session before deep work.`,
     await appServer.close();
   });
 
+  it('serves concurrent HTTP sessions without cross-wiring responses', async () => {
+    const flowDir = createFlowDir(tempDirs);
+    const appServer = new HarmonAppMCPServer({
+      daemonClient: createFakeDaemonClient(),
+      flowDir,
+      host: '127.0.0.1',
+      port: 0,
+    });
+
+    await appServer.start();
+
+    const clientA = new Client({ name: 'harmon-concurrent-a', version: '1.0.0' });
+    const clientB = new Client({ name: 'harmon-concurrent-b', version: '1.0.0' });
+    await clientA.connect(new StreamableHTTPClientTransport(new URL(appServer.getMcpUrl())));
+    await clientB.connect(new StreamableHTTPClientTransport(new URL(appServer.getMcpUrl())));
+
+    // Before per-session servers, client A's calls after client B connected
+    // were written to B's transport and A hung until timeout.
+    const [resultA, resultB] = await Promise.all([
+      clientA.callTool({ arguments: {}, name: 'get_status' }),
+      clientB.callTool({ arguments: {}, name: 'get_status' }),
+    ]);
+
+    expect((parseToolResult(resultA) as { isRunning: boolean }).isRunning).toBe(true);
+    expect((parseToolResult(resultB) as { isRunning: boolean }).isRunning).toBe(true);
+
+    const followUp = await clientA.callTool({
+      arguments: { provider: 'spotify', query: 'focus' },
+      name: 'search_music',
+    });
+    expect((parseToolResult(followUp) as { provider: string }).provider).toBe('spotify');
+
+    await clientA.close();
+    await clientB.close();
+    await appServer.close();
+  });
+
   it('keeps static bearer mode separate from OAuth protected-resource metadata', async () => {
     const flowDir = createFlowDir(tempDirs);
     const appServer = new HarmonAppMCPServer({

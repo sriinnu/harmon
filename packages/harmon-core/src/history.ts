@@ -44,18 +44,23 @@ export function checkRecencyPenalty(
   if (limits.repeatArtistWithinHours && penalty < 1.0) {
     const windowMs = limits.repeatArtistWithinHours * 60 * 60 * 1000;
 
-    // Find recent plays of same artist
+    // Find recent plays of same artist. IDs and names are matched
+    // independently: a record with real IDs must still match a candidate
+    // that only carries a display name (and vice versa).
+    const trackNames = new Set([normalizeArtistName(track.artist)]);
     const recentArtistPlays = history.filter(r => {
       const timeSince = now - r.playedAt;
       if (timeSince >= windowMs) return false;
 
-      // Use structured artistIds when available, fall back to exact name match
-      return r.artistIds.some(aid => {
-        if (track.artistIds && track.artistIds.length > 0) {
-          return track.artistIds.includes(aid);
-        }
-        return aid === track.artist;
-      });
+      if (
+        track.artistIds && track.artistIds.length > 0 &&
+        r.artistIds.some(aid => track.artistIds!.includes(aid))
+      ) {
+        return true;
+      }
+
+      const recordNames = (r.artistNames ?? r.artistIds).map(normalizeArtistName);
+      return recordNames.some(name => trackNames.has(name));
     });
 
     if (recentArtistPlays.length > 0) {
@@ -66,6 +71,10 @@ export function checkRecencyPenalty(
   }
 
   return penalty;
+}
+
+function normalizeArtistName(name: string): string {
+  return name.trim().toLowerCase();
 }
 
 /**

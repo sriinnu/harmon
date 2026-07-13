@@ -1729,10 +1729,19 @@ describe('Apple Remote Endpoints', () => {
     });
   });
 
-  it('rejects daemon API tokens on Apple companion-only remote endpoints', async () => {
+  it('accepts the main daemon API token on Apple remote endpoints alongside the remote token', async () => {
     const response = await request(app)
       .post('/v1/apple/remote/connect')
       .set('Authorization', `Bearer ${TEST_API_TOKEN}`)
+      .send({ deviceId: 'iphone-1', name: 'Srinu iPhone', platform: 'ios' });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('rejects unrelated tokens on Apple remote endpoints', async () => {
+    const response = await request(app)
+      .post('/v1/apple/remote/connect')
+      .set('Authorization', 'Bearer not-a-valid-token')
       .send({ deviceId: 'iphone-1', name: 'Srinu iPhone', platform: 'ios' });
 
     expect(response.status).toBe(401);

@@ -34,8 +34,17 @@ export function applyMiddleware(
   app: express.Application,
   opts: MiddlewareOptions,
 ): void {
-  // Explicit body size limit
-  app.use(express.json({ limit: '100kb' }));
+  // Explicit body size limit. /v1/recognize carries base64 audio (up to
+  // ~2 MB raw → ~2.7 MB encoded), so it gets its own parser budget; the
+  // global 100 KB cap would otherwise reject every recognition request.
+  const jsonBody = express.json({ limit: '100kb' });
+  const audioJsonBody = express.json({ limit: '4mb' });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    // Express routes case-insensitively and tolerates trailing slashes, so
+    // normalize before matching or /V1/recognize/ gets the 100 KB parser.
+    const normalizedPath = req.path.replace(/\/+$/, '').toLowerCase();
+    (normalizedPath === '/v1/recognize' ? audioJsonBody : jsonBody)(req, res, next);
+  });
 
   // Request ID + logging
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -81,9 +90,9 @@ export function applyMiddleware(
     windowMs: 15 * 60 * 1000,
     max: 5,
     message: { success: false, error: 'Too many authentication attempts' },
-    // Keep the OAuth callback outside the auth attempt budget so a
+    // Keep the OAuth callbacks outside the auth attempt budget so a
     // valid browser redirect is not stranded behind earlier retries.
-    skip: (req) => req.path === '/spotify/callback',
+    skip: (req) => req.path === '/spotify/callback' || req.path === '/youtube/callback',
   });
 
   const commandLimiter = rateLimit({
@@ -149,13 +158,17 @@ export function createAuthMiddleware(
   appleRemoteToken: string | undefined,
 ): (req: Request, res: Response, next: NextFunction) => void {
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (req.path === '/auth/spotify/callback') { next(); return; }
-    const token = extractAuthorizationToken(req);
+    // OAuth callbacks are browser redirects that cannot carry a bearer
+    // header; both are CSRF-protected by single-use state validation.
+    if (req.path === '/auth/spotify/callback' || req.path === '/auth/youtube/callback') { next(); return; }
+    const token = extractAuthorizationToken(req) ||
+      // EventSource cannot send an Authorization header, so the SSE stream
+      // (read-only) may authenticate with a ?token= query parameter.
+      (req.path === '/events' && typeof req.query.token === 'string' ? req.query.token : '');
 
     if (req.path.startsWith('/apple/remote')) {
-      const authorized = appleRemoteToken
-        ? tokensMatch(appleRemoteToken, token)
-        : tokensMatch(apiToken, token);
+      const authorized =
+        tokensMatch(appleRemoteToken, token) || tokensMatch(apiToken, token);
       if (authorized) {
         next();
         return;

@@ -40,9 +40,17 @@ export interface HarmonDaemonAppClient {
   getPlaylistTracks(provider: MusicProviderName, playlistId: string, limit?: number): Promise<MusicSearchItem[]>;
   getNowPlaying(provider: MusicProviderName): Promise<TrackInfo | null>;
   playMusic(provider: MusicProviderName, target?: string): Promise<{ success: boolean }>;
+  resumeMusic(provider: MusicProviderName): Promise<{ success: boolean }>;
   pauseMusic(provider: MusicProviderName): Promise<{ success: boolean }>;
   nextTrack(provider: MusicProviderName): Promise<{ success: boolean }>;
   previousTrack(provider: MusicProviderName): Promise<{ success: boolean }>;
+  setVolume(volumePercent: number): Promise<{ success: boolean }>;
+  seek(positionMs: number): Promise<{ success: boolean }>;
+  setShuffle(state: boolean): Promise<{ success: boolean }>;
+  setRepeat(state: 'off' | 'track' | 'context'): Promise<{ success: boolean }>;
+  addToQueue(provider: 'spotify' | 'youtube', uri: string): Promise<{ success: boolean }>;
+  listDevices(): Promise<unknown>;
+  useDevice(deviceId: string): Promise<{ success: boolean }>;
   startSession(policy: SessionPolicy): Promise<{ success: boolean; sessionId?: string }>;
   nudgeSession(direction: 'calmer' | 'sharper', amount?: number, reason?: string): Promise<{ success: boolean }>;
   stopSession(): Promise<{ success: boolean }>;
@@ -90,6 +98,10 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
   const timeoutMs = config.timeoutMs ?? 10_000;
   let insecureWarned = false;
 
+  // /v1/smart/* fans out across all three providers; give it a wider budget.
+  const resolveTimeout = (path: string): number =>
+    path.startsWith('/v1/smart/') ? Math.max(timeoutMs, 30_000) : timeoutMs;
+
   const requestJson = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
     if (!insecureWarned && endpoint.startsWith('http://')) {
       const parsed = new URL(endpoint);
@@ -110,8 +122,9 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
       }
     }
 
+    const requestTimeoutMs = resolveTimeout(path);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
 
     try {
       const response = await fetch(url, {
@@ -125,9 +138,9 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
       });
 
       if (!response.ok) {
-        const detail = await response.text();
+        const detail = (await response.text()).slice(0, 600);
         if (response.status >= 500) {
-          throw new Error('The Harmon daemon failed to complete the request.');
+          throw new Error(`Harmon daemon error ${response.status}${detail ? `: ${detail}` : ''}`);
         }
         throw new Error(detail || `${response.status} ${response.statusText}`);
       }
@@ -137,6 +150,13 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
       }
 
       return (await response.json()) as T;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(
+          `Harmon daemon at ${endpoint} did not respond within ${Math.round(requestTimeoutMs / 1000)}s — is harmond running?`,
+        );
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
     }
@@ -248,6 +268,15 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
             : target ? { uri: target } : {};
       return requestJson(path, { body, method: 'POST' });
     },
+    async resumeMusic(provider) {
+      // An empty play body resumes the current context on every provider.
+      const path = provider === 'spotify'
+        ? '/v1/spotify/play'
+        : provider === 'apple'
+          ? '/v1/apple/play'
+          : '/v1/youtube/play';
+      return requestJson(path, { body: {}, method: 'POST' });
+    },
     async pauseMusic(provider) {
       const path = provider === 'spotify'
         ? '/v1/spotify/pause'
@@ -271,6 +300,28 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
           ? '/v1/apple/prev'
           : '/v1/youtube/prev';
       return requestJson(path, { method: 'POST' });
+    },
+    async setVolume(volumePercent) {
+      return requestJson('/v1/spotify/volume', { body: { volumePercent }, method: 'POST' });
+    },
+    async seek(positionMs) {
+      return requestJson('/v1/spotify/seek', { body: { positionMs }, method: 'POST' });
+    },
+    async setShuffle(state) {
+      return requestJson('/v1/spotify/shuffle', { body: { state }, method: 'POST' });
+    },
+    async setRepeat(state) {
+      return requestJson('/v1/spotify/repeat', { body: { state }, method: 'POST' });
+    },
+    async addToQueue(provider, uri) {
+      const path = provider === 'spotify' ? '/v1/spotify/queue' : '/v1/youtube/queue';
+      return requestJson(path, { body: { uri }, method: 'POST' });
+    },
+    async listDevices() {
+      return requestJson('/v1/devices');
+    },
+    async useDevice(deviceId) {
+      return requestJson('/v1/device/use', { body: { deviceId }, method: 'POST' });
     },
     async startSession(policy) {
       return requestJson('/v1/command', {

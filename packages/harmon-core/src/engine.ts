@@ -47,7 +47,7 @@ class SessionEngineImpl implements SessionEngine {
   private logger: EngineLogger;
   private state: SessionState | null = null;
   private refillInterval: ReturnType<typeof setInterval> | null = null;
-  private refilling = false;
+  private refillPromise: Promise<void> | null = null;
 
   // Constants
   private readonly REFILL_CHECK_INTERVAL_MS = 10000;  // Check every 10s
@@ -79,23 +79,36 @@ class SessionEngineImpl implements SessionEngine {
       queuedTracks: [],
     };
 
-    // Initial queue fill
-    await this.refillQueue();
+    try {
+      // Initial queue fill
+      await this.refillQueue();
 
-    // Start auto-refill monitoring
-    this.startRefillMonitoring();
+      // Start auto-refill monitoring
+      this.startRefillMonitoring();
 
-    // Emit event
-    this.emit({
-      type: 'session.started',
-      payload: {
-        sessionId,
-        policy,
-        startedAt: this.state.startedAt,
-      },
-    });
+      // Emit event
+      this.emit({
+        type: 'session.started',
+        payload: {
+          sessionId,
+          policy,
+          startedAt: this.state.startedAt,
+        },
+      });
 
-    await this.store.logEvent('session.started', { sessionId, policy }, sessionId);
+      await this.store.logEvent('session.started', { sessionId, policy }, sessionId);
+    } catch (error) {
+      // Unwind so a failed start cannot leave a ghost session: a live refill
+      // timer, in-memory state, and a sessions row stuck 'active'.
+      this.stopRefillMonitoring();
+      this.state = null;
+      try {
+        await this.store.endSession(sessionId);
+      } catch {
+        // Best effort — the original failure matters more.
+      }
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
@@ -152,26 +165,40 @@ class SessionEngineImpl implements SessionEngine {
       throw new Error('No active session');
     }
 
+    // Let any in-flight auto-refill finish first so its old-policy tracks
+    // cannot land on top of the freshly nudged queue.
+    if (this.refillPromise) {
+      await this.refillPromise.catch(() => {});
+    }
+    if (!this.state) {
+      throw new Error('No active session');
+    }
+
     const sign = direction === 'calmer' ? -1 : 1;
     const policy = this.state.policy;
     const previousPolicy = policy;
     const previousQueue = [...this.state.queuedTracks];
 
-    // Update soft weights
+    // A nudge moves the energy TARGET, not the energy weight: "calmer" means
+    // rank tracks near a lower energy level, so the weight stays a positive
+    // magnitude and only the target shifts.
+    const currentTarget = policy.soft?.targetEnergy ?? 0.5;
+    const newTarget = clamp(currentTarget + sign * amount, 0, 1);
+
     const currentWeights = policy.soft?.weights || {};
     const newWeights = { ...currentWeights };
-
-    // Adjust energy and valence — clamp to protocol range [-1, 1]
-    if (typeof newWeights.energy === 'number') {
-      newWeights.energy = clamp(newWeights.energy + sign * amount, -1, 1);
+    if (typeof newWeights.energy !== 'number' || newWeights.energy === 0) {
+      newWeights.energy = 0.5;
     } else {
-      newWeights.energy = clamp(0.5 + sign * amount, -1, 1);
+      newWeights.energy = Math.abs(newWeights.energy);
     }
 
+    // Valence follows the nudge direction softly: negative weight = prefer
+    // low-valence tracks, consistent with monotone weight semantics.
     if (typeof newWeights.valence === 'number') {
       newWeights.valence = clamp(newWeights.valence + sign * amount * 0.5, -1, 1);
     } else {
-      newWeights.valence = clamp(0.5 + sign * amount * 0.5, -1, 1);
+      newWeights.valence = clamp(sign * amount * 0.5, -1, 1);
     }
 
     // Update policy
@@ -179,6 +206,7 @@ class SessionEngineImpl implements SessionEngine {
       ...policy,
       soft: {
         ...policy.soft,
+        targetEnergy: newTarget,
         weights: newWeights,
       },
     };
@@ -187,15 +215,18 @@ class SessionEngineImpl implements SessionEngine {
     this.state.queuedTracks = [];
     await this.refillQueue();
 
-    if (this.state.queuedTracks.length === 0) {
+    if (this.state && this.state.queuedTracks.length === 0) {
       this.state.policy = previousPolicy;
       this.state.queuedTracks = previousQueue;
       throw new Error('Nudge could not refill the queue with the updated session policy.');
     }
+    if (!this.state) {
+      return;
+    }
 
     await this.store.logEvent(
       'session.nudged',
-      { direction, amount, newWeights },
+      { direction, amount, newWeights, targetEnergy: newTarget },
       this.state.id
     );
 
@@ -206,6 +237,7 @@ class SessionEngineImpl implements SessionEngine {
         direction,
         amount,
         newWeights,
+        targetEnergy: newTarget,
       },
     });
   }
@@ -219,18 +251,37 @@ class SessionEngineImpl implements SessionEngine {
   }
 
   async refillQueue(): Promise<void> {
-    if (!this.state || this.refilling) {
+    if (!this.state) {
+      return;
+    }
+    // Single-flight: concurrent callers (nudge vs. the auto-refill timer)
+    // share the in-flight run instead of silently returning on an empty queue.
+    if (this.refillPromise) {
+      return this.refillPromise;
+    }
+
+    this.refillPromise = this.doRefill().finally(() => {
+      this.refillPromise = null;
+    });
+    return this.refillPromise;
+  }
+
+  private async doRefill(): Promise<void> {
+    // Capture the state generation: stop() nulls this.state and nudge swaps
+    // the policy while we're awaiting, so re-check after every await before
+    // touching the real playback queue.
+    const state = this.state;
+    if (!state) {
       return;
     }
 
-    this.refilling = true;
     try {
-      const policy = this.state.policy;
+      const policy = state.policy;
       const queuePrefs = policy.queue || {};
       const targetDepth = queuePrefs.target || 12;
       const refillThreshold = queuePrefs.refillWhenBelow || 5;
 
-      const currentDepth = this.state.queuedTracks.length;
+      const currentDepth = state.queuedTracks.length;
 
       if (currentDepth >= refillThreshold) {
         return;  // Queue still healthy
@@ -246,6 +297,10 @@ class SessionEngineImpl implements SessionEngine {
         this.logger,
       );
 
+      if (this.state !== state) {
+        return;  // Session stopped while fetching
+      }
+
       if (candidates.length === 0) {
         this.emit({
           type: 'error',
@@ -258,7 +313,7 @@ class SessionEngineImpl implements SessionEngine {
       const ranked = await rankTracks(
         candidates,
         policy,
-        this.state.history,
+        state.history,
         this.getElapsedMs()
       );
 
@@ -267,28 +322,35 @@ class SessionEngineImpl implements SessionEngine {
 
       // Add to playback queue
       for (const { track } of topTracks) {
+        if (this.state !== state) {
+          return;  // Session stopped mid-refill; stop feeding the player
+        }
         if (track.uri) {
           await this.playback.addToQueue(track.uri, track);
         }
       }
 
+      if (this.state !== state) {
+        return;
+      }
+
       // Update local queue state
-      this.state.queuedTracks.push(...topTracks.map(r => r.track));
+      state.queuedTracks.push(...topTracks.map(r => r.track));
 
       // Emit event
       this.emit({
         type: 'queue.refilled',
         payload: {
-          sessionId: this.state.id,
+          sessionId: state.id,
           added: topTracks.length,
-          queueDepth: this.state.queuedTracks.length,
+          queueDepth: state.queuedTracks.length,
         },
       });
 
       await this.store.logEvent(
         'queue.refilled',
-        { added: topTracks.length, queueDepth: this.state.queuedTracks.length },
-        this.state.id
+        { added: topTracks.length, queueDepth: state.queuedTracks.length },
+        state.id
       );
     } catch (error) {
       this.emit({
@@ -297,8 +359,6 @@ class SessionEngineImpl implements SessionEngine {
           message: error instanceof Error ? error.message : 'Queue refill failed',
         },
       });
-    } finally {
-      this.refilling = false;
     }
   }
 
@@ -313,6 +373,7 @@ class SessionEngineImpl implements SessionEngine {
       artistIds: track.artistIds && track.artistIds.length > 0
         ? track.artistIds
         : [track.artist],
+      artistNames: [track.artist],
       playedAt: Date.now(),
     };
 

@@ -3,22 +3,44 @@
  *
  * I keep this adapter on the official YouTube Data API.
  * That means I can support search, owned playlists, liked-library tracks,
- * playlist tracks, and related-track recommendations without pulling in
- * private YouTube Music endpoints that would make the runtime brittle.
+ * playlist tracks, and heuristic (search-based) recommendations without
+ * pulling in private YouTube Music endpoints that would make the runtime
+ * brittle. YouTube removed the related-videos search parameter, so
+ * recommendations are seeded from a video's artist/channel search, not
+ * YouTube's own related-videos.
  */
 
 import type { TrackInfo } from '@sriinnu/harmon-protocol';
 import type { MusicProvider, AudioFeatures } from '@sriinnu/harmon-core';
 
 const YT_DATA_API_BASE = 'https://www.googleapis.com/youtube/v3';
+const MAX_RATE_LIMIT_WAIT_MS = 10_000;
+
+/**
+ * I map non-OK Data API responses to clear errors, including the daily quota
+ * exhaustion case which YouTube reports as HTTP 403 with 'quotaExceeded'.
+ */
+async function throwYouTubeApiError(response: Response): Promise<never> {
+  const detail = await response.text();
+  if (response.status === 403 && detail.includes('quotaExceeded')) {
+    throw new Error('YouTube API daily quota exceeded');
+  }
+  throw new Error(`YouTube API error: ${response.status} ${detail}`);
+}
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export interface YouTubeMusicConfig {
-  /** Google OAuth2 access token */
+  /** Google OAuth2 access token (static; prefer getAccessToken for long-lived clients) */
   accessToken?: string;
+  /**
+   * Resolves a Google OAuth2 access token per request. The token is cached
+   * until a 401 response, which invalidates the cache, re-fetches once, and
+   * retries the request once.
+   */
+  getAccessToken?: () => Promise<string | null>;
   /** YouTube Data API key (for search without auth) */
   apiKey?: string;
   /** Reserved for future YTM-internal coverage; not sufficient on its own today */
@@ -92,16 +114,17 @@ export interface YouTubeMusicClient {
 
 class YouTubeMusicClientImpl implements YouTubeMusicClient {
   private config: YouTubeMusicConfig;
+  private cachedAccessToken: string | null = null;
 
   constructor(config: YouTubeMusicConfig) {
-    if (!config.accessToken && !config.apiKey) {
+    if (!config.accessToken && !config.getAccessToken && !config.apiKey) {
       throw new Error('YouTube Music requires an access token or API key. Cookies-only mode is not implemented in this build.');
     }
     this.config = config;
   }
 
   isConnected(): boolean {
-    return !!(this.config.accessToken || this.config.apiKey);
+    return !!(this.config.accessToken || this.config.getAccessToken || this.config.apiKey);
   }
 
   async search(
@@ -118,7 +141,7 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
         q: query,
         type: 'video',
         videoCategoryId: '10',
-        maxResults: (options.limit || 20).toString(),
+        maxResults: Math.min(options.limit || 20, 50).toString(),
         part: 'snippet',
       });
       result.songs = (data.items || [])
@@ -130,7 +153,7 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
       const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
         q: query,
         type: 'channel',
-        maxResults: (options.limit || 20).toString(),
+        maxResults: Math.min(options.limit || 20, 50).toString(),
         part: 'snippet',
       });
       result.artists = (data.items || [])
@@ -142,7 +165,7 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
       const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
         q: query,
         type: 'playlist',
-        maxResults: (options.limit || 20).toString(),
+        maxResults: Math.min(options.limit || 20, 50).toString(),
         part: 'snippet',
       });
       result.playlists = (data.items || [])
@@ -154,7 +177,7 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
       const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
         q: `${query} album`,
         type: 'playlist',
-        maxResults: (options.limit || 20).toString(),
+        maxResults: Math.min(options.limit || 20, 50).toString(),
         part: 'snippet',
       });
       result.albums = (data.items || [])
@@ -212,6 +235,10 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
       .filter((song): song is YouTubeMusicSong => song !== null);
   }
 
+  /**
+   * I build heuristic (search-based) recommendations seeded from the user's
+   * library, since YouTube removed the related-videos search parameter.
+   */
   async getRecommendations(options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
     const seedSong = (await this.getLibrarySongs({ limit: 1 }))[0];
     if (!seedSong) {
@@ -220,17 +247,25 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
     return this.getWatchPlaylist(seedSong.id, options);
   }
 
+  /**
+   * I approximate a "watch playlist" with a search-based heuristic: I look up
+   * the seed video's metadata, search songs by its artist/channel name (with
+   * any ' - Topic' suffix stripped), and exclude the seed itself. YouTube
+   * removed the `relatedToVideoId` search parameter, so these are heuristic
+   * recommendations, not YouTube's related-videos.
+   */
   async getWatchPlaylist(videoId: string, options: YouTubeMusicListOptions = {}): Promise<YouTubeMusicSong[]> {
-    const data = await this.ytDataRequest<YouTubeSearchResponse>('/search', {
-      relatedToVideoId: videoId,
-      type: 'video',
-      videoCategoryId: '10',
-      maxResults: Math.min(options.limit || 20, 50).toString(),
-      part: 'snippet',
-    });
-    return (data.items || [])
-      .map(mapYtSearchToSong)
-      .filter((song): song is YouTubeMusicSong => song !== null && song.id !== videoId);
+    const seed = await this.getSong(videoId);
+    if (!seed) {
+      return [];
+    }
+
+    const limit = Math.min(options.limit || 20, 50);
+    // Ask for one extra result so excluding the seed still fills the limit.
+    const result = await this.search(seed.artistName, ['songs'], { limit: Math.min(limit + 1, 50) });
+    return result.songs
+      .filter((song) => song.id !== videoId)
+      .slice(0, limit);
   }
 
   /**
@@ -238,7 +273,7 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
    * read a signed-in user's playlists or likes.
    */
   private requireAuthorizedUserSurface(surface: string): void {
-    if (!this.config.accessToken) {
+    if (!this.config.accessToken && !this.config.getAccessToken) {
       throw new Error(`${surface} requires YOUTUBE_MUSIC_ACCESS_TOKEN or GOOGLE_ACCESS_TOKEN.`);
     }
   }
@@ -258,33 +293,62 @@ class YouTubeMusicClientImpl implements YouTubeMusicClient {
     return likesPlaylistId;
   }
 
+  /**
+   * I resolve the access token for a request: static config token first,
+   * then the getAccessToken callback with simple caching until a 401.
+   */
+  private async resolveAccessToken(forceRefresh = false): Promise<string | null> {
+    if (this.config.accessToken) {
+      return this.config.accessToken;
+    }
+    if (!this.config.getAccessToken) {
+      return null;
+    }
+    if (!forceRefresh && this.cachedAccessToken) {
+      return this.cachedAccessToken;
+    }
+    this.cachedAccessToken = await this.config.getAccessToken();
+    return this.cachedAccessToken;
+  }
+
   private async ytDataRequest<T>(path: string, query: Record<string, string>): Promise<T> {
     const url = new URL(`${YT_DATA_API_BASE}${path}`);
     for (const [key, value] of Object.entries(query)) {
       url.searchParams.set(key, value);
     }
 
-    const headers: Record<string, string> = {};
-    if (this.config.accessToken) {
-      headers.Authorization = `Bearer ${this.config.accessToken}`;
-    } else if (this.config.apiKey) {
-      url.searchParams.set('key', this.config.apiKey);
-    }
+    const execute = async (token: string | null): Promise<Response> => {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      } else if (this.config.apiKey) {
+        url.searchParams.set('key', this.config.apiKey);
+      }
+      return fetch(url, { headers });
+    };
 
-    const response = await fetch(url, { headers });
+    let token = await this.resolveAccessToken();
+    let response = await execute(token);
+
+    // On 401 with a token callback: invalidate the cache, re-fetch the token
+    // once, and retry the request once.
+    if (response.status === 401 && this.config.getAccessToken && !this.config.accessToken) {
+      this.cachedAccessToken = null;
+      token = await this.resolveAccessToken(true);
+      response = await execute(token);
+    }
 
     if (response.status === 429) {
       const retryAfter = parseInt(response.headers.get('Retry-After') || '5', 10);
-      await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-      const retry = await fetch(url, { headers });
-      if (!retry.ok) {
-        throw new Error(`YouTube API error: ${retry.status} ${await retry.text()}`);
+      if (retryAfter * 1000 > MAX_RATE_LIMIT_WAIT_MS) {
+        throw new Error(`YouTube API rate limited; retry after ${retryAfter}s`);
       }
-      return (await retry.json()) as T;
+      await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+      response = await execute(token);
     }
 
     if (!response.ok) {
-      throw new Error(`YouTube API error: ${response.status} ${await response.text()}`);
+      await throwYouTubeApiError(response);
     }
 
     return (await response.json()) as T;
@@ -501,8 +565,13 @@ export class YouTubeMusicProvider implements MusicProvider {
     throw new Error('YouTube Music top tracks are not available from the official provider contract. Use recently played or library tracks instead.');
   }
 
+  /**
+   * I reject synthetic recently-played semantics for the same reason as
+   * getTopTracks: the official Data API exposes no listening history.
+   */
   async getRecentlyPlayed(options?: { limit?: number }): Promise<TrackInfo[]> {
-    return this.getLibraryTracks(options);
+    void options;
+    throw new Error('YouTube Music recently played is not supported by the YouTube Data API. Use library tracks instead.');
   }
 
   async getPlaylistTracks(playlistId: string, options?: { limit?: number }): Promise<TrackInfo[]> {
@@ -510,6 +579,10 @@ export class YouTubeMusicProvider implements MusicProvider {
     return songs.map(mapSongToTrackInfo);
   }
 
+  /**
+   * Heuristic (search-based) recommendations — seeded by the video's
+   * artist/channel, not YouTube's related-videos (that API was removed).
+   */
   async getRecommendations(options: { seedTrackIds?: string[]; limit?: number }): Promise<TrackInfo[]> {
     if (options.seedTrackIds && options.seedTrackIds.length > 0) {
       const songs = await this.client.getWatchPlaylist(options.seedTrackIds[0], { limit: options.limit });

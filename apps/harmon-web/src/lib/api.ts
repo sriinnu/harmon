@@ -51,27 +51,46 @@ export interface SmartPlayResult {
   providerErrors?: Array<{ provider: string; error: string }>;
 }
 
+const REQUEST_TIMEOUT_MS = 10_000;
+// /v1/smart/* fans out across all three providers, so it gets a wider budget
+// than single-provider calls.
+const SMART_REQUEST_TIMEOUT_MS = 30_000;
+
 export class HarmonClient {
   constructor(private baseUrl: string, private token?: string) {}
 
-  private async request<T>(path: string, options?: RequestInit): Promise<T> {
+  private async request<T>(path: string, options?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    // Only send token to HTTPS or loopback — never leak it over remote plain HTTP.
+    let tokenWithheld = false;
     if (this.token) {
-      // Only send token to HTTPS or loopback
-      const url = new URL(this.baseUrl);
-      const isSecure = url.protocol === 'https:' || ['127.0.0.1', '::1', 'localhost'].includes(url.hostname);
+      const parsed = new URL(this.baseUrl);
+      const isSecure = parsed.protocol === 'https:' || ['127.0.0.1', '::1', 'localhost'].includes(parsed.hostname);
       if (isSecure) headers['Authorization'] = `Bearer ${this.token}`;
+      else tokenWithheld = true;
     }
 
     const url = `${this.baseUrl}${path}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
-      response = await fetch(url, { ...options, headers: { ...headers, ...options?.headers } });
+      response = await fetch(url, { ...options, headers: { ...headers, ...options?.headers }, signal: controller.signal });
     } catch {
+      if (controller.signal.aborted) {
+        throw new Error(`daemon did not respond within ${Math.round(timeoutMs / 1000)}s — is harmond running at ${this.baseUrl}?`);
+      }
       throw new Error('Cannot reach daemon — check URL and ensure harmond is running.');
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!response.ok) {
+      if (response.status === 401 && tokenWithheld) {
+        throw new Error(
+          `Unauthorized: your API token was withheld because ${this.baseUrl} is an insecure remote HTTP connection — use https (or a loopback address) so the token can be sent.`,
+        );
+      }
       const detail = await response.text().catch(() => '');
       throw new Error(detail || `${response.status} ${response.statusText}`);
     }
@@ -99,21 +118,28 @@ export class HarmonClient {
   async appleSetToken(token: string): Promise<void> { return this.post('/v1/auth/apple/set-user-token', { token }); }
   async appleLogout(): Promise<void> { return this.post('/v1/auth/apple/logout'); }
 
-  // Search (per provider)
+  // Search (per provider). Each daemon parser accepts a different type vocabulary:
+  // spotify wants singular (track|album|artist|playlist), apple/youtube want plural (songs|albums|artists|playlists).
   async search(provider: string, query: string, type = 'track', limit = 20): Promise<any> {
-    return this.request(`/v1/${provider}/search?q=${encodeURIComponent(query)}&type=${type}&limit=${limit}`);
+    const plural: Record<string, string> = { track: 'songs', song: 'songs', album: 'albums', artist: 'artists', playlist: 'playlists' };
+    const providerType = provider === 'spotify' ? type : (plural[type] ?? type);
+    return this.request(`/v1/${provider}/search?q=${encodeURIComponent(query)}&type=${providerType}&limit=${limit}`);
   }
 
   // Smart
   async smartPlay(query: string, provider?: string): Promise<SmartPlayResult> {
-    return this.post('/v1/smart/play', { query, provider });
+    return this.request('/v1/smart/play', { method: 'POST', body: JSON.stringify({ query, provider }) }, SMART_REQUEST_TIMEOUT_MS);
   }
   async smartSearch(query: string, limit = 5): Promise<any> {
-    return this.request(`/v1/smart/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+    return this.request(`/v1/smart/search?q=${encodeURIComponent(query)}&limit=${limit}`, undefined, SMART_REQUEST_TIMEOUT_MS);
   }
 
-  // Playback
-  async play(provider: string, options?: { uri?: string }): Promise<void> { return this.post(`/v1/${provider}/play`, options ?? {}); }
+  // Playback — spotify/youtube read body.uri, apple reads body.url.
+  async play(provider: string, options?: { uri?: string }): Promise<void> {
+    const uri = options?.uri;
+    const body = provider === 'apple' ? (uri ? { url: uri } : {}) : (uri ? { uri } : {});
+    return this.post(`/v1/${provider}/play`, body);
+  }
   async pause(provider: string): Promise<void> { return this.post(`/v1/${provider}/pause`); }
   async next(provider: string): Promise<void> { return this.post(`/v1/${provider}/next`); }
   async prev(provider: string): Promise<void> { return this.post(`/v1/${provider}/prev`); }
@@ -134,7 +160,7 @@ export class HarmonClient {
     return this.post('/v1/command', {
       id: `c_${Date.now().toString(36)}`,
       ts: Date.now(),
-      source: { kind: 'cli', device: 'linux' },
+      source: commandSource(),
       type: 'session.start',
       payload: { policy: { version: 1, provider, mode } },
     });
@@ -143,7 +169,7 @@ export class HarmonClient {
     return this.post('/v1/command', {
       id: `c_${Date.now().toString(36)}`,
       ts: Date.now(),
-      source: { kind: 'cli', device: 'linux' },
+      source: commandSource(),
       type: 'session.stop',
       payload: {},
     });
@@ -152,9 +178,46 @@ export class HarmonClient {
     return this.post('/v1/command', {
       id: `c_${Date.now().toString(36)}`,
       ts: Date.now(),
-      source: { kind: 'cli', device: 'linux' },
+      source: commandSource(),
       type: 'session.nudge',
       payload: { direction },
     });
   }
+}
+
+/**
+ * Build the command envelope source. The protocol's DeviceKind enum has no 'web'
+ * value (cli|menubar|voice|mcp), so we use 'menubar' as the least-wrong existing
+ * GUI-client kind, and detect the closest DeviceOS from the browser UA.
+ */
+export function commandSource(): { kind: 'menubar'; device: 'macos' | 'windows' | 'linux' } {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const device = /mac/i.test(ua) ? 'macos' : /win/i.test(ua) ? 'windows' : 'linux';
+  return { kind: 'menubar', device };
+}
+
+/**
+ * Poll daemon status until the given provider reports connected — used after an
+ * OAuth browser handoff. Resolves true as soon as the provider connects, false
+ * on timeout or abort.
+ */
+export async function pollForProviderConnected(
+  client: HarmonClient,
+  provider: string,
+  isAborted: () => boolean = () => false,
+  attempts = 30,
+  intervalMs = 2000,
+): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    if (isAborted()) return false;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+    if (isAborted()) return false;
+    try {
+      const s = await client.getStatus();
+      if (s.providers?.[provider]?.connected) return true;
+    } catch {
+      // daemon briefly unreachable — keep polling
+    }
+  }
+  return false;
 }

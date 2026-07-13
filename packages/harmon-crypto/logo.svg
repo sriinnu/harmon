@@ -1,9 +1,43 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
-  <!-- I am the crypto mark: a shield and lock with no extra decoration. -->
-  <rect width="64" height="64" rx="16" fill="#F3E7D4"/>
-  <g stroke="#171513" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M32 14L45 20V31C45 39 39 45 32 49C25 45 19 39 19 31V20L32 14Z"/>
-    <rect x="27" y="28" width="10" height="9" rx="2.2"/>
-    <path d="M29.5 28V25C29.5 22.8 31.1 21 33 21C34.9 21 36.5 22.8 36.5 25V28"/>
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Harmon mark: two listeners joined by one shared beamed note — the beam is
+    the bridge. Same paper-and-ink identity as before, simplified to strong
+    silhouettes with a single warm accent so it survives favicon sizes.
+  -->
+  <defs>
+    <radialGradient id="harmon-paper" cx="50%" cy="36%" r="80%">
+      <stop offset="0%" stop-color="#F8EFE0"/>
+      <stop offset="100%" stop-color="#EEDFC5"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="200" height="200" rx="40" fill="url(#harmon-paper)"/>
+
+  <!-- Shared beamed note: the bridge between the two listeners -->
+  <g fill="#C8502A">
+    <path d="M89 50L131 42V31L89 39Z"/>
+    <rect x="89" y="45" width="5" height="56" rx="2.5"/>
+    <rect x="126" y="37" width="5" height="56" rx="2.5"/>
+    <ellipse cx="84" cy="101" rx="9.5" ry="7" transform="rotate(-18 84 101)"/>
+    <ellipse cx="121" cy="93" rx="9.5" ry="7" transform="rotate(-18 121 93)"/>
   </g>
+
+  <!-- Listeners: ink silhouettes, heads tilted toward the shared note -->
+  <g fill="#1A1714">
+    <circle cx="55" cy="127" r="12.5"/>
+    <path d="M35 172C35 151 45 142 55 142C65 142 75 151 75 172Z"/>
+    <circle cx="145" cy="127" r="12.5"/>
+    <path d="M125 172C125 151 135 142 145 142C155 142 165 151 165 172Z"/>
+  </g>
+
+  <!-- Sound arcs: one pair per side, quiet -->
+  <g stroke="#1A1714" stroke-width="3.4" stroke-linecap="round">
+    <path d="M27 106C33 97 43 93 52 96" opacity="0.5"/>
+    <path d="M34 116C38 111 44 109 49 110" opacity="0.32"/>
+    <path d="M173 106C167 97 157 93 148 96" opacity="0.5"/>
+    <path d="M166 116C162 111 156 109 151 110" opacity="0.32"/>
+  </g>
+
+  <!-- Shared ground -->
+  <path d="M42 178C72 170 128 170 158 178" stroke="#1A1714" stroke-width="3.4" stroke-linecap="round" opacity="0.3"/>
 </svg>

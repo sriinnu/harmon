@@ -11,13 +11,13 @@ tags:
   - persistence
   - storage
 provider: harmon
-version: 0.1.0
+version: 0.2.0
 ---
 
 # Harmon Store
 
 ## What this does
-harmon-store provides the persistence layer for the entire harmon system. It manages a SQLite database (via libsql) with automatic versioned migrations, storing journal entries, sessions, event logs, and key-value settings. The store enforces WAL mode for concurrent read performance and validates that encryption is enabled in production environments.
+harmon-store provides the persistence layer for the entire harmon system. It manages a SQLite database (via libsql) with automatic versioned migrations, storing journal entries, sessions, event logs, and key-value settings. The store enforces WAL mode for concurrent read performance. (A static `HarmonStore.validateEncryptionInProduction` helper exists but has no callers — production encryption enforcement lives in the daemon's config validation.)
 
 ## When to use
 - Persisting session history, event logs, or journal entries to disk

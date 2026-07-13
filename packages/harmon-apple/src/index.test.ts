@@ -79,6 +79,84 @@ describe('harmon-apple', () => {
     ]);
   });
 
+  it('filters stations out of recent plays and maps sparse resources defensively', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            id: 'station-1',
+            type: 'stations',
+            attributes: { name: 'Some Station' },
+          },
+          {
+            id: 'library-song-1',
+            type: 'library-songs',
+            attributes: { name: 'Library Song' },
+          },
+          {
+            id: 'catalog-song-1',
+            type: 'songs',
+            attributes: {
+              name: 'Catalog Song',
+              artistName: 'Catalog Artist',
+              durationInMillis: 210000,
+            },
+          },
+        ],
+      }),
+    }));
+
+    const client = createAppleMusicClient({
+      developerToken: 'developer-token',
+      userToken: 'user-token',
+    });
+    const result = await client.getRecentlyPlayedTracks();
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'library-song-1',
+        name: 'Library Song',
+        artistName: 'Unknown',
+        durationMs: 0,
+        url: undefined,
+      }),
+      expect.objectContaining({
+        id: 'catalog-song-1',
+        artistName: 'Catalog Artist',
+        durationMs: 210000,
+      }),
+    ]);
+  });
+
+  it('routes playlist IDs by prefix instead of probing endpoints', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createAppleMusicClient({
+      developerToken: 'developer-token',
+      userToken: 'user-token',
+    });
+
+    await client.getPlaylistTracks('pl.catalog123');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/catalog/us/playlists/pl.catalog123/tracks');
+
+    await client.getPlaylistTracks('p.library123');
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/me/library/playlists/p.library123/tracks');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('derives provider connectivity from client credentials by default', () => {
+    const client = createAppleMusicClient({ developerToken: 'developer-token' });
+    const provider = createAppleMusicProvider(client);
+
+    expect(provider.isConnected()).toBe(true);
+  });
+
   it('uses recent plays and catalog search for Apple provider recommendations', async () => {
     const provider = createAppleMusicProvider({
       getSong: async () => null,

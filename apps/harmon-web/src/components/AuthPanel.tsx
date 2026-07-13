@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useDaemon } from '../lib/DaemonContext';
-import type { HarmonClient } from '../lib/api';
+import { pollForProviderConnected, type HarmonClient } from '../lib/api';
 
 export function AuthPanel() {
   const { client, status, refreshStatus } = useDaemon();
@@ -34,25 +34,13 @@ function ProviderRow({ name, status, client, onRefresh }: ProviderRowProps) {
   const connect = async () => {
     setBusy(true);
     try {
-      if (name === 'spotify') {
-        const { url } = await client.spotifyLogin();
+      if (name === 'spotify' || name === 'youtube') {
+        const { url } = name === 'spotify' ? await client.spotifyLogin() : await client.youtubeLogin();
         window.open(url, '_blank', 'noopener,noreferrer');
-        // Poll for completion
-        for (let i = 0; i < 30; i++) {
-          if (abortRef.current) return;
-          await new Promise(r => setTimeout(r, 2000));
-          if (abortRef.current) return;
-          await onRefresh();
-        }
-      } else if (name === 'youtube') {
-        const { url } = await client.youtubeLogin();
-        window.open(url, '_blank', 'noopener,noreferrer');
-        for (let i = 0; i < 30; i++) {
-          if (abortRef.current) return;
-          await new Promise(r => setTimeout(r, 2000));
-          if (abortRef.current) return;
-          await onRefresh();
-        }
+        // Poll for completion — exits as soon as the provider connects
+        await pollForProviderConnected(client, name, () => abortRef.current);
+        if (abortRef.current) return;
+        await onRefresh();
       } else if (name === 'apple') {
         const token = prompt('Paste your Apple Music user token:');
         if (token) await client.appleSetToken(token);

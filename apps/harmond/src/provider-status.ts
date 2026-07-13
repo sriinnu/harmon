@@ -170,14 +170,18 @@ export interface YouTubeStatusDeps {
   youtubeBrowserSupport: BrowserLaunchSupport;
   youtubeAccessToken?: string | undefined;
   youtubeApiKey?: string | undefined;
+  youtubeAuth?: { getAuthMode(): 'none' | 'oauth' | 'api-key' } | undefined;
 }
 
 /** Get YouTube Music provider status (sync). */
 export function getYouTubeProviderStatus(deps: YouTubeStatusDeps): ProviderStatusDetails {
   const configured = !!deps.youtubeMusicClient;
   const runtime = !!deps.youtubeRuntime && deps.youtubeBrowserSupport.available;
+  // OAuth completed through the daemon counts as user auth even without a
+  // static env token — the client resolves tokens through youtubeAuth.
+  const hasUserAuth = Boolean(deps.youtubeAccessToken) || deps.youtubeAuth?.getAuthMode() === 'oauth';
   const auth: ProviderStatusDetails['auth'] =
-    deps.youtubeAccessToken ? 'oauth' : deps.youtubeApiKey ? 'api-key' : 'none';
+    hasUserAuth ? 'oauth' : deps.youtubeApiKey ? 'api-key' : 'none';
 
   return {
     connected: configured,
@@ -186,10 +190,10 @@ export function getYouTubeProviderStatus(deps: YouTubeStatusDeps): ProviderStatu
     auth,
     playbackMode: runtime ? 'browser-handoff' : undefined,
     capabilities: {
-      library: Boolean(deps.youtubeAccessToken),
+      library: hasUserAuth,
       playback: runtime,
       pause: false,
-      playlists: Boolean(deps.youtubeAccessToken),
+      playlists: hasUserAuth,
       previous: runtime,
       queue: runtime,
       recommendations: configured,

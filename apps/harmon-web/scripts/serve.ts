@@ -14,16 +14,24 @@ const root = resolve('dist');
 /**
  * I map the file extension to the content type the browser expects.
  */
-function getContentType(pathname: string): string {
+export function getContentType(pathname: string): string {
   switch (extname(pathname)) {
     case '.css':
       return 'text/css; charset=utf-8';
     case '.html':
       return 'text/html; charset=utf-8';
+    case '.ico':
+      return 'image/x-icon';
     case '.js':
       return 'text/javascript; charset=utf-8';
     case '.json':
       return 'application/json; charset=utf-8';
+    case '.png':
+      return 'image/png';
+    case '.svg':
+      return 'image/svg+xml';
+    case '.woff2':
+      return 'font/woff2';
     default:
       return 'text/plain; charset=utf-8';
   }

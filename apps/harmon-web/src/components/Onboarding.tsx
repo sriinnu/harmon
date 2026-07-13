@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { HarmonClient } from '../lib/api';
+import { HarmonClient, pollForProviderConnected } from '../lib/api';
 
 const ONBOARDING_KEY = 'harmon-onboarding-complete';
 
@@ -113,36 +113,17 @@ export function Onboarding({ onComplete }: Props) {
     const connectProvider = async (name: string) => {
       const client = new HarmonClient(url, token || undefined);
       try {
-        if (name === 'spotify') {
-          const { url: authUrl } = await client.spotifyLogin();
+        if (name === 'spotify' || name === 'youtube') {
+          const { url: authUrl } = name === 'spotify' ? await client.spotifyLogin() : await client.youtubeLogin();
           window.open(authUrl, '_blank', 'noopener,noreferrer');
           setStatus(`Opening ${name} login...`);
-          // Poll
-          for (let i = 0; i < 30; i++) {
-            if (abortRef.current) return;
-            await new Promise(r => setTimeout(r, 2000));
-            if (abortRef.current) return;
-            const s = await client.getStatus();
-            if (s.providers?.[name]?.connected) {
-              setConnected(prev => [...new Set([...prev, name])]);
-              setStatus(`${name} connected!`);
-              return;
-            }
-          }
-        } else if (name === 'youtube') {
-          const { url: authUrl } = await client.youtubeLogin();
-          window.open(authUrl, '_blank', 'noopener,noreferrer');
-          setStatus(`Opening ${name} login...`);
-          for (let i = 0; i < 30; i++) {
-            if (abortRef.current) return;
-            await new Promise(r => setTimeout(r, 2000));
-            if (abortRef.current) return;
-            const s = await client.getStatus();
-            if (s.providers?.[name]?.connected) {
-              setConnected(prev => [...new Set([...prev, name])]);
-              setStatus(`${name} connected!`);
-              return;
-            }
+          const ok = await pollForProviderConnected(client, name, () => abortRef.current);
+          if (abortRef.current) return;
+          if (ok) {
+            setConnected(prev => [...new Set([...prev, name])]);
+            setStatus(`${name} connected!`);
+          } else {
+            setStatus(`${name} login did not complete — try again.`);
           }
         } else if (name === 'apple') {
           const t = prompt('Paste your Apple Music user token:');

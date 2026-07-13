@@ -10,15 +10,19 @@ import {
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import { MarkdownParser, createFlowParser } from '../parser/index.js';
 import { PatternGraphBuilder, PatternDetector, SuggestionEngine } from '../graph/index.js';
 import type { ToolDefinition, ToolHandler, JournalEntry, PatternGraph } from '../types.js';
 import { getFlowServerVersion } from '../version.js';
+import { createDaemonAppClient, type HarmonDaemonAppClient } from './daemon-client.js';
+import { getMusicToolSpecs, type MusicToolSpec } from './music-tools.js';
 export { HarmonAppMCPServer, createAppMCPServer } from './app-server.js';
 export type { HarmonAppMCPServerConfig } from './app-server.js';
 export type { HarmonMcpAuthConfig } from './auth.js';
 
 interface FlowServerConfig {
+  daemonClient?: HarmonDaemonAppClient;
   flowDir?: string;
   name?: string;
   version?: string;
@@ -27,18 +31,27 @@ interface FlowServerConfig {
 export class HarmonFlowMCPServer {
   private server: Server;
   private parser: MarkdownParser;
+  private daemonClient: HarmonDaemonAppClient;
+  private musicTools: Map<string, MusicToolSpec>;
   private entries: JournalEntry[] = [];
   private graphBuilt = false;
   private graph: PatternGraph | null = null;
   private suggestionEngine: SuggestionEngine | null = null;
 
   constructor(config: FlowServerConfig = {}) {
-    this.server = new Server({
-      name: config.name || 'harmon-flow',
-      version: config.version || getFlowServerVersion(),
-    });
+    this.server = new Server(
+      {
+        name: config.name || 'harmon-flow',
+        version: config.version || getFlowServerVersion(),
+      },
+      { capabilities: { resources: {}, tools: {} } },
+    );
 
     this.parser = createFlowParser(config.flowDir);
+    // stdio is spawned by a local, trusted MCP host, so the full music tool
+    // surface (including write tools) is exposed without the HTTP auth gates.
+    this.daemonClient = config.daemonClient ?? createDaemonAppClient();
+    this.musicTools = new Map(getMusicToolSpecs().map((spec) => [spec.name, spec]));
 
     this.setupHandlers();
   }
@@ -57,6 +70,11 @@ export class HarmonFlowMCPServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+
+      const musicTool = this.musicTools.get(name);
+      if (musicTool) {
+        return this.callMusicTool(musicTool, args ?? {});
+      }
 
       const handler = this.getToolHandler(name);
       if (!handler) {
@@ -147,18 +165,60 @@ export class HarmonFlowMCPServer {
       const builder = new PatternGraphBuilder(this.entries);
       const graph = builder.build();
       this.graph = graph;
-      const detector = new PatternDetector(graph, this.entries);
-      const patterns = detector.getAllPatterns();
       this.suggestionEngine = new SuggestionEngine(graph, this.entries);
       this.graphBuilt = true;
     }
   }
 
   /**
-   * Get all tool definitions
+   * Validate arguments against the tool's zod schema, then dispatch.
+   */
+  private async callMusicTool(spec: MusicToolSpec, args: Record<string, unknown>) {
+    if (spec.schema) {
+      const parsed = spec.schema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Invalid arguments for ${spec.name}: ${parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      args = parsed.data;
+    }
+
+    try {
+      return await spec.handler(args, this.daemonClient);
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  /**
+   * Get all tool definitions (journal analysis + daemon-backed music tools).
    */
   private getToolDefinitions(): ToolDefinition[] {
+    const musicDefinitions = [...this.musicTools.values()].map((spec) => ({
+      name: spec.name,
+      description: spec.description,
+      inputSchema: (spec.schema
+        ? z.toJSONSchema(spec.schema, { io: 'input' })
+        : { type: 'object', properties: {} }) as ToolDefinition['inputSchema'],
+    }));
+
     return [
+      ...musicDefinitions,
       {
         name: 'get_suggestions',
         description: 'Get session suggestions based on current mood and energy',
@@ -331,7 +391,10 @@ export class HarmonFlowMCPServer {
    * Handle get_suggestions tool
    */
   private async handleGetSuggestions(args: Record<string, unknown>) {
-    const mood = args.mood as string[];
+    const mood = normalizeMoodInput(args.mood);
+    if (!mood) {
+      return invalidArgsResult('get_suggestions', 'mood must be a string or an array of strings');
+    }
     const energy = args.energy as 'low' | 'medium' | 'high';
     const timeOfDay = args.time_of_day as string | undefined;
 
@@ -374,7 +437,10 @@ export class HarmonFlowMCPServer {
    * Handle find_similar_sessions tool
    */
   private async handleFindSimilarSessions(args: Record<string, unknown>) {
-    const mood = args.mood as string[];
+    const mood = normalizeMoodInput(args.mood);
+    if (!mood) {
+      return invalidArgsResult('find_similar_sessions', 'mood must be a string or an array of strings');
+    }
     const energy = args.energy as 'low' | 'medium' | 'high' | undefined;
     const limit = (args.limit as number) || 5;
 
@@ -507,9 +573,15 @@ export class HarmonFlowMCPServer {
    * Handle write_entry tool
    */
   private async handleWriteEntry(args: Record<string, unknown>) {
-    const mood = args.mood as string[];
+    const mood = normalizeMoodInput(args.mood);
+    if (!mood) {
+      return invalidArgsResult('write_entry', 'mood must be a string or an array of strings');
+    }
+    if (typeof args.content !== 'string' || args.content.length === 0) {
+      return invalidArgsResult('write_entry', 'content must be a non-empty string');
+    }
     const energy = args.energy as 'low' | 'medium' | 'high' | undefined;
-    const content = args.content as string;
+    const content = args.content;
     const timeOfDay = args.time_of_day as string | undefined;
     const activity = args.activity as string | undefined;
 
@@ -681,7 +753,7 @@ ${entry.content}`;
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
 
-    console.error('Harmon Flow MCP Server started');
+    console.error('Harmon Flow MCP Server started (journal + music tools)');
   }
 
   /**
@@ -690,6 +762,23 @@ ${entry.content}`;
   getServer(): Server {
     return this.server;
   }
+}
+
+function normalizeMoodInput(value: unknown): string[] | null {
+  if (typeof value === 'string' && value.length > 0) {
+    return [value];
+  }
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string')) {
+    return value as string[];
+  }
+  return null;
+}
+
+function invalidArgsResult(tool: string, message: string) {
+  return {
+    content: [{ type: 'text', text: `Invalid arguments for ${tool}: ${message}` }],
+    isError: true,
+  };
 }
 
 /**

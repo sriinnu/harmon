@@ -20,6 +20,27 @@ describe('validateDaemonEnvironment', () => {
     ).toThrow('HARMON_API_TOKEN is required in production.');
   });
 
+  it('rejects a non-loopback bind without an API token regardless of NODE_ENV', () => {
+    expect(() =>
+      validateDaemonEnvironment({
+        ...baseOptions,
+        apiToken: undefined,
+        host: '0.0.0.0',
+        nodeEnv: undefined,
+      }),
+    ).toThrow('HARMON_API_TOKEN is required when binding to a non-loopback address (0.0.0.0).');
+  });
+
+  it('allows a non-loopback bind when an API token is set', () => {
+    expect(() =>
+      validateDaemonEnvironment({
+        ...baseOptions,
+        host: '0.0.0.0',
+        nodeEnv: undefined,
+      }),
+    ).not.toThrow();
+  });
+
   it('rejects inferred Spotify callbacks in production', () => {
     expect(() =>
       validateDaemonEnvironment({

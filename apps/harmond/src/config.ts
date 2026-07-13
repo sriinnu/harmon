@@ -37,12 +37,28 @@ export function validateDaemonEnvironment(
     throw new Error('HARMON_API_TOKEN is required in production.');
   }
 
+  // The security model leans on the loopback bind: without a token, every
+  // endpoint (playback, cookies, journal) is open to whoever can reach the
+  // port. Never allow an unauthenticated daemon on a routable interface.
+  if (!isLoopbackBindHost(options.host) && !options.apiToken) {
+    throw new Error(
+      `HARMON_API_TOKEN is required when binding to a non-loopback address (${options.host}).`,
+    );
+  }
+
   if (isProduction && !options.encryptionSecret) {
     throw new Error('HARMON_ENCRYPTION_SECRET is required in production.');
   }
 
   if (isProduction && options.corsOrigins.includes('*')) {
     throw new Error('HARMON_CORS_ORIGINS cannot include "*" in production.');
+  }
+
+  // Wildcard CORS on a tokenless daemon lets any website the user visits
+  // read their listening data and drive playback cross-origin. Require a
+  // token before reflecting arbitrary origins, in every environment.
+  if (options.corsOrigins.includes('*') && !options.apiToken) {
+    throw new Error('HARMON_CORS_ORIGINS="*" requires HARMON_API_TOKEN to be set.');
   }
 
   if (isProduction && spotifyRedirectUri && !spotifyClientId) {
@@ -96,6 +112,14 @@ function resolveSpotifyRedirectUri(
  */
 function isLoopbackHostname(hostname: string): boolean {
   return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+/**
+ * I decide whether a bind address keeps the daemon local-only. Wildcard
+ * binds expose every interface, so they count as non-loopback.
+ */
+function isLoopbackBindHost(host: string): boolean {
+  return isLoopbackHostname(host);
 }
 
 /**

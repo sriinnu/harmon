@@ -120,47 +120,44 @@ function calculateSoftScore(
   let score = 0;
   let totalWeight = 0;
 
-  // Energy weight (with arc modulation)
-  if (typeof weights.energy === 'number') {
+  // Energy is a proximity score toward soft.targetEnergy (default 0.5) plus
+  // arc modulation. The weight is a magnitude: it controls how much closeness
+  // to the target matters, while nudges move the target itself. Sessions with
+  // a target or an arc but no explicit energy weight still get a default pull.
+  const hasEnergyTarget =
+    typeof weights.energy === 'number' ||
+    typeof soft.targetEnergy === 'number' ||
+    Boolean(soft.arc && soft.arc.shape && soft.arc.shape !== 'flat');
+  if (hasEnergyTarget) {
+    const energyWeight = typeof weights.energy === 'number'
+      ? Math.abs(weights.energy)
+      : DEFAULT_ENERGY_WEIGHT;
     const arcMod = calculateArcModulation(elapsedMs, soft.arc, policy.durationMs);
-    const targetEnergy = 0.5 + arcMod;  // Base 0.5, modified by arc
+    const targetEnergy = clamp((soft.targetEnergy ?? 0.5) + arcMod, 0, 1);
     const energyScore = 1 - Math.abs(features.energy - targetEnergy);
-    score += weights.energy * energyScore;
-    totalWeight += Math.abs(weights.energy);
+    score += energyWeight * energyScore;
+    totalWeight += energyWeight;
   }
 
-  // Instrumentalness weight
-  if (typeof weights.instrumentalness === 'number') {
-    score += weights.instrumentalness * features.instrumentalness;
-    totalWeight += Math.abs(weights.instrumentalness);
-  }
+  // Monotone feature weights: a positive weight prefers high values, a
+  // negative weight prefers low values (inverted feature), consistently.
+  score += monotoneScore(weights.instrumentalness, features.instrumentalness);
+  totalWeight += weightMagnitude(weights.instrumentalness);
 
-  // Speechiness weight (usually negative)
-  if (typeof weights.speechiness === 'number') {
-    const speechScore = weights.speechiness > 0
-      ? features.speechiness
-      : (1 - features.speechiness);
-    score += Math.abs(weights.speechiness) * speechScore;
-    totalWeight += Math.abs(weights.speechiness);
-  }
+  score += monotoneScore(weights.speechiness, features.speechiness);
+  totalWeight += weightMagnitude(weights.speechiness);
 
-  // Valence weight
-  if (typeof weights.valence === 'number') {
-    score += weights.valence * features.valence;
-    totalWeight += Math.abs(weights.valence);
-  }
+  score += monotoneScore(weights.valence, features.valence);
+  totalWeight += weightMagnitude(weights.valence);
 
-  // Acousticness weight
-  if (typeof weights.acousticness === 'number') {
-    score += weights.acousticness * features.acousticness;
-    totalWeight += Math.abs(weights.acousticness);
-  }
+  score += monotoneScore(weights.acousticness, features.acousticness);
+  totalWeight += weightMagnitude(weights.acousticness);
 
   // Tempo weight (normalized to 0-1, assuming 60-180 BPM range)
   if (typeof weights.tempo === 'number') {
     const normalizedTempo = clamp((features.tempo - 60) / 120, 0, 1);
-    score += weights.tempo * normalizedTempo;
-    totalWeight += Math.abs(weights.tempo);
+    score += monotoneScore(weights.tempo, normalizedTempo);
+    totalWeight += weightMagnitude(weights.tempo);
   }
 
   // Normalize by total weight
@@ -176,6 +173,20 @@ function calculateSoftScore(
   score = score * (1 - recencyPenalty);
 
   return clamp(score, 0, 1);
+}
+
+const DEFAULT_ENERGY_WEIGHT = 0.3;
+
+function monotoneScore(weight: number | undefined, featureValue: number): number {
+  if (typeof weight !== 'number' || weight === 0) {
+    return 0;
+  }
+  const directed = weight > 0 ? featureValue : 1 - featureValue;
+  return Math.abs(weight) * directed;
+}
+
+function weightMagnitude(weight: number | undefined): number {
+  return typeof weight === 'number' ? Math.abs(weight) : 0;
 }
 
 function buildScoreReason(track: TrackWithFeatures, score: number): string {

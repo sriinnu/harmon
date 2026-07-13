@@ -2,221 +2,94 @@
 
 ## Summary
 
-Harmon now **requires** encryption to be enabled in production environments. The daemon will refuse to start if `NODE_ENV=production` and `HARMON_ENCRYPTION_SECRET` is not set.
+Harmon **requires** encryption in production. When `NODE_ENV=production` and `HARMON_ENCRYPTION_SECRET` is not set, the daemon throws during startup validation and never begins accepting traffic.
 
-## Changes Made
+## How It Is Enforced
 
-### 1. Daemon Enforcement (apps/harmond/src/index.ts)
+### 1. Daemon startup validation (`apps/harmond/src/config.ts`)
 
-Added validation in the `Harmond` constructor:
+`validateDaemonEnvironment()` runs in the `Harmond` constructor, before any runtime state is created:
 
 ```typescript
-// Enforce encryption in production
-if (process.env.NODE_ENV === 'production' && !encryptionSecret) {
-  this.logger.error({
-    message: 'Encryption is required in production',
-    hint: 'Set HARMON_ENCRYPTION_SECRET environment variable (min 32 characters)',
-    example: 'export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)',
-  }, 'FATAL: Missing required encryption configuration');
-  console.error('\n❌ FATAL ERROR: Encryption is required in production\n');
-  console.error('Harmon stores sensitive tokens (Spotify OAuth tokens, cookies) and requires');
-  console.error('encryption to be enabled when running in production mode.\n');
-  console.error('Please set HARMON_ENCRYPTION_SECRET environment variable:');
-  console.error('  export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)\n');
-  console.error('The encryption secret must be at least 32 characters long.\n');
-  process.exit(1);
+if (isProduction && !options.encryptionSecret) {
+  throw new Error('HARMON_ENCRYPTION_SECRET is required in production.');
 }
 ```
+
+There is no `process.exit(1)` block — the constructor throws, so `createDaemon()` fails with that error. The same validator also requires `HARMON_API_TOKEN` in production and whenever the daemon binds a non-loopback address, and rejects `HARMON_CORS_ORIGINS=*` in production.
 
 **Behavior:**
-- In production (`NODE_ENV=production`): Daemon exits with code 1 if encryption is not configured
-- In development: Daemon logs a warning but continues (for local development convenience)
-- Clear error messages guide users on how to fix the issue
+- Production (`NODE_ENV=production`): construction throws if the secret is missing.
+- Development: the daemon starts, logs a warning, and prints an unmissable console block:
 
-### 2. Store Validation Utilities (packages/harmon-store/src/index.ts)
-
-Added static helper methods to `HarmonStore`:
-
-```typescript
-/**
- * Validate encryption is enabled in production
- * This should be called after the store is initialized
- */
-static validateEncryptionInProduction(encryptionEnabled: boolean): void {
-  if (process.env.NODE_ENV === 'production' && !encryptionEnabled) {
-    throw new Error(
-      'Encryption is required in production. Set HARMON_ENCRYPTION_SECRET environment variable.'
-    );
-  }
-}
-
-/**
- * Check if encryption should be required based on environment
- */
-static isEncryptionRequired(): boolean {
-  return process.env.NODE_ENV === 'production';
-}
+```
+[harmond] WARNING: HARMON_ENCRYPTION_SECRET is not set.
+[harmond] OAuth tokens will be stored UNENCRYPTED in the SQLite database.
+[harmond] Set HARMON_ENCRYPTION_SECRET (32+ random characters) to encrypt credentials at rest.
 ```
 
-**Usage:**
-- Can be used by other packages that depend on harmon-store
-- Provides a consistent way to check encryption requirements
-- Reusable validation logic
+(The console block is suppressed only under `NODE_ENV=test`.)
 
-### 3. Documentation Updates (README.md)
+### 2. Log lines to look for (`apps/harmond/src/index.ts`)
 
-Updated multiple sections:
+| Secret | Log line |
+|--------|----------|
+| Set | `Credential encryption enabled` |
+| Unset | `Credential encryption disabled — development only` (plus the console WARNING block above) |
 
-#### Security Section
-- Added warning icon and bold emphasis
-- Added explicit note that daemon will refuse to start
-- Clarified the security rationale
+### 3. Auth CLI token files (`packages/harmon-{spotify,apple,youtube}/src/token-store.ts`)
 
-#### Environment Variables Section
-- Marked `HARMON_ENCRYPTION_SECRET` as **REQUIRED** in production
-- Added explicit generation instructions
-- Added note about exit behavior
+The per-provider auth CLIs (`npm run auth` in each provider package) persist token state under `~/.chitragupta/harmon/provider-packs/`. When `HARMON_ENCRYPTION_SECRET` is set, those files are written as an encrypted envelope (`{ "encrypted": true, "data": "<ciphertext>" }`) using `@sriinnu/harmon-crypto`. Legacy plaintext files remain readable and are **re-encrypted on the next write**. Reading an encrypted file without the secret fails with a message telling you to set it. A secret shorter than 32 characters is treated as unset (with a console error).
 
-#### Production Checklist
-- Made encryption the most prominent item
-- Added warning about startup failure
-- Emphasized the safety mechanism
+### 4. Store helper (informational only)
 
-## Testing the Implementation
+`HarmonStore.validateEncryptionInProduction()` exists in `packages/harmon-store/src/index.ts` but currently has **no callers** — it is not part of the active enforcement path. Enforcement lives in the daemon config validation described above.
 
-### Test Case 1: Production Without Encryption (Should Fail)
+## Testing the Behavior
+
 ```bash
-export NODE_ENV=production
-unset HARMON_ENCRYPTION_SECRET
+# Should fail (constructor throws 'HARMON_ENCRYPTION_SECRET is required in production.')
+NODE_ENV=production HARMON_API_TOKEN=x harmond
+
+# Should start with encryption
+NODE_ENV=production HARMON_API_TOKEN=x \
+  HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32) harmond
+
+# Development without secret: starts, logs 'Credential encryption disabled — development only'
 harmond
-# Expected: Exits with code 1 and clear error message
 ```
 
-### Test Case 2: Production With Encryption (Should Succeed)
-```bash
-export NODE_ENV=production
-export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-harmond
-# Expected: Starts normally with encryption enabled
-```
+## What Is Protected
 
-### Test Case 3: Development Without Encryption (Should Warn)
-```bash
-export NODE_ENV=development
-unset HARMON_ENCRYPTION_SECRET
-harmond
-# Expected: Starts with warning message in logs
-```
+- Spotify OAuth access/refresh tokens (and legacy cookies)
+- YouTube Music (Google) OAuth tokens
+- Apple Music developer/user tokens
+- Provider-pack auth files under `~/.chitragupta/harmon/provider-packs/`
 
-## Security Rationale
+Journal, session, and event rows remain unencrypted local SQLite data.
 
-### Why This Is Important
+## Encryption Method
 
-1. **Sensitive Data Storage**: Harmon stores OAuth tokens and cookies that provide full access to users' Spotify accounts
-2. **Default Secure**: Makes the secure option (encryption) mandatory rather than optional in production
-3. **Fail-Safe**: Prevents accidental deployment without encryption
-4. **Clear Errors**: Provides actionable error messages to guide users
-
-### What Is Protected
-
-- Spotify OAuth access tokens
-- Spotify OAuth refresh tokens
-- Spotify session cookies (sp_dc, sp_key)
-- Any future authentication credentials
-
-### Encryption Method
-
-- Algorithm: AES-256-GCM (authenticated encryption)
-- Implementation: `@sriinnu/harmon-crypto` package
-- Storage: Encrypted data stored in SQLite `settings` table
+- Algorithm: AES-256-GCM (authenticated encryption), scrypt key derivation
+- Implementation: `@sriinnu/harmon-crypto`
+- Daemon storage: encrypted values in the SQLite `settings` table; CLI storage: encrypted JSON envelopes on disk
 
 ### Ciphertext Format (v2)
 
-Encrypted values use the format:
 ```
-keyFingerprint:salt:iv:authTag:encrypted
+keyFingerprint:salt:iv:authTag:encrypted     (all hex-encoded)
 ```
 
-- **keyFingerprint**: First 4 bytes of SHA-256(derived key), hex-encoded. Used to detect key mismatches on decrypt.
+- **keyFingerprint**: first 8 hex chars of SHA-256(derived key); detects key mismatches on decrypt
 - **salt**: 32 random bytes for scrypt key derivation
 - **iv**: 12 random bytes for AES-256-GCM
 - **authTag**: 16-byte authentication tag
-- **encrypted**: The ciphertext
 
-Legacy v1 format (`salt:iv:authTag:encrypted`) is still supported for backward compatibility.
-
-If you change `HARMON_ENCRYPTION_SECRET`, existing credentials cannot be decrypted. The daemon will log a clear "key mismatch" warning and treat stored tokens as degraded.
+Legacy v1 format (`salt:iv:authTag:encrypted`) is still accepted for decryption. If you change `HARMON_ENCRYPTION_SECRET`, existing credentials cannot be decrypted — the daemon logs a clear key-mismatch warning and you must re-authenticate.
 
 ## Migration Guide
 
-If you're upgrading from a previous version:
-
-### For Production Deployments
-
-1. Generate a secure encryption secret:
-   ```bash
-   export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-   ```
-
-2. Add it to your environment configuration:
-   - Docker: Add to `docker-compose.yml` or `.env` file
-   - Systemd: Add to service environment file
-   - PM2: Add to ecosystem config
-
-3. **Important**: If you already have tokens stored in plaintext, they will need to be re-authenticated after enabling encryption
-
-4. Restart the daemon - it will now start with encryption enabled
-
-### For Development
-
-No action required - the daemon will continue to work but will log warnings. However, we recommend enabling encryption in development too for testing purposes.
-
-## Environment Variable Reference
-
-```bash
-# Production (required)
-HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-
-# Development (optional but recommended)
-HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-```
-
-**Length Requirements:**
-- Minimum: 32 characters (enforced by harmon-crypto package)
-- Recommended: 44 characters (32 bytes base64-encoded)
-
-**Generation Commands:**
-```bash
-# OpenSSL (recommended)
-openssl rand -base64 32
-
-# Node.js
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-
-# Python
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-## Files Modified
-
-1. `/apps/harmond/src/index.ts` - Added production enforcement check
-2. `/packages/harmon-store/src/index.ts` - Added validation utility methods
-3. `/README.md` - Updated documentation in 3 sections
-
-## Backward Compatibility
-
-- **Breaking Change**: Production deployments without `HARMON_ENCRYPTION_SECRET` will no longer start
-- **Development**: No breaking changes - works as before with warnings
-- **Migration**: Requires setting environment variable before upgrading
-
-## Related Issues
-
-This change addresses the security concern of accidentally deploying the daemon in production without encryption, which would store OAuth tokens in plaintext in the SQLite database.
-
-## Next Steps
-
-Consider adding:
-1. Integration tests that verify the production enforcement
-2. Startup healthcheck that validates encryption is enabled
-3. Admin API endpoint to check encryption status
-4. Token migration utility for upgrading from plaintext to encrypted storage
+1. Generate a secret: `export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)` (min 32 chars; the base64 output is 44).
+2. Add it to your environment configuration (Docker env, systemd unit, PM2 ecosystem, shell profile).
+3. Existing **daemon-stored plaintext tokens** need re-authentication after enabling encryption. Existing **CLI plaintext auth files** keep loading and are transparently re-encrypted on the next write.
+4. Restart the daemon and confirm `Credential encryption enabled` in the logs.

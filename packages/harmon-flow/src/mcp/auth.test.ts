@@ -21,10 +21,25 @@ describe('createAppAuthContext', () => {
     expect(context.metadata).toBeUndefined();
   });
 
-  it('defaults static bearer auth to read-only scopes', async () => {
+  it('defaults static bearer auth to read+write scopes', async () => {
     const context = createAppAuthContext({
       auth: {
         bearerToken: 'demo-token',
+      },
+      defaultResourceServerUrl: 'http://127.0.0.1:17400/mcp',
+    });
+
+    expect(context.mode).toBe('static-bearer');
+    expect(context.canExposeWriteTools).toBe(true);
+    const authInfo = await context.verifier?.verifyAccessToken('demo-token');
+    expect(authInfo?.scopes).toEqual(['harmon.read', 'harmon.write']);
+  });
+
+  it('hides write tools when static bearer scopes are explicitly read-only', async () => {
+    const context = createAppAuthContext({
+      auth: {
+        bearerToken: 'demo-token',
+        bearerTokenScopes: ['harmon.read'],
       },
       defaultResourceServerUrl: 'http://127.0.0.1:17400/mcp',
     });

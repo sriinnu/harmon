@@ -781,4 +781,51 @@ describe('rankTracks - Edge Cases', () => {
     expect(ranked[1].track.id).toBe('okay-match');
     expect(ranked[0].score).toBeGreaterThan(ranked[1].score);
   });
+
+  describe('targetEnergy', () => {
+    const calm = () => createTrack({ id: 'calm', features: { energy: 0.15 } });
+    const intense = () => createTrack({ id: 'intense', features: { energy: 0.9 } });
+
+    it('prefers tracks near a low target when nudged calmer', async () => {
+      const policy = createPolicy({
+        soft: { targetEnergy: 0.2, weights: { energy: 0.5 } },
+      });
+
+      const ranked = await rankTracks([intense(), calm()], policy, [], 0);
+      expect(ranked[0].track.id).toBe('calm');
+    });
+
+    it('prefers tracks near a high target when nudged sharper', async () => {
+      const policy = createPolicy({
+        soft: { targetEnergy: 0.9, weights: { energy: 0.5 } },
+      });
+
+      const ranked = await rankTracks([calm(), intense()], policy, [], 0);
+      expect(ranked[0].track.id).toBe('intense');
+    });
+
+    it('applies a default energy pull when a target is set without a weight', async () => {
+      const policy = createPolicy({
+        soft: { targetEnergy: 0.1, weights: {} },
+      });
+
+      const ranked = await rankTracks([intense(), calm()], policy, [], 0);
+      expect(ranked[0].track.id).toBe('calm');
+    });
+  });
+
+  describe('negative weight inversion', () => {
+    it('treats a negative weight as preferring low feature values for every monotone weight', async () => {
+      const acoustic = createTrack({ id: 'acoustic', features: { acousticness: 0.9 } });
+      const electronic = createTrack({ id: 'electronic', features: { acousticness: 0.05 } });
+      const policy = createPolicy({
+        soft: { weights: { acousticness: -0.8 } },
+      });
+
+      const ranked = await rankTracks([acoustic, electronic], policy, [], 0);
+      expect(ranked[0].track.id).toBe('electronic');
+      // A negative weight must still contribute a meaningful (non-degenerate) score.
+      expect(ranked[0].score).toBeGreaterThan(0.5);
+    });
+  });
 });

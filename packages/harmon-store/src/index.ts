@@ -162,6 +162,12 @@ export class HarmonStore {
    * Run migrations
    */
   async migrate(): Promise<void> {
+    // Tolerate concurrent writers (daemon + CLI on the same file): wait for
+    // locks instead of surfacing raw SQLITE_BUSY.
+    try {
+      await this.client.execute('PRAGMA busy_timeout = 5000');
+    } catch { /* not supported in every environment */ }
+
     // Ensure migration tracking table exists
     await this.client.execute(`
       CREATE TABLE IF NOT EXISTS _migrations (
@@ -187,18 +193,41 @@ export class HarmonStore {
           await this.client.execute(pragma.trim());
         }
 
-        // Batch the remaining DDL/DML with the version bookmark
-        await this.client.batch(
-          [
-            ...regular.map((s) => s.trim()),
-            { sql: 'INSERT INTO _migrations (version) VALUES (?)', args: [migration.version] },
-          ],
-          'write',
-        );
+        try {
+          // Batch the remaining DDL/DML with the version bookmark
+          await this.client.batch(
+            [
+              ...regular.map((s) => s.trim()),
+              { sql: 'INSERT INTO _migrations (version) VALUES (?)', args: [migration.version] },
+            ],
+            'write',
+          );
+        } catch (error) {
+          // Two processes racing the same migration: whoever lost the
+          // version PK insert can continue as long as the migration is
+          // actually recorded now.
+          const applied = await this.client.execute({
+            sql: 'SELECT version FROM _migrations WHERE version = ?',
+            args: [migration.version],
+          });
+          if (applied.rows.length === 0) {
+            throw error;
+          }
+        }
       }
     }
 
     this.enforceDatabaseFilePermissions();
+  }
+
+  /**
+   * Enable WAL journaling for concurrent read/write. No-op when the backing
+   * store does not support it (e.g. in-memory databases).
+   */
+  async enableWal(): Promise<void> {
+    try {
+      await this.client.execute('PRAGMA journal_mode=WAL');
+    } catch { /* WAL not supported in memory mode */ }
   }
 
   /**
@@ -288,14 +317,16 @@ export class HarmonStore {
   }
 
   async getJournalEntriesByMood(mood: string, limit = 50): Promise<JournalEntry[]> {
+    // Escape LIKE metacharacters so user-supplied moods can't widen the match.
+    const escaped = mood.replace(/([\\%_])/g, '\\$1');
     const result = await this.client.execute({
       sql: `
         SELECT * FROM journal_entries
-        WHERE moodTags LIKE ?
+        WHERE moodTags LIKE ? ESCAPE '\\'
         ORDER BY timestamp DESC
         LIMIT ?
       `,
-      args: [`%${ mood }%`, limit.toString()],
+      args: [`%${ escaped }%`, limit.toString()],
     });
 
     return result.rows.map((row) => this.rowToJournalEntry(row));
@@ -339,7 +370,9 @@ export class HarmonStore {
   // ============================================================================
 
   async createSession(policy: string): Promise<string> {
-    const id = `sess_${uuidv4().slice(0, 8)}`;
+    // A full UUID keeps the collision space negligible (8 hex chars ≈ 32 bits
+    // collides around ~77k sessions).
+    const id = `sess_${uuidv4()}`;
     const now = new Date().toISOString();
 
     await this.client.execute({
@@ -443,6 +476,24 @@ export class HarmonStore {
     });
 
     return id;
+  }
+
+  /**
+   * Delete event_log rows older than the retention window so a long-running
+   * daemon does not grow the table without bound. Returns rows deleted.
+   *
+   * track.started rows double as the listening-history source for
+   * recommendations and repeat limits, so they get their own (much longer)
+   * retention window instead of the general one.
+   */
+  async pruneEventLog(retentionDays = 30, historyRetentionDays = 365): Promise<number> {
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const historyCutoff = new Date(Date.now() - historyRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const result = await this.client.execute({
+      sql: "DELETE FROM event_log WHERE (type != 'track.started' AND createdAt < ?) OR (type = 'track.started' AND createdAt < ?)",
+      args: [cutoff, historyCutoff],
+    });
+    return result.rowsAffected ?? 0;
   }
 
   async getEvents(sessionId?: string, limit = 100): Promise<EventLog[]> {

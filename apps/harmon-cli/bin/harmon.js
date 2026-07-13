@@ -3,7 +3,7 @@
  * Harmon CLI entry point
  */
 
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import fs from 'node:fs/promises';
@@ -446,7 +446,17 @@ function normalizeTrackCollection(provider, tracks) {
     return [];
   }
 
-  return collection.map((track) => ({
+  return collection.map((item) => {
+    // Spotify library/playlist items arrive as { addedAt, track } wrappers.
+    const track = item && typeof item === 'object' && item.track && typeof item.track === 'object'
+      ? item.track
+      : item;
+    return normalizeTrackEntry(provider, track);
+  });
+}
+
+function normalizeTrackEntry(provider, track) {
+  return {
     name: track.name,
     artist: track.artist ?? track.artistName ?? '',
     album: track.album ?? track.albumName ?? '',
@@ -458,7 +468,7 @@ function normalizeTrackCollection(provider, tracks) {
         : provider === 'youtube'
           ? `youtube:video:${track.id}`
           : track.uri),
-  }));
+  };
 }
 
 function normalizePlaylistCollection(provider, playlists) {
@@ -530,6 +540,16 @@ function normalizeAppleMusicUrl(value, market) {
   return `https://music.apple.com/${region}/${pathType}/${id}`;
 }
 
+function parseIntOption(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    // InvalidArgumentError gets commander's clean usage message instead of a
+    // raw stack trace.
+    throw new InvalidArgumentError(`expected a number, got "${value}"`);
+  }
+  return parsed;
+}
+
 function normalizeSpotifyUri(value, typeOverride) {
   if (!value) return null;
   if (value.startsWith('spotify:')) return value;
@@ -537,7 +557,9 @@ function normalizeSpotifyUri(value, typeOverride) {
     try {
       const url = new URL(value);
       if (url.hostname.endsWith('spotify.com')) {
-        const parts = url.pathname.split('/').filter(Boolean);
+        // Share links often carry a locale segment: /intl-en/track/<id>
+        const parts = url.pathname.split('/').filter(Boolean)
+          .filter((part, index) => !(index === 0 && part.startsWith('intl-')));
         if (parts.length >= 2) {
           return `spotify:${parts[0]}:${parts[1]}`;
         }
@@ -545,6 +567,8 @@ function normalizeSpotifyUri(value, typeOverride) {
     } catch {
       return null;
     }
+    // A non-Spotify URL must not fall through to `spotify:track:<url>`.
+    return null;
   }
   if (typeOverride) {
     return `spotify:${typeOverride}:${value}`;
@@ -1042,8 +1066,8 @@ const search = program.command('search').description('Search catalog');
 function registerSearch(type) {
   search
     .command(`${type} <query>`)
-    .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
-    .option('--offset <n>', 'offset', (value) => Number.parseInt(value, 10))
+    .option('--limit <n>', 'limit results', parseIntOption)
+    .option('--offset <n>', 'offset', parseIntOption)
     .action(async (query, ...args) => {
       const command = args[args.length - 1];
       const { cli, opts } = createContext(command);
@@ -1062,7 +1086,7 @@ const library = program.command('library').description('Browse provider library'
 library
   .command('tracks')
   .description('List library or liked tracks')
-  .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
+  .option('--limit <n>', 'limit results', parseIntOption)
   .action(async (...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
@@ -1083,7 +1107,7 @@ const playlist = program.command('playlist').description('Browse provider playli
 playlist
   .command('list')
   .description('List playlists for the selected provider')
-  .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
+  .option('--limit <n>', 'limit results', parseIntOption)
   .action(async (...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
@@ -1102,7 +1126,7 @@ playlist
 playlist
   .command('tracks <idOrUrl>')
   .description('List tracks from a playlist')
-  .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
+  .option('--limit <n>', 'limit results', parseIntOption)
   .action(async (idOrUrl, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
@@ -1125,7 +1149,7 @@ playlist
 program
   .command('recommend [seed]')
   .description('Fetch recommended tracks for the selected provider')
-  .option('--limit <n>', 'limit results', (value) => Number.parseInt(value, 10))
+  .option('--limit <n>', 'limit results', parseIntOption)
   .action(async (seed, ...args) => {
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
@@ -1671,7 +1695,10 @@ program
       const playResult = await cli.smartPlay({
         uri: playUri,
         query: playUri ? undefined : playQuery,
-        provider: cmdOpts.provider || opts.provider,
+        // Only pin a provider when the user asked for one — the global
+        // --provider default is 'spotify', which would defeat smart-play's
+        // fan-out across whatever is actually connected.
+        provider: cmdOpts.provider || undefined,
       });
 
       outputResult(opts, { ...result, playback: playResult }, {

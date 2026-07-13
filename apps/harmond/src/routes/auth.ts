@@ -153,6 +153,9 @@ export function registerAuthRoutes(app: Application, ctx: DaemonContext): void {
         return;
       }
       await ctx.appleAuth.setUserToken(token);
+      // Persisting alone is not enough — the running client must pick the
+      // token up or library endpoints stay dead until restart.
+      ctx.applyAppleUserToken(token);
       res.json({ success: true });
     } catch (error) {
       ctx.handleRouteError(res, error);

@@ -30,8 +30,18 @@ export function createLogger(config: LoggerConfig = {}): Logger {
     formatters: {
       level: (label) => ({ level: label }),
     },
+    // Safety net: nothing logs credentials today, but one careless
+    // logger.info({ tokens }) later must not leak them to stdout.
+    redact: {
+      paths: [
+        'token', '*.token', '*.accessToken', '*.refreshToken', '*.secret',
+        '*.userToken', '*.developerToken', '*.sp_dc', '*.sp_key',
+        'req.headers.authorization',
+      ],
+      censor: '[redacted]',
+    },
     timestamp: pino.stdTimeFunctions.isoTime,
-    ...(config.prettyPrint || isDev ? {
+    ...(config.prettyPrint ?? isDev ? {
       transport: {
         target: 'pino-pretty',
         options: {

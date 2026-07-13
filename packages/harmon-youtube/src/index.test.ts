@@ -234,22 +234,41 @@ describe('harmon-youtube', () => {
     ]);
   });
 
-  it('uses related-video search for YouTube recommendations', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        items: [
-          {
-            id: { videoId: 'video-2' },
-            snippet: {
-              title: 'Related Song',
-              channelTitle: 'Related Artist - Topic',
-              thumbnails: { medium: { url: 'https://img.test/related-song.jpg' } },
+  it('builds heuristic recommendations from the seed video artist, excluding the seed', async () => {
+    const fetchMock = vi.fn()
+      // Seed video metadata lookup (videos endpoint)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              id: 'video-1',
+              snippet: {
+                title: 'Seed Song',
+                channelTitle: 'Seed Artist - Topic',
+              },
+              contentDetails: { duration: 'PT3M' },
             },
-          },
-        ],
-      }),
-    }));
+          ],
+        }),
+      })
+      // Artist-name song search
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              id: { videoId: 'video-1' },
+              snippet: { title: 'Seed Song', channelTitle: 'Seed Artist - Topic' },
+            },
+            {
+              id: { videoId: 'video-2' },
+              snippet: { title: 'Related Song', channelTitle: 'Seed Artist - Topic' },
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
 
     const provider = createYouTubeMusicProvider(createYouTubeMusicClient({ apiKey: 'yt-key' }));
     const recommendations = await provider.getRecommendations({ seedTrackIds: ['video-1'], limit: 1 });
@@ -260,79 +279,112 @@ describe('harmon-youtube', () => {
         provider: 'youtube',
       }),
     ]);
+
+    const videosUrl = new URL(fetchMock.mock.calls[0][0]);
+    expect(videosUrl.pathname).toContain('/videos');
+    const searchUrl = new URL(fetchMock.mock.calls[1][0]);
+    expect(searchUrl.pathname).toContain('/search');
+    expect(searchUrl.searchParams.get('q')).toBe('Seed Artist');
+    expect(searchUrl.searchParams.has('relatedToVideoId')).toBe(false);
   });
 
-  it('uses liked-library order as the best available YouTube affinity signal', async () => {
-    vi.stubGlobal('fetch', vi.fn()
+  it('clamps search maxResults to the Data API limit of 50', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createYouTubeMusicClient({ apiKey: 'yt-key' });
+    await client.search('focus', ['songs'], { limit: 200 });
+
+    const url = new URL(fetchMock.mock.calls[0][0]);
+    expect(url.searchParams.get('maxResults')).toBe('50');
+  });
+
+  it('fails fast when rate limited longer than the wait cap', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: (name: string) => (name.toLowerCase() === 'retry-after' ? '60' : null) },
+      text: async () => 'rate limited',
+    }));
+
+    const client = createYouTubeMusicClient({ apiKey: 'yt-key' });
+    await expect(client.search('focus')).rejects.toThrow('YouTube API rate limited; retry after 60s');
+  });
+
+  it('maps quota-exhausted 403 responses to a clear error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({ error: { errors: [{ reason: 'quotaExceeded' }] } }),
+    }));
+
+    const client = createYouTubeMusicClient({ apiKey: 'yt-key' });
+    await expect(client.search('focus')).rejects.toThrow('YouTube API daily quota exceeded');
+  });
+
+  it('re-fetches the token and retries once on 401 when using a token callback', async () => {
+    const getAccessToken = vi.fn()
+      .mockResolvedValueOnce('stale-token')
+      .mockResolvedValueOnce('fresh-token');
+    const fetchMock = vi.fn()
       .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          items: [
-            {
-              contentDetails: {
-                relatedPlaylists: {
-                  likes: 'LL123',
-                },
-              },
-            },
-          ],
-        }),
+        ok: false,
+        status: 401,
+        headers: { get: () => null },
+        text: async () => 'unauthorized',
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          items: [
-            {
-              snippet: {
-                title: 'Affinity Song',
-                channelTitle: 'Affinity Artist - Topic',
-                resourceId: { videoId: 'affinity-video-1' },
-              },
-              contentDetails: { videoId: 'affinity-video-1' },
-            },
-          ],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          items: [
-            {
-              contentDetails: {
-                relatedPlaylists: {
-                  likes: 'LL123',
-                },
-              },
-            },
-          ],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          items: [
-            {
-              snippet: {
-                title: 'Affinity Song',
-                channelTitle: 'Affinity Artist - Topic',
-                resourceId: { videoId: 'affinity-video-1' },
-              },
-              contentDetails: { videoId: 'affinity-video-1' },
-            },
-          ],
-        }),
-      }));
+        status: 200,
+        json: async () => ({ items: [] }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createYouTubeMusicClient({ getAccessToken });
+    const result = await client.search('focus', ['songs']);
+
+    expect(result.songs).toEqual([]);
+    expect(getAccessToken).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      headers: { Authorization: 'Bearer stale-token' },
+    });
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      headers: { Authorization: 'Bearer fresh-token' },
+    });
+  });
+
+  it('caches the callback token across requests until a 401', async () => {
+    const getAccessToken = vi.fn().mockResolvedValue('cached-token');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ items: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createYouTubeMusicClient({ getAccessToken });
+    await client.search('one', ['songs']);
+    await client.search('two', ['songs']);
+
+    expect(getAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects unsupported personal-history surfaces consistently', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
 
     const provider = createYouTubeMusicProvider(createYouTubeMusicClient({ accessToken: 'yt-token' }));
 
     await expect(provider.getTopTracks({ limit: 1 })).rejects.toThrow(
       'YouTube Music top tracks are not available from the official provider contract.',
     );
-    await expect(provider.getRecentlyPlayed({ limit: 1 })).resolves.toEqual([
-      expect.objectContaining({
-        id: 'affinity-video-1',
-        provider: 'youtube',
-      }),
-    ]);
+    await expect(provider.getRecentlyPlayed({ limit: 1 })).rejects.toThrow(
+      'not supported by the YouTube Data API',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
