@@ -272,3 +272,63 @@ export function classifyCliError(error, argv = process.argv) {
 
   return { exitCode: EXIT_GENERIC, message, json };
 }
+
+// ============================================================================
+// Onboarding validators (pure — used by `harmon init`)
+// ============================================================================
+
+/**
+ * Validate a Spotify client ID: 32 lowercase hex characters.
+ * @returns {{ ok: boolean, message?: string }}
+ */
+export function validateSpotifyClientId(value) {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return { ok: false, message: 'Client ID is empty.' };
+  if (!/^[0-9a-f]{32}$/.test(trimmed)) {
+    return {
+      ok: false,
+      message: `Spotify client IDs are 32 hex characters — got ${trimmed.length}. Copy it from the app page on developer.spotify.com/dashboard.`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Validate a Google OAuth client ID: ends with .apps.googleusercontent.com.
+ * @returns {{ ok: boolean, message?: string }}
+ */
+export function validateGoogleClientId(value) {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return { ok: false, message: 'Client ID is empty.' };
+  if (!trimmed.endsWith('.apps.googleusercontent.com')) {
+    return {
+      ok: false,
+      message: 'Google client IDs end with .apps.googleusercontent.com — copy the full value from the Credentials page.',
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Validate a Google OAuth client secret: GOCSPX- prefix, 35 chars total.
+ * A near-miss (truncated paste) is the most common failure, so length is
+ * checked explicitly.
+ * @returns {{ ok: boolean, message?: string }}
+ */
+export function validateGoogleClientSecret(value) {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return { ok: false, message: 'Client secret is empty.' };
+  if (!trimmed.startsWith('GOCSPX-')) {
+    return {
+      ok: false,
+      message: 'Google client secrets start with GOCSPX- — copy the full value (Google shows it only once; use "Add secret" to mint a new one if it is hidden).',
+    };
+  }
+  if (trimmed.length !== 35) {
+    return {
+      ok: false,
+      message: `Expected 35 characters, got ${trimmed.length} — the paste is likely truncated. Copy it again in full.`,
+    };
+  }
+  return { ok: true };
+}

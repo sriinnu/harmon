@@ -12,6 +12,10 @@ try {
 }
 
 import { Command, InvalidArgumentError } from 'commander';
+import { loadKeychainSecrets } from './keychain-env.js';
+
+// The API token may live in the macOS Keychain instead of env/.env.
+loadKeychainSecrets(['HARMON_API_TOKEN']);
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import fs from 'node:fs/promises';
@@ -710,144 +714,16 @@ program
 
 program
   .command('init')
-  .description('Interactive setup wizard — configure providers and generate .env')
-  .option('--output <path>', 'output path for .env file', '.env.harmon')
+  .description('Interactive setup wizard — validated provider onboarding, Keychain-aware')
+  .option('--output <path>', 'output path for the env file', '.env')
   .action(async (...args) => {
     const command = args[args.length - 1];
-    const outputPath = command.opts().output;
-
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
-
-    console.log('');
-    console.log('  Welcome to Harmon — Policy-driven music session manager');
-    console.log('  This wizard will help you configure your music providers.');
-    console.log('');
-
-    const env = {};
-
-    // Security (always required for production)
-    console.log('── Security ──────────────────────────────────────────');
-    const genSecret = await ask('  Generate encryption secret? (Y/n) ');
-    if (genSecret.toLowerCase() !== 'n') {
-      const { randomBytes } = await import('node:crypto');
-      env.HARMON_ENCRYPTION_SECRET = randomBytes(32).toString('base64');
-      console.log('  ✓ Encryption secret generated');
-    }
-
-    const genToken = await ask('  Generate API token? (Y/n) ');
-    if (genToken.toLowerCase() !== 'n') {
-      const { randomBytes } = await import('node:crypto');
-      env.HARMON_API_TOKEN = randomBytes(32).toString('base64');
-      console.log('  ✓ API token generated');
-    }
-
-    // Spotify
-    console.log('');
-    console.log('── Spotify ───────────────────────────────────────────');
-    console.log('  Create an app at https://developer.spotify.com/dashboard');
-    const spotifyId = await ask('  Client ID (or skip): ');
-    if (spotifyId.trim()) {
-      env.SPOTIFY_CLIENT_ID = spotifyId.trim();
-      const spotifySecret = await ask('  Client Secret: ');
-      if (spotifySecret.trim()) env.SPOTIFY_CLIENT_SECRET = spotifySecret.trim();
-      env.SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:17373/v1/auth/spotify/callback';
-      console.log('  ✓ Spotify configured');
-    } else {
-      console.log('  ⊘ Skipped');
-    }
-
-    // YouTube
-    console.log('');
-    console.log('── YouTube Music ─────────────────────────────────────');
-    console.log('  Option 1: API key (search only) — https://console.cloud.google.com');
-    console.log('  Option 2: OAuth (full access) — create OAuth credentials');
-    const ytMode = await ask('  Setup mode? (api-key / oauth / skip): ');
-    if (ytMode.trim() === 'api-key') {
-      const ytKey = await ask('  API Key: ');
-      if (ytKey.trim()) {
-        env.YT_API_KEY = ytKey.trim();
-        console.log('  ✓ YouTube configured (API key mode)');
-      }
-    } else if (ytMode.trim() === 'oauth') {
-      const ytClientId = await ask('  Client ID: ');
-      if (ytClientId.trim()) {
-        env.YOUTUBE_MUSIC_CLIENT_ID = ytClientId.trim();
-        const ytSecret = await ask('  Client Secret (optional): ');
-        if (ytSecret.trim()) env.YOUTUBE_MUSIC_CLIENT_SECRET = ytSecret.trim();
-        env.YOUTUBE_MUSIC_REDIRECT_URI = 'http://127.0.0.1:17373/v1/auth/youtube/callback';
-        console.log('  ✓ YouTube configured (OAuth mode)');
-      }
-    } else {
-      console.log('  ⊘ Skipped');
-    }
-
-    // Apple Music
-    console.log('');
-    console.log('── Apple Music ───────────────────────────────────────');
-    console.log('  Option 1: Static token — paste a developer JWT');
-    console.log('  Option 2: Auto-JWT — provide signing key material');
-    const appleMode = await ask('  Setup mode? (token / auto-jwt / skip): ');
-    if (appleMode.trim() === 'token') {
-      const appleDev = await ask('  Developer Token: ');
-      if (appleDev.trim()) {
-        env.APPLE_MUSIC_DEVELOPER_TOKEN = appleDev.trim();
-        const appleUser = await ask('  User Token (optional, for library): ');
-        if (appleUser.trim()) env.APPLE_MUSIC_USER_TOKEN = appleUser.trim();
-        console.log('  ✓ Apple Music configured (static token)');
-      }
-    } else if (appleMode.trim() === 'auto-jwt') {
-      const teamId = await ask('  Team ID: ');
-      const keyId = await ask('  Key ID: ');
-      const keyPath = await ask('  Private key path (.p8 file): ');
-      if (teamId.trim() && keyId.trim() && keyPath.trim()) {
-        env.APPLE_MUSIC_TEAM_ID = teamId.trim();
-        env.APPLE_MUSIC_KEY_ID = keyId.trim();
-        try {
-          const { readFileSync: readSync } = await import('node:fs');
-          env.APPLE_MUSIC_PRIVATE_KEY = readSync(keyPath.trim(), 'utf8').replace(/\n/g, '\\n');
-          console.log('  ✓ Apple Music configured (auto-JWT)');
-        } catch {
-          console.log('  ✗ Could not read key file: ' + keyPath.trim());
-        }
-      }
-    } else {
-      console.log('  ⊘ Skipped');
-    }
-
-    // Song recognition
-    console.log('');
-    console.log('── Song Recognition (optional) ───────────────────────');
-    const auddToken = await ask('  AudD API token (or skip): ');
-    if (auddToken.trim()) {
-      env.AUDD_API_TOKEN = auddToken.trim();
-      console.log('  ✓ Song recognition configured');
-    } else {
-      console.log('  ⊘ Skipped (use Chromaprint for free recognition)');
-    }
-
-    // Write .env file
-    console.log('');
-    const lines = Object.entries(env).map(([k, v]) => `${k}=${v}`);
-    const content = '# Generated by harmon init\n' + lines.join('\n') + '\n';
-    await fs.writeFile(outputPath, content, { mode: 0o600 });
-    console.log(`  ✓ Config written to ${outputPath} (permissions: 600)`);
-
-    // Next steps
-    console.log('');
-    console.log('── Next Steps ────────────────────────────────────────');
-    console.log(`  1. Source the config:  export $(cat ${outputPath} | xargs)`);
-    console.log('  2. Start the daemon:  pnpm start:daemon');
-    console.log('  3. Check status:      harmon status');
-    if (env.SPOTIFY_CLIENT_ID) {
-      console.log('  4. Login to Spotify:  harmon auth import --browser chrome');
-    }
-    if (env.YOUTUBE_MUSIC_CLIENT_ID) {
-      console.log('  5. Login to YouTube:  harmon auth youtube login');
-    }
-    console.log('');
-
-    rl.close();
+    const { runInit } = await import('./init.js');
+    await runInit({
+      createCLI,
+      getDefaultEndpoint,
+      outputPath: command.opts().output,
+    });
   });
 
 program
@@ -980,6 +856,47 @@ auth
     });
   });
 
+function openInBrowser(url) {
+  if (!url) return;
+  const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  try {
+    spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref();
+  } catch {
+    // Printing the URL is the fallback either way.
+  }
+}
+
+const authSpotify = auth.command('spotify').description('Spotify authentication');
+
+authSpotify
+  .command('login')
+  .description('Start Spotify OAuth login (opens browser)')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.authLogin();
+    openInBrowser(result.url);
+    outputResult(opts, result, {
+      plain: (data) => data.url || '',
+      human: (data) => data.url
+        ? `Opening browser to authenticate…\n${data.url}`
+        : 'Spotify OAuth login initiated.',
+    });
+  });
+
+authSpotify
+  .command('logout')
+  .description('Clear Spotify tokens')
+  .action(async (...args) => {
+    const command = args[args.length - 1];
+    const { cli, opts } = createContext(command);
+    const result = await cli.authLogout();
+    outputResult(opts, result, {
+      plain: () => 'ok',
+      human: () => 'Spotify auth cleared.',
+    });
+  });
+
 const authYoutube = auth.command('youtube').description('YouTube Music authentication');
 
 authYoutube
@@ -989,10 +906,11 @@ authYoutube
     const command = args[args.length - 1];
     const { cli, opts } = createContext(command);
     const result = await cli.youtubeAuthLogin();
+    openInBrowser(result.url);
     outputResult(opts, result, {
       plain: (data) => data.url || '',
       human: (data) => data.url
-        ? `Open this URL to authenticate:\n${data.url}`
+        ? `Opening browser to authenticate…\n${data.url}`
         : 'YouTube OAuth login initiated.',
     });
   });
