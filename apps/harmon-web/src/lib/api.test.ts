@@ -65,6 +65,43 @@ describe('HarmonClient.play', () => {
   });
 });
 
+describe('HarmonClient.smartPlay', () => {
+  it('sends only { query } when no provider is forced (daemon auto-routes)', async () => {
+    const mock = stubFetch(jsonResponse({ success: true }));
+    await new HarmonClient('http://127.0.0.1:17373').smartPlay('song');
+
+    expect(String(mock.mock.calls[0]?.[0])).toContain('/v1/smart/play');
+    const init = mock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({ query: 'song' });
+  });
+
+  it('sends the forced provider in the body so the daemon plays only there', async () => {
+    const mock = stubFetch(jsonResponse({ success: true }));
+    await new HarmonClient('http://127.0.0.1:17373').smartPlay('song', 'youtube');
+
+    const init = mock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({ query: 'song', provider: 'youtube' });
+  });
+});
+
+describe('HarmonClient logout endpoints', () => {
+  it('POSTs to the per-provider daemon logout routes', async () => {
+    const cases = [
+      ['spotifyLogout', '/v1/auth/spotify/logout'],
+      ['youtubeLogout', '/v1/auth/youtube/logout'],
+      ['appleLogout', '/v1/auth/apple/logout'],
+    ] as const;
+
+    for (const [method, path] of cases) {
+      const mock = stubFetch(jsonResponse({ success: true }));
+      await new HarmonClient('http://127.0.0.1:17373')[method]();
+
+      expect(String(mock.mock.calls[0]?.[0])).toContain(path);
+      expect((mock.mock.calls[0]?.[1] as RequestInit).method).toBe('POST');
+    }
+  });
+});
+
 describe('HarmonClient request hardening', () => {
   it('fails with a clear timeout message when the daemon never responds', async () => {
     vi.useFakeTimers();

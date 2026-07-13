@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { HarmonClient, pollForProviderConnected } from '../lib/api';
 
-const ONBOARDING_KEY = 'harmon-onboarding-complete';
+export const ONBOARDING_KEY = 'harmon-onboarding-complete';
 
 export function shouldShowOnboarding(): boolean {
   return localStorage.getItem(ONBOARDING_KEY) !== 'true';
@@ -9,6 +9,11 @@ export function shouldShowOnboarding(): boolean {
 
 export function resetOnboarding(): void {
   localStorage.removeItem(ONBOARDING_KEY);
+}
+
+/** Mark onboarding done without walking the wizard (e.g. when a working daemon connection already exists). */
+export function completeOnboarding(): void {
+  localStorage.setItem(ONBOARDING_KEY, 'true');
 }
 
 interface Props {
@@ -24,6 +29,27 @@ export function Onboarding({ onComplete }: Props) {
   const [token, setToken] = useState('');
   const [connected, setConnected] = useState<string[]>([]);
   const [status, setStatus] = useState('');
+
+  // Entering the provider step: re-check daemon status so providers that are
+  // already authenticated show as connected instead of prompting OAuth again.
+  useEffect(() => {
+    if (step !== 2) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await new HarmonClient(url, token || undefined).getStatus();
+        const live = s.providers
+          ? Object.entries(s.providers).filter(([, v]) => v.connected).map(([k]) => k)
+          : [];
+        if (!cancelled && live.length > 0) {
+          setConnected(prev => [...new Set([...prev, ...live])]);
+        }
+      } catch (e: unknown) {
+        if (!cancelled) setStatus(e instanceof Error ? `Could not check provider status: ${e.message}` : 'Could not check provider status');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [step, url, token]);
 
   const finish = () => {
     localStorage.setItem(ONBOARDING_KEY, 'true');
@@ -141,12 +167,12 @@ export function Onboarding({ onComplete }: Props) {
         <div style={card}>
           {dots}
           <h2 style={{ textAlign: 'center', marginBottom: '1em' }}>Authenticate Providers</h2>
-          <p style={{ marginBottom: '1em' }}>Connect at least one to start listening.</p>
+          <p style={{ marginBottom: '1em' }}>Connect at least one to start listening. Already-connected providers are ready — just continue.</p>
           {['spotify', 'youtube', 'apple'].map(p => (
             <div key={p} style={{ display: 'flex', alignItems: 'center', gap: '0.8em', padding: '0.6em', border: '1px solid var(--line)', borderRadius: 12, marginBottom: '0.5em', background: 'rgba(255,255,255,0.5)' }}>
               <span style={{ fontWeight: 600, flex: 1, textTransform: 'capitalize' }}>{p === 'youtube' ? 'YouTube Music' : p === 'apple' ? 'Apple Music' : 'Spotify'}</span>
               <span style={{ fontSize: '0.8em', color: connected.includes(p) ? '#2e7d32' : 'var(--muted)' }}>
-                {connected.includes(p) ? 'Connected' : 'Not connected'}
+                {connected.includes(p) ? 'Connected ✓' : 'Not connected'}
               </span>
               <button onClick={() => connectProvider(p)} style={{ fontSize: '0.8em', padding: '0.3em 0.6em' }}>
                 {connected.includes(p) ? 'Reconnect' : 'Connect'}

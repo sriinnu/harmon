@@ -3,6 +3,11 @@ import { HarmonClient, type DaemonStatus } from './api';
 
 type ProviderName = 'spotify' | 'apple' | 'youtube';
 
+export const DAEMON_URL_KEY = 'harmon-daemon-url';
+export const API_TOKEN_KEY = 'harmon-api-token';
+/** Connection-related localStorage keys owned by this app (the onboarding key lives in Onboarding.tsx). */
+export const HARMON_CONNECTION_KEYS = [DAEMON_URL_KEY, API_TOKEN_KEY] as const;
+
 interface ClientContextValue {
   client: HarmonClient;
   provider: ProviderName;
@@ -38,8 +43,8 @@ export function useDaemon() {
 }
 
 export function DaemonProvider({ children }: { children: React.ReactNode }) {
-  const [url, setUrl] = useState(localStorage.getItem('harmon-daemon-url') || 'http://127.0.0.1:17373');
-  const [token, setToken] = useState(localStorage.getItem('harmon-api-token') || '');
+  const [url, setUrl] = useState(localStorage.getItem(DAEMON_URL_KEY) || 'http://127.0.0.1:17373');
+  const [token, setToken] = useState(localStorage.getItem(API_TOKEN_KEY) || '');
   const [provider, setProvider] = useState<ProviderName>('spotify');
   const [status, setStatus] = useState<DaemonStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -62,8 +67,8 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
   }, [client]);
 
   const updateConnection = useCallback((newUrl: string, newToken?: string) => {
-    localStorage.setItem('harmon-daemon-url', newUrl);
-    localStorage.setItem('harmon-api-token', newToken || '');
+    localStorage.setItem(DAEMON_URL_KEY, newUrl);
+    localStorage.setItem(API_TOKEN_KEY, newToken || '');
     setUrl(newUrl);
     setToken(newToken || '');
   }, []);
