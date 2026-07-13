@@ -23,6 +23,13 @@ describe('classifyError', () => {
     expect(classified.code).toBe('UPSTREAM_SERVICE_ERROR');
   });
 
+  it('maps the zero-devices dead end to provider-unavailable', () => {
+    const classified = classifyError(new Error(
+      'Spotify has no available devices. Open Spotify on any device (desktop, phone, or web player) and try again.',
+    ));
+    expect(classified.code).toBe('PROVIDER_UNAVAILABLE');
+  });
+
   it('maps the retired Spotify cookie flow to provider-unavailable', () => {
     const classified = classifyError(new Error(
       'Spotify cookie-based auth is no longer supported by Spotify. Use OAuth (PKCE) login instead.',

@@ -19,7 +19,12 @@ const TEST_API_TOKEN = 'test-token-' + randomBytes(16).toString('hex');
 const INVALID_TOKEN = 'invalid-token';
 
 function createTestDaemon(
-  options: { apiToken?: string; corsOrigins?: string[]; enableSSE?: boolean } = {},
+  options: {
+    apiToken?: string;
+    corsOrigins?: string[];
+    enableSSE?: boolean;
+    onShutdownRequest?: () => void;
+  } = {},
 ) {
   const dbPath = join(tmpdir(), `harmon-test-${Date.now()}-${Math.random()}.db`);
 
@@ -30,6 +35,7 @@ function createTestDaemon(
     apiToken: options.apiToken,
     corsOrigins: options.corsOrigins,
     enableSSE: options.enableSSE,
+    onShutdownRequest: options.onShutdownRequest,
   });
 }
 
@@ -881,6 +887,31 @@ describe('Command Endpoint', () => {
 // ============================================================================
 // Error Handling Tests
 // ============================================================================
+
+describe('Daemon lifecycle endpoint', () => {
+  it('acks and requests shutdown via POST /v1/daemon/stop', async () => {
+    let shutdownRequested = false;
+    const daemon = createTestDaemon({
+      apiToken: TEST_API_TOKEN,
+      onShutdownRequest: () => { shutdownRequested = true; },
+    });
+    await daemon.start();
+    const app = (daemon as any).app;
+
+    const unauthorized = await request(app).post('/v1/daemon/stop');
+    expect(unauthorized.status).toBe(401);
+    expect(shutdownRequested).toBe(false);
+
+    const response = await request(app)
+      .post('/v1/daemon/stop')
+      .set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ success: true, stopping: true });
+    expect(shutdownRequested).toBe(true);
+
+    await daemon.stop();
+  });
+});
 
 describe('Error Handling', () => {
   let daemon: Harmond;

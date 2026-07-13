@@ -59,6 +59,7 @@ export function classifyError(error: unknown): ApiError {
     message.includes('session expired') ||
     message.includes('No refresh token available') ||
     message.includes('user token required') ||
+    message.includes('no available devices') ||
     message.includes('requires YOUTUBE_MUSIC_ACCESS_TOKEN')
   ) {
     return new ProviderUnavailableError(message);

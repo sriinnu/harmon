@@ -12,6 +12,11 @@ try {
   // no .env present
 }
 
+// Secrets still missing after env + .env fall back to the macOS Keychain
+// (service "harmon", account = variable name).
+const { loadKeychainSecrets } = await import('./keychain-env.js');
+loadKeychainSecrets();
+
 const { createDaemon } = await import('../dist/src/index.js');
 
 let daemon;

@@ -21,6 +21,11 @@ const DEFAULT_SCOPES = [
   'user-read-recently-played',
   'user-library-read',
   'user-top-read',
+  // Web Playback SDK (browser-as-device): streaming requires the two
+  // user-read-* identity scopes alongside it.
+  'streaming',
+  'user-read-email',
+  'user-read-private',
 ];
 
 // ============================================================================
@@ -715,7 +720,30 @@ class SpotifyClientImpl implements SpotifyClient {
         : typeof contextUri === 'string'
           ? { context_uri: contextUri }
           : undefined;
-    await this.request('PUT', '/me/player/play', body);
+    try {
+      await this.request('PUT', '/me/player/play', body);
+    } catch (error) {
+      // NO_ACTIVE_DEVICE: Connect needs a target. If any device exists
+      // (Spotify open anywhere, even idle), activate the first one and
+      // retry once — turning the most common playback dead end into a
+      // self-heal. With zero devices, fail with an actionable message.
+      if (!(error instanceof Error) || !error.message.includes('NO_ACTIVE_DEVICE')) {
+        throw error;
+      }
+      const devices = await this.getDevices();
+      // Prefer harmon's own browser player when it's registered, then any
+      // already-active device, then whatever exists.
+      const target = devices.find((device) => device.name === 'Harmon Player')
+        ?? devices.find((device) => device.isActive)
+        ?? devices[0];
+      if (!target) {
+        throw new Error(
+          'Spotify has no available devices. Open Spotify on any device (desktop, phone, or web player) and try again.',
+        );
+      }
+      await this.transferTo(target.id);
+      await this.request('PUT', '/me/player/play', body);
+    }
   }
 
   async pause(): Promise<void> {
@@ -1267,7 +1295,7 @@ interface SpotifyTrack {
   uri: string;
   type: string;
   artists: Array<{ id?: string; name: string }>;
-  album: { name: string };
+  album: { name: string; images?: Array<{ url: string; width?: number; height?: number }> };
 }
 
 interface SpotifyAlbumRaw {
@@ -1432,6 +1460,7 @@ function mapTrack(track: SpotifyTrack): TrackInfo {
     album: track.album?.name || '',
     durationMs: track.duration_ms,
     uri: track.uri,
+    imageUrl: track.album?.images?.[0]?.url,
     provider: 'spotify',
   };
 }

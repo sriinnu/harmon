@@ -73,6 +73,14 @@ export function registerSessionRoutes(app: Application, ctx: DaemonContext): voi
     }
   });
 
+  // ── Daemon lifecycle ──────────────────────────────────────────────────
+  app.post('/v1/daemon/stop', (_req: Request, res: Response) => {
+    // Respond first so the caller (menubar, CLI) gets an ack, then shut
+    // down gracefully. Auth-gated like every /v1 route.
+    res.json({ success: true, stopping: true });
+    ctx.requestShutdown();
+  });
+
   // ── Journal — with bounds ─────────────────────────────────────────────
   app.get('/v1/journal', async (req: Request, res: Response) => {
     try {

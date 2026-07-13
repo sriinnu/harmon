@@ -36,6 +36,8 @@ export interface AppleMusicSong {
   albumName?: string;
   durationMs?: number;
   url?: string;
+  /** Concrete-size artwork URL (Apple's {w}x{h} template already resolved). */
+  artworkUrl?: string;
 }
 
 export interface AppleMusicAlbum {
@@ -336,6 +338,7 @@ interface AppleSongAttributes {
   albumName?: string;
   durationInMillis?: number;
   url?: string;
+  artwork?: { url?: string; width?: number; height?: number };
 }
 
 interface AppleAlbumAttributes {
@@ -394,7 +397,13 @@ function mapSong(resource: AppleCatalogResource<AppleSongAttributes>): AppleMusi
     albumName: resource.attributes.albumName,
     durationMs: resource.attributes.durationInMillis,
     url: resource.attributes.url,
+    artworkUrl: resolveArtworkUrl(resource.attributes.artwork),
   };
+}
+
+/** Apple artwork URLs are templates: substitute a concrete size. */
+function resolveArtworkUrl(artwork?: { url?: string }): string | undefined {
+  return artwork?.url?.replace('{w}', '600').replace('{h}', '600');
 }
 
 /**
@@ -488,6 +497,7 @@ function mapSongToTrackInfo(song: AppleMusicSong): TrackInfo {
     album: song.albumName || '',
     durationMs: song.durationMs || 0,
     uri: song.url || `apple:song:${song.id}`,
+    imageUrl: song.artworkUrl,
     provider: 'apple',
   };
 }
