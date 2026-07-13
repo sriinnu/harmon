@@ -544,7 +544,7 @@ Apple remote companion notes:
 #### Events & Analytics
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/v1/events` | SSE event stream (real-time updates, when enabled) |
+| GET | `/v1/events` | SSE event stream (real-time updates, when enabled); accepts `?token=` auth for EventSource clients |
 | GET | `/v1/journal` | List journal entries |
 | POST | `/v1/journal` | Create journal entry |
 | GET | `/v1/stats` | Session statistics |
@@ -630,14 +630,16 @@ harmon/
 Harmon includes MCP (Model Context Protocol) servers for both local stdio tooling and remote OpenAI/ChatGPT app integration.
 
 ```bash
-# Start the local stdio server for journal-analysis tools
-pnpm --filter @sriinnu/harmon-flow start
+# Start the local stdio server (Claude Desktop / Claude Code)
+pnpm start:mcp        # = pnpm --filter @sriinnu/harmon-flow start
 
 # Start the remote streamable HTTP server for ChatGPT/OpenAI app use
-pnpm --filter @sriinnu/harmon-flow start:http
+pnpm start:mcp:http   # = pnpm --filter @sriinnu/harmon-flow start:http
 ```
 
 ### Stdio MCP Tools
+
+The stdio server exposes the **full music tool surface** (everything in the Remote App MCP Tools table below, always including write tools — the local MCP host is trusted) plus these journal-analysis tools:
 
 | Tool | Description |
 |------|-------------|
@@ -674,10 +676,15 @@ These tools are exposed by the streamable HTTP server and are the app-facing sur
 | `start_session` | Start a session using the shared `SessionPolicy` contract |
 | `nudge_session` | Nudge the active session calmer or sharper |
 | `stop_session` | Stop the active session |
-| `auth_spotify` | Initiate Spotify OAuth login flow |
-| `auth_apple` | Connect Apple Music with a developer token |
-| `auth_youtube` | Connect YouTube Music with an API key or OAuth token |
 | `auth_status` | Check authentication status for all providers |
+| `auth_spotify_login` | Start Spotify OAuth login (returns a URL for the user) |
+| `auth_spotify_logout` | Clear Spotify tokens and cookies |
+| `auth_youtube_login` | Start YouTube Music OAuth login (returns a URL for the user) |
+| `auth_youtube_refresh` | Refresh the YouTube Music access token |
+| `auth_youtube_logout` | Clear YouTube Music tokens |
+| `auth_apple_set_token` | Set the Apple Music user token (from MusicKit JS) |
+| `auth_apple_refresh` | Refresh the Apple Music developer token |
+| `auth_apple_logout` | Clear Apple Music tokens |
 
 ### OpenAI App Setup
 
@@ -705,7 +712,8 @@ pnpm --filter @sriinnu/harmon-flow start:http
 ```
 
 By default the remote MCP server listens on `http://127.0.0.1:17400/mcp`.
-Without MCP auth, the remote server stays read-only by default. Write tools require OAuth or a bearer token with `harmon.write`, unless you explicitly opt into local-only unauthenticated writes with `HARMON_MCP_ALLOW_UNAUTHENTICATED_WRITES=1`.
+Without MCP auth, the remote server stays read-only: write tools are hidden (a startup warning lists them) unless you explicitly opt into local-only unauthenticated writes with `HARMON_MCP_ALLOW_UNAUTHENTICATED_WRITES=1`.
+A static `HARMON_MCP_BEARER_TOKEN` gets **read+write scopes by default** — possession of the token already gates access. Set `HARMON_MCP_BEARER_TOKEN_SCOPES="harmon.read"` to restrict it to read-only.
 If you enable OAuth JWT mode, `HARMON_MCP_PUBLIC_URL` is required so the protected-resource metadata advertises the real public MCP URL instead of a local bind address.
 Set `HARMON_MCP_HOST`, `HARMON_MCP_PORT`, `HARMON_MCP_PATH`, or `HARMON_MCP_TRANSPORT` to override the runtime contract.
 Set `HARMON_MCP_READ_SCOPES` and `HARMON_MCP_WRITE_SCOPES` if you want different tool-scope boundaries than the defaults (`harmon.read` and `harmon.write`).

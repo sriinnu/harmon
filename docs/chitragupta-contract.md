@@ -1,5 +1,10 @@
 # Chitragupta Integration Contract
 
+> **Scope note**: this document describes the tools of **Chitragupta**, an EXTERNAL
+> memory/orchestration MCP system — NOT harmon's own MCP tools. None of the tools
+> below are served by this repository. For harmon's music tool surface (play, pause,
+> search, sessions, provider auth), see [`packages/harmon-flow/SKILL.md`](../packages/harmon-flow/SKILL.md).
+
 > How Claude Code (or any MCP-capable AI assistant) communicates with Chitragupta,
 > what surfaces are exposed, and what data flows in each direction.
 

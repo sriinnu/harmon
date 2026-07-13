@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-**Production deployments now require encryption:**
+**Production deployments require encryption:**
 
 ```bash
 # Generate and set encryption secret
@@ -13,13 +13,15 @@ export NODE_ENV=production
 harmond
 ```
 
-**Without this, the daemon will NOT start in production.**
+**Without this, the daemon throws `HARMON_ENCRYPTION_SECRET is required in production.` during startup and never accepts traffic.**
 
 ---
 
 ## Why This Matters
 
-Harmon stores sensitive Spotify OAuth tokens and cookies. In production, these **must** be encrypted. The daemon will refuse to start without encryption configured, preventing accidental security vulnerabilities.
+Harmon stores OAuth tokens for Spotify, YouTube Music, and Apple Music. In production these **must** be encrypted at rest. The startup validator in `apps/harmond/src/config.ts` refuses to construct the daemon without the secret, preventing accidental plaintext deployments.
+
+The same secret also encrypts the provider auth CLI files under `~/.chitragupta/harmon/provider-packs/` (written by `npm run auth` in each provider package). Legacy plaintext files keep loading and are re-encrypted on the next write.
 
 ---
 
@@ -65,40 +67,22 @@ harmond
 
 ---
 
-## Error Messages
-
-### ❌ If You See This:
-
-```
-❌ FATAL ERROR: Encryption is required in production
-
-Harmon stores sensitive tokens (Spotify OAuth tokens, cookies) and requires
-encryption to be enabled when running in production mode.
-
-Please set HARMON_ENCRYPTION_SECRET environment variable:
-  export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-```
-
-### ✅ Fix It Like This:
-
-```bash
-# Generate and set secret
-export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-
-# Restart daemon
-harmond
-```
-
----
-
 ## Environment-Specific Behavior
 
 | Environment | Encryption Secret | Behavior |
 |-------------|------------------|----------|
-| **Production** | Not set | ❌ Fails to start (exit code 1) |
-| **Production** | Set | ✅ Starts with encryption |
-| **Development** | Not set | ⚠️ Starts with warning |
-| **Development** | Set | ✅ Starts with encryption |
+| **Production** | Not set | Startup throws `HARMON_ENCRYPTION_SECRET is required in production.` |
+| **Production** | Set | Starts with encryption |
+| **Development** | Not set | Starts; logs `Credential encryption disabled — development only` plus a console WARNING block |
+| **Development** | Set | Starts with encryption |
+
+The development console warning looks like:
+
+```
+[harmond] WARNING: HARMON_ENCRYPTION_SECRET is not set.
+[harmond] OAuth tokens will be stored UNENCRYPTED in the SQLite database.
+[harmond] Set HARMON_ENCRYPTION_SECRET (32+ random characters) to encrypt credentials at rest.
+```
 
 ---
 
@@ -107,23 +91,23 @@ harmond
 ### View Daemon Logs
 
 ```bash
-# Look for this message:
-"Token encryption enabled"
+# Enabled:
+"Credential encryption enabled"
 
-# Or this warning (only acceptable in dev):
-"Token encryption disabled (HARMON_ENCRYPTION_SECRET not set)"
+# Disabled (only acceptable in dev):
+"Credential encryption disabled — development only"
 ```
 
 ### Test Production Mode
 
 ```bash
 # Should fail without encryption:
-NODE_ENV=production harmond
-# Expected: Exit with error
+NODE_ENV=production HARMON_API_TOKEN=x harmond
+# Expected: startup error 'HARMON_ENCRYPTION_SECRET is required in production.'
 
 # Should succeed with encryption:
-NODE_ENV=production HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32) harmond
-# Expected: Starts normally
+NODE_ENV=production HARMON_API_TOKEN=x \
+  HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32) harmond
 ```
 
 ---
@@ -131,25 +115,22 @@ NODE_ENV=production HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32) harmond
 ## FAQ
 
 ### Q: Do I need this for development?
-**A:** No, but it's recommended. The daemon will work but show warnings.
+**A:** No, but it's recommended. The daemon works but logs the warning above.
 
 ### Q: What if I already have tokens stored?
-**A:** You'll need to re-authenticate with Spotify after enabling encryption. Old plaintext tokens won't be readable.
+**A:** Daemon-stored plaintext tokens need re-authentication after enabling encryption. CLI auth files under `~/.chitragupta` keep loading as plaintext and are re-encrypted automatically on the next write.
 
 ### Q: Can I use the same secret across environments?
 **A:** No! Use different secrets for dev, staging, and production.
 
 ### Q: How long should the secret be?
-**A:** Minimum 32 characters. The command `openssl rand -base64 32` generates 44 characters, which is perfect.
+**A:** Minimum 32 characters. `openssl rand -base64 32` generates 44, which is perfect. A shorter secret is treated as unset by the token stores (with a console error).
 
 ### Q: Where should I store the secret?
 **A:** In environment variables, never in code. Use secret management tools (AWS Secrets Manager, Vault, etc.) for production.
 
-### Q: What happens if I lose the secret?
-**A:** Encrypted tokens become unreadable. You'll need to re-authenticate with Spotify.
-
-### Q: Can I rotate the secret?
-**A:** Yes, but you'll need to re-authenticate after rotation.
+### Q: What happens if I lose or rotate the secret?
+**A:** Encrypted credentials become unreadable — the daemon logs a key-mismatch warning (the v2 ciphertext embeds a key fingerprint) and you must re-authenticate providers.
 
 ---
 
@@ -157,36 +138,33 @@ NODE_ENV=production HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32) harmond
 
 Encrypted values use the format:
 ```
-keyFingerprint:salt:iv:authTag:encrypted
+keyFingerprint:salt:iv:authTag:encrypted     (all hex-encoded)
 ```
 
-- **keyFingerprint**: First 4 bytes of SHA-256(derived key), hex-encoded. Used to detect key mismatches on decrypt.
+- **keyFingerprint**: first 8 hex chars of SHA-256(derived key); detects key mismatches on decrypt
 - **salt**: 32 random bytes for scrypt key derivation
 - **iv**: 12 random bytes for AES-256-GCM
 - **authTag**: 16-byte authentication tag
-- **encrypted**: The ciphertext
+- **encrypted**: the ciphertext
 
-Legacy v1 format (`salt:iv:authTag:encrypted`) is still supported for backward compatibility.
-
-If you change `HARMON_ENCRYPTION_SECRET`, existing credentials cannot be decrypted. The daemon will log a clear "key mismatch" warning and treat stored tokens as degraded.
+Legacy v1 format (`salt:iv:authTag:encrypted`) is still supported for decryption. On-disk CLI auth files wrap the ciphertext in `{ "encrypted": true, "data": "..." }`.
 
 ---
 
 ## Security Best Practices
 
-✅ **DO:**
+**DO:**
 - Generate a unique secret for each environment
 - Store secrets in environment variables
 - Use secret management tools in production
-- Rotate secrets periodically
+- Rotate secrets periodically (expect provider re-auth after rotation)
 - Keep secrets out of version control
 
-❌ **DON'T:**
+**DON'T:**
 - Hardcode secrets in your code
 - Commit secrets to Git
 - Share secrets between environments
-- Use weak or short secrets
-- Store secrets in plaintext files
+- Use weak or short (<32 char) secrets
 
 ---
 
@@ -196,100 +174,48 @@ If you change `HARMON_ENCRYPTION_SECRET`, existing credentials cannot be decrypt
 
 **Check:**
 1. Is `NODE_ENV=production`?
-2. Is `HARMON_ENCRYPTION_SECRET` set?
+2. Are `HARMON_ENCRYPTION_SECRET` **and** `HARMON_API_TOKEN` set? (production requires both)
 3. Is the secret at least 32 characters?
-
-**Solution:**
-```bash
-export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-```
 
 ### Issue: "Can't read existing tokens"
 
-**Cause:** Encryption was just enabled, but tokens were stored in plaintext.
+**Cause:** Encryption was just enabled, but daemon tokens were stored in plaintext — or the secret changed.
 
-**Solution:** Re-authenticate with Spotify:
+**Solution:** Re-authenticate the provider:
 ```bash
-# Get new login URL
-curl -H "Authorization: Bearer $HARMON_API_TOKEN" \
+curl -X POST -H "Authorization: Bearer $HARMON_API_TOKEN" \
   http://localhost:17373/v1/auth/spotify/login
-
-# Open the URL in browser and complete OAuth flow
+# Open the returned URL in a browser and complete OAuth
 ```
 
-### Issue: "Warning about encryption in development"
+### Issue: "auth file is encrypted at rest" error from a provider auth CLI
 
-**Not an error!** This is informational. To silence it:
-```bash
-export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-```
+**Cause:** The file under `~/.chitragupta/harmon/provider-packs/` was encrypted with a secret that is not currently set.
+
+**Solution:** Set `HARMON_ENCRYPTION_SECRET` to the secret it was encrypted with, or delete the file and re-run `npm run auth`.
 
 ---
 
 ## Production Deployment Checklist
 
-Before deploying:
-
 - [ ] Generated `HARMON_ENCRYPTION_SECRET` with `openssl rand -base64 32`
 - [ ] Added secret to environment configuration
-- [ ] Set `NODE_ENV=production`
-- [ ] Tested daemon starts successfully
-- [ ] Verified "Token encryption enabled" in logs
-- [ ] Completed Spotify OAuth flow
+- [ ] Set `NODE_ENV=production` and `HARMON_API_TOKEN`
+- [ ] Verified `Credential encryption enabled` in logs
+- [ ] Completed provider OAuth flows
 - [ ] Documented secret location for your team
-- [ ] Set up secret rotation schedule
-
----
-
-## Alternative Secret Generation Methods
-
-### OpenSSL (Recommended)
-```bash
-openssl rand -base64 32
-```
-
-### Node.js
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-```
-
-### Python
-```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-### Manual (Not Recommended)
-```bash
-# Use a password manager to generate a 32+ character password
-# Example: LastPass, 1Password, Bitwarden
-```
-
----
-
-## Getting Help
-
-If you're still having issues:
-
-1. Check logs: `LOG_LEVEL=debug harmond`
-2. Verify environment: `env | grep HARMON`
-3. Test encryption: See "Check If Encryption Is Enabled" above
-4. Open an issue: [GitHub Issues](https://github.com/sriinnu/harmon/issues)
 
 ---
 
 ## Summary
 
-**Before (Insecure):**
+**Before (insecure):**
 ```bash
-# Tokens stored in plaintext 😱
-harmond
+harmond          # tokens stored in plaintext, loud warning on console
 ```
 
-**After (Secure):**
+**After (secure):**
 ```bash
-# Tokens encrypted with AES-256-GCM 🔐
 export HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-harmond
+harmond          # tokens encrypted with AES-256-GCM
 ```
-
-**That's it!** Your Spotify tokens are now secure.
