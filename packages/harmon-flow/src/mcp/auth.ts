@@ -61,7 +61,9 @@ export function createAppAuthContext(options: AppAuthContextOptions): HarmonMcpA
   }
 
   if (auth.bearerToken) {
-    const bearerTokenScopes = auth.bearerTokenScopes ?? readScopes;
+    // Possession of the static token already gates access, so it gets read+write
+    // by default; set bearerTokenScopes explicitly to restrict it to read-only.
+    const bearerTokenScopes = auth.bearerTokenScopes ?? [...new Set([...readScopes, ...writeScopes])];
     return {
       canExposeWriteTools: writeScopes.some((scope) => bearerTokenScopes.includes(scope)),
       mode: 'static-bearer',

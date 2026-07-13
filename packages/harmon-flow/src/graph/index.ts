@@ -411,7 +411,10 @@ export class PatternDetector {
    * Simple hash function for policy objects
    */
   private hashPolicy(policy: Record<string, unknown>): string {
-    const str = JSON.stringify(policy, Object.keys(policy).sort());
+    // Key-sort recursively for a stable serialization. An array replacer in
+    // JSON.stringify would filter NESTED keys too, collapsing policies that
+    // differ only inside hard/soft constraints into one hash.
+    const str = stableStringify(policy);
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
@@ -588,4 +591,20 @@ export class SuggestionEngine {
       .sort((a, b) => b[1] - a[1])
       .map(([level, count]) => ({ level, count }));
   }
+}
+
+/**
+ * JSON.stringify with recursively sorted object keys, so structurally equal
+ * policies serialize identically regardless of key insertion order.
+ */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }

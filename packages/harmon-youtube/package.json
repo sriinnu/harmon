@@ -40,8 +40,9 @@
     "test:run": "vitest --root ../.. run packages/harmon-youtube/src/index.test.ts"
   },
   "dependencies": {
-    "@sriinnu/harmon-protocol": "workspace:*",
-    "@sriinnu/harmon-core": "workspace:*"
+    "@sriinnu/harmon-core": "workspace:*",
+    "@sriinnu/harmon-crypto": "workspace:*",
+    "@sriinnu/harmon-protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.0.8",

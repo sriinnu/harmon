@@ -4,14 +4,13 @@
 
 import { spawn } from 'node:child_process';
 import { createPrivateKey, createSign, randomBytes } from 'node:crypto';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { createAppleMusicClient } from './index.js';
-
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+import { readJson, writeJson, type JsonValue } from './token-store.js';
 
 interface ApplePackConfig {
   appName: string;
@@ -57,27 +56,6 @@ function resolveAuthPath(fileName: string): string {
     ? overrideRoot
     : path.join(os.homedir(), '.chitragupta', 'harmon', 'provider-packs');
   return path.join(stateRoot, 'harmon-apple', fileName);
-}
-
-async function readJson<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await readFile(filePath, 'utf8')) as T;
-  } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function writeJson(filePath: string, value: JsonValue | null): Promise<void> {
-  await mkdir(path.dirname(filePath), { mode: 0o700, recursive: true });
-  if (value == null) {
-    await rm(filePath, { force: true });
-    return;
-  }
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await chmod(filePath, 0o600);
 }
 
 async function openUrl(url: string): Promise<void> {
@@ -171,6 +149,26 @@ async function validateApple(state: AppleAuthState): Promise<void> {
   }
 }
 
+/**
+ * I escape text interpolated into HTML markup on locally served pages.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * I serialize values for inline <script> blocks, escaping '<' so a value
+ * containing '</script>' cannot break out of the script context.
+ */
+function jsonForScript(value: string): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
 function renderBootstrapPage(
   developerToken: string,
   appName: string,
@@ -178,26 +176,27 @@ function renderBootstrapPage(
   tokenPath: string,
   state: string,
 ): string {
+  const safeAppName = escapeHtml(appName);
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>${appName} Apple Music Auth</title>
+    <title>${safeAppName} Apple Music Auth</title>
     <script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"></script>
   </head>
   <body>
     <main>
-      <h1>${appName} Apple Music Auth</h1>
+      <h1>${safeAppName} Apple Music Auth</h1>
       <p>I use MusicKit JS to mint a user token for the local provider pack.</p>
       <button id="authorize">Authorize Apple Music</button>
       <pre id="status"></pre>
     </main>
     <script>
-      const developerToken = ${JSON.stringify(developerToken)};
-      const appName = ${JSON.stringify(appName)};
-      const appBuild = ${JSON.stringify(appBuild)};
-      const state = ${JSON.stringify(state)};
-      const tokenPath = ${JSON.stringify(tokenPath)};
+      const developerToken = ${jsonForScript(developerToken)};
+      const appName = ${jsonForScript(appName)};
+      const appBuild = ${jsonForScript(appBuild)};
+      const state = ${jsonForScript(state)};
+      const tokenPath = ${jsonForScript(tokenPath)};
       const status = document.getElementById('status');
       document.getElementById('authorize').addEventListener('click', async () => {
         try {
@@ -367,10 +366,6 @@ async function refresh(): Promise<void> {
 async function status(): Promise<void> {
   const state = await readJson<AppleAuthState>(authPath);
   await printStatus(state, 'status');
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error !== null && typeof error === 'object' && 'code' in error;
 }
 
 const action = process.argv[2] || 'bootstrap';

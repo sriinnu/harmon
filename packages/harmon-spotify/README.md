@@ -27,6 +27,10 @@ I support two bootstrap paths:
 - PKCE OAuth with `SPOTIFY_CLIENT_ID` and an optional `SPOTIFY_REDIRECT_URI`
 - Cookie import with `SPOTIFY_COOKIES_PATH`, `SPOTIFY_COOKIE_JSON`, or direct `SPOTIFY_SP_DC` / `SPOTIFY_SP_KEY`
 
+> **Deprecated:** cookie-based auth no longer works — Spotify's `open.spotify.com/get_access_token` endpoint now requires a TOTP handshake, so cookie token minting fails with 401. Cookie mode remains only as an experimental/unsupported path; use PKCE OAuth login instead.
+
+Set `HARMON_ENCRYPTION_SECRET` (32+ characters) to encrypt the stored token files at rest; without it, tokens are written as plaintext JSON and the auth CLI prints a warning.
+
 ## Quick Start
 
 ```typescript

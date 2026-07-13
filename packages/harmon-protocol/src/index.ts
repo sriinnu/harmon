@@ -37,8 +37,8 @@ export const HardConstraints = z.object({
   explicit: z.enum(['allow', 'avoid', 'require']).optional(),
   tempo: z
     .object({
-      min: z.number().optional(),
-      max: z.number().optional(),
+      min: z.number().min(0).max(400).optional(),
+      max: z.number().min(0).max(400).optional(),
     })
     .refine(
       (data) => data.min === undefined || data.max === undefined || data.min <= data.max,
@@ -83,6 +83,12 @@ export type EnergyArc = z.infer<typeof EnergyArc>;
 export const SoftPreferences = z.object({
   weights: SoftWeights.optional(),
   arc: EnergyArc.optional(),
+  /**
+   * Energy level (0-1) the ranking aims tracks toward. Defaults to 0.5.
+   * Nudges shift this target; weights.energy only controls how strongly
+   * proximity to the target counts.
+   */
+  targetEnergy: z.number().min(0).max(1).optional(),
 });
 export type SoftPreferences = z.infer<typeof SoftPreferences>;
 

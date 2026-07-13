@@ -62,12 +62,15 @@ export async function fetchCandidates(
     candidates.push(...withFeatures);
   }
 
-  // Search-seeded sources
+  // Search-seeded sources: split the budget across queries so multi-query
+  // policies don't skew the candidate pool toward search results.
   if (sources.searchQueries && sources.searchQueries.length > 0) {
-    for (const query of sources.searchQueries.slice(0, 5)) {
+    const queries = sources.searchQueries.slice(0, 5);
+    const perQuery = Math.max(1, Math.ceil(perSource / queries.length));
+    for (const query of queries) {
       const tracks = await fetchSourceTracks(
         `search ${query}`,
-        () => provider.search(query, perSource),
+        () => provider.search(query, perQuery),
         logger,
       );
       const withFeatures = await enrichWithFeatures(provider, tracks, logger);
@@ -144,7 +147,7 @@ function isExplicitlyUnsupportedSourceError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  return /not implemented|not available/i.test(error.message);
+  return /not implemented|not available|not supported/i.test(error.message);
 }
 
 /**

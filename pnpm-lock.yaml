@@ -38,6 +38,9 @@ importers:
 
   apps/harmon-cli:
     dependencies:
+      '@libsql/client':
+        specifier: ^0.17.0
+        version: 0.17.0
       commander:
         specifier: ^14.0.2
         version: 14.0.2
@@ -134,6 +137,9 @@ importers:
       '@sriinnu/harmon-core':
         specifier: workspace:*
         version: link:../harmon-core
+      '@sriinnu/harmon-crypto':
+        specifier: workspace:*
+        version: link:../harmon-crypto
       '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol
@@ -229,6 +235,9 @@ importers:
       '@sriinnu/harmon-core':
         specifier: workspace:*
         version: link:../harmon-core
+      '@sriinnu/harmon-crypto':
+        specifier: workspace:*
+        version: link:../harmon-crypto
       '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol
@@ -261,6 +270,9 @@ importers:
       '@sriinnu/harmon-core':
         specifier: workspace:*
         version: link:../harmon-core
+      '@sriinnu/harmon-crypto':
+        specifier: workspace:*
+        version: link:../harmon-crypto
       '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol

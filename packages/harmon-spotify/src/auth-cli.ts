@@ -3,7 +3,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,8 +15,7 @@ import {
   type SpotifyCookieRecord,
   type SpotifyTokens,
 } from './index.js';
-
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+import { readJson, writeJson, type JsonValue } from './token-store.js';
 
 interface SpotifyPackConfig {
   clientId: string;
@@ -42,33 +41,6 @@ function resolveAuthPath(fileName: string): string {
     ? overrideRoot
     : path.join(os.homedir(), '.chitragupta', 'harmon', 'provider-packs');
   return path.join(stateRoot, 'harmon-spotify', fileName);
-}
-
-/**
- * I load JSON state from disk when it exists.
- */
-async function readJson<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await readFile(filePath, 'utf8')) as T;
-  } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
-}
-
-/**
- * I persist JSON state and remove the file when the value is null.
- */
-async function writeJson(filePath: string, value: JsonValue | null): Promise<void> {
-  await mkdir(path.dirname(filePath), { mode: 0o700, recursive: true });
-  if (value == null) {
-    await rm(filePath, { force: true });
-    return;
-  }
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await chmod(filePath, 0o600);
 }
 
 /**
@@ -170,6 +142,18 @@ async function validateSpotify(auth: SpotifyAuth): Promise<void> {
 }
 
 /**
+ * I escape text interpolated into locally served HTML pages.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
  * I wait for the localhost PKCE callback and complete the token exchange.
  */
 async function waitForCallback(auth: SpotifyAuth, redirectUri: string): Promise<void> {
@@ -194,7 +178,7 @@ async function waitForCallback(auth: SpotifyAuth, redirectUri: string): Promise<
         resolve();
       } catch (error) {
         response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-        response.end(`<h1>Spotify auth failed</h1><pre>${String(error instanceof Error ? error.message : error)}</pre>`);
+        response.end(`<h1>Spotify auth failed</h1><pre>${escapeHtml(String(error instanceof Error ? error.message : error))}</pre>`);
         reject(error);
       } finally {
         server.close();
@@ -260,10 +244,6 @@ async function refresh(): Promise<void> {
 async function status(): Promise<void> {
   const auth = await createAuth();
   await printStatus(auth, 'status');
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error !== null && typeof error === 'object' && 'code' in error;
 }
 
 const action = process.argv[2] || 'bootstrap';

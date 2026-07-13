@@ -98,6 +98,11 @@ export interface PlaybackController {
 export interface PlayRecord {
   trackId: string;
   artistIds: string[];
+  /**
+   * Display names alongside IDs so repetition limits still match when one
+   * side of the comparison lacks structured artist IDs (common on YouTube).
+   */
+  artistNames?: string[];
   playedAt: number;  // timestamp ms
 }
 

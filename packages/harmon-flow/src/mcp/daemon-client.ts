@@ -90,6 +90,10 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
   const timeoutMs = config.timeoutMs ?? 10_000;
   let insecureWarned = false;
 
+  // /v1/smart/* fans out across all three providers; give it a wider budget.
+  const resolveTimeout = (path: string): number =>
+    path.startsWith('/v1/smart/') ? Math.max(timeoutMs, 30_000) : timeoutMs;
+
   const requestJson = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
     if (!insecureWarned && endpoint.startsWith('http://')) {
       const parsed = new URL(endpoint);
@@ -110,8 +114,9 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
       }
     }
 
+    const requestTimeoutMs = resolveTimeout(path);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
 
     try {
       const response = await fetch(url, {
@@ -125,9 +130,9 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
       });
 
       if (!response.ok) {
-        const detail = await response.text();
+        const detail = (await response.text()).slice(0, 600);
         if (response.status >= 500) {
-          throw new Error('The Harmon daemon failed to complete the request.');
+          throw new Error(`Harmon daemon error ${response.status}${detail ? `: ${detail}` : ''}`);
         }
         throw new Error(detail || `${response.status} ${response.statusText}`);
       }
@@ -137,6 +142,13 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
       }
 
       return (await response.json()) as T;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(
+          `Harmon daemon at ${endpoint} did not respond within ${Math.round(requestTimeoutMs / 1000)}s — is harmond running?`,
+        );
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
     }

@@ -82,9 +82,17 @@ export class MarkdownParser {
     const files = this.scanFiles(this.flowDir);
 
     for (const file of files) {
-      const entry = this.parseFile(path.relative(this.flowDir, file));
-      if (entry) {
-        entries.push(entry);
+      // One malformed journal file must not take down every journal/graph
+      // surface — skip it and keep scanning.
+      try {
+        const entry = this.parseFile(path.relative(this.flowDir, file));
+        if (entry) {
+          entries.push(entry);
+        }
+      } catch (error) {
+        console.error(
+          `[harmon-flow] Skipping unreadable journal entry ${file}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
 
@@ -105,7 +113,12 @@ export class MarkdownParser {
 
       for (const entry of entries) {
         const fullPath = path.join(currentDir, entry);
-        const stat = fs.statSync(fullPath);
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(fullPath);
+        } catch {
+          continue; // broken symlink or race-deleted file
+        }
 
         if (stat.isDirectory()) {
           traverse(fullPath);

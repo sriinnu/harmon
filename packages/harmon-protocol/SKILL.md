@@ -11,13 +11,15 @@ tags:
   - validation
   - zod
 provider: harmon
-version: 0.1.0
+version: 0.2.0
 ---
 
 # Harmon Protocol
 
 ## What this does
 harmon-protocol defines the shared type contract between the daemon, CLI, and engine. Every Command sent by a client and every Event emitted by the daemon is validated against Zod schemas defined here. SessionPolicy, TrackInfo, DeviceInfo, and DaemonStatus are all canonical types that flow through the entire system.
+
+Notable policy fields: `soft.targetEnergy` (0-1, optional) is the energy level ranking aims tracks toward — session nudges shift it. `hard.tempo.min/max` are bounded 0-400 BPM with `min <= max` enforced; `hard.energy` is bounded 0-1.
 
 ## When to use
 - Validating user input before dispatching a command to the daemon

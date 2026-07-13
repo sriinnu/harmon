@@ -6,6 +6,8 @@ import type { TrackInfo } from '@sriinnu/harmon-protocol';
 import type { MusicProvider, PlaybackController, AudioFeatures } from '@sriinnu/harmon-core';
 
 const APPLE_MUSIC_API_BASE = 'https://api.music.apple.com/v1';
+const MAX_RATE_LIMIT_WAIT_MS = 10_000;
+const MAX_RETRIES = 2;
 
 export interface AppleMusicConfig {
   developerToken: string;
@@ -80,6 +82,16 @@ export interface AppleMusicLibraryPlaylist {
 }
 
 export interface AppleMusicClient {
+  /**
+   * Reports credential-derived connectivity: a developer token enables
+   * catalog endpoints. Library endpoints additionally need a user token —
+   * check hasUserToken() for that surface.
+   */
+  isConnected?(): boolean;
+  /** True when a Music-User-Token is configured (library endpoints usable). */
+  hasUserToken?(): boolean;
+  /** Apply or clear the Music-User-Token at runtime. */
+  setUserToken?(token: string | undefined): void;
   search(term: string, types: AppleSearchType[], options?: AppleListOptions): Promise<AppleMusicSearchResult>;
   getSong(id: string): Promise<AppleMusicSong | null>;
   getAlbum(id: string): Promise<AppleMusicAlbum | null>;
@@ -104,6 +116,23 @@ class AppleMusicClientImpl implements AppleMusicClient {
     this.developerToken = config.developerToken;
     this.userToken = config.userToken;
     this.storefront = config.storefront || 'us';
+  }
+
+  isConnected(): boolean {
+    return Boolean(this.developerToken);
+  }
+
+  hasUserToken(): boolean {
+    return Boolean(this.userToken);
+  }
+
+  /**
+   * Apply a MusicKit user token at runtime (e.g. after the daemon's
+   * set-user-token auth flow) so library endpoints activate without a
+   * client rebuild.
+   */
+  setUserToken(token: string | undefined): void {
+    this.userToken = token && token.length > 0 ? token : undefined;
   }
 
   async search(
@@ -156,22 +185,39 @@ class AppleMusicClientImpl implements AppleMusicClient {
     return data.data?.[0] ? mapPlaylist(data.data[0]) : null;
   }
 
+  /**
+   * I route playlist IDs by prefix: 'pl.' is a catalog playlist, 'p.'/'i.'
+   * are library playlists. Only ambiguous IDs fall back to try-both.
+   */
   async getPlaylistTracks(id: string, options: AppleListOptions = {}): Promise<AppleMusicSong[]> {
-    if (this.userToken) {
-      try {
-        const libraryTracks = await this.request<AppleCatalogResponse<AppleLibrarySongAttributes>>(
-          `/me/library/playlists/${id}/tracks`,
-          listQuery(options),
-          true,
-        );
-        return (libraryTracks.data || []).map(mapLibrarySongToAppleMusicSong);
-      } catch (error) {
-        if (!isAppleNotFoundError(error)) {
-          throw error;
-        }
-      }
+    if (isLibraryPlaylistId(id)) {
+      return this.getLibraryPlaylistTracks(id, options);
+    }
+    if (isCatalogPlaylistId(id) || !this.userToken) {
+      return this.getCatalogPlaylistTracks(id, options);
     }
 
+    // Ambiguous prefix: try library first, fall back to catalog on 404.
+    try {
+      return await this.getLibraryPlaylistTracks(id, options);
+    } catch (error) {
+      if (!isAppleNotFoundError(error)) {
+        throw error;
+      }
+    }
+    return this.getCatalogPlaylistTracks(id, options);
+  }
+
+  private async getLibraryPlaylistTracks(id: string, options: AppleListOptions): Promise<AppleMusicSong[]> {
+    const libraryTracks = await this.request<AppleCatalogResponse<AppleLibrarySongAttributes>>(
+      `/me/library/playlists/${id}/tracks`,
+      listQuery(options),
+      true,
+    );
+    return (libraryTracks.data || []).map(mapLibrarySongToAppleMusicSong);
+  }
+
+  private async getCatalogPlaylistTracks(id: string, options: AppleListOptions): Promise<AppleMusicSong[]> {
     const data = await this.request<AppleCatalogResponse<AppleSongAttributes>>(
       `/catalog/${this.storefront}/playlists/${id}/tracks`,
       listQuery(options),
@@ -179,13 +225,19 @@ class AppleMusicClientImpl implements AppleMusicClient {
     return (data.data || []).map(mapSong);
   }
 
+  /**
+   * `/me/recent/played/tracks` can return catalog songs, library-songs, and
+   * stations, so I keep only song resources and map them defensively.
+   */
   async getRecentlyPlayedTracks(options: AppleListOptions = {}): Promise<AppleMusicSong[]> {
-    const data = await this.request<AppleCatalogResponse<AppleSongAttributes>>(
+    const data = await this.request<AppleCatalogResponse<Partial<AppleSongAttributes>>>(
       '/me/recent/played/tracks',
       listQuery(options),
       true,
     );
-    return (data.data || []).map(mapSong);
+    return (data.data || [])
+      .filter((resource) => resource.type === undefined || resource.type === 'songs' || resource.type === 'library-songs')
+      .map(mapRecentlyPlayedSong);
   }
 
   async getLibrarySongs(options: AppleListOptions = {}): Promise<AppleMusicLibrarySong[]> {
@@ -238,7 +290,18 @@ class AppleMusicClientImpl implements AppleMusicClient {
       headers['Music-User-Token'] = this.userToken;
     }
 
-    const response = await fetch(url, { headers });
+    let response = await fetch(url, { headers });
+
+    // Retry 429/5xx up to 2 times, honoring Retry-After with a 10s cap.
+    let retries = 0;
+    while ((response.status === 429 || response.status >= 500) && retries < MAX_RETRIES) {
+      const retryAfter = Number.parseInt(response.headers.get('Retry-After') || '1', 10);
+      const delayMs = Math.min((Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 1) * 1000, MAX_RATE_LIMIT_WAIT_MS);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      response = await fetch(url, { headers });
+      retries++;
+    }
+
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(`Apple Music API error: ${response.status} ${detail}`);
@@ -263,6 +326,7 @@ interface AppleCatalogResponse<TAttributes> {
 
 interface AppleCatalogResource<TAttributes> {
   id: string;
+  type?: string;
   attributes: TAttributes;
 }
 
@@ -330,6 +394,22 @@ function mapSong(resource: AppleCatalogResource<AppleSongAttributes>): AppleMusi
     albumName: resource.attributes.albumName,
     durationMs: resource.attributes.durationInMillis,
     url: resource.attributes.url,
+  };
+}
+
+/**
+ * Defensive mapper for the recent-played surface, where attributes may be
+ * partial (library-songs, stations, or sparse catalog resources).
+ */
+function mapRecentlyPlayedSong(resource: AppleCatalogResource<Partial<AppleSongAttributes>>): AppleMusicSong {
+  const attributes = resource.attributes ?? {};
+  return {
+    id: resource.id,
+    name: attributes.name || 'Unknown',
+    artistName: attributes.artistName || 'Unknown',
+    albumName: attributes.albumName,
+    durationMs: attributes.durationInMillis ?? 0,
+    url: attributes.url,
   };
 }
 
@@ -430,15 +510,24 @@ function mapLibrarySongToTrackInfo(song: AppleMusicLibrarySong): TrackInfo {
 export class AppleMusicProvider implements MusicProvider {
   readonly name = 'apple' as const;
   private client: AppleMusicClient;
-  private connected: boolean;
+  private connectedOverride?: boolean;
 
-  constructor(client: AppleMusicClient, connected = true) {
+  constructor(client: AppleMusicClient, connected?: boolean) {
     this.client = client;
-    this.connected = connected;
+    this.connectedOverride = connected;
   }
 
+  /**
+   * By default I derive connectivity from the client's credentials
+   * (developer token present = catalog OK; a missing user token only limits
+   * library endpoints). An explicit constructor override still wins for
+   * callers that rely on it.
+   */
   isConnected(): boolean {
-    return this.connected;
+    if (this.connectedOverride !== undefined) {
+      return this.connectedOverride;
+    }
+    return this.client.isConnected?.() ?? true;
   }
 
   async search(query: string, limit?: number): Promise<TrackInfo[]> {
@@ -538,4 +627,14 @@ export function createAppleMusicClient(config: AppleMusicConfig): AppleMusicClie
 
 function isAppleNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith('Apple Music API error: 404');
+}
+
+/** Apple catalog playlist IDs start with 'pl.'. */
+function isCatalogPlaylistId(id: string): boolean {
+  return id.startsWith('pl.');
+}
+
+/** Apple library playlist IDs start with 'p.' (or 'i.' for library items). */
+function isLibraryPlaylistId(id: string): boolean {
+  return !isCatalogPlaylistId(id) && (id.startsWith('p.') || id.startsWith('i.'));
 }

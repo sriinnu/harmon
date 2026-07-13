@@ -29,8 +29,10 @@ export function calculateArcModulation(
   const warmupMs = arc.warmupMs || 0;
   const cooldownMs = arc.cooldownMs || 0;
   const warmupProgress = warmupMs > 0 ? Math.min(elapsedMs / warmupMs, 1) : 1;
+  // Clamp to 1 so a session running past durationMs holds the cooldown floor
+  // instead of drifting the modulation further negative without bound.
   const cooldownProgress = cooldownMs > 0 && durationMs
-    ? Math.max(0, (elapsedMs - (durationMs - cooldownMs)) / cooldownMs)
+    ? Math.min(Math.max(0, (elapsedMs - (durationMs - cooldownMs)) / cooldownMs), 1)
     : 0;
 
   switch (arc.shape) {
