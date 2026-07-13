@@ -3,6 +3,14 @@
  * CLI entrypoint for stdio and remote MCP server modes.
  */
 
+// Pick up ./.env (HARMON_ENDPOINT, HARMON_API_TOKEN, HARMON_MCP_*) when run
+// from a project directory; exported variables take precedence.
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env present
+}
+
 import { createMCPServer } from './index.js';
 import { createAppMCPServer } from './app-server.js';
 

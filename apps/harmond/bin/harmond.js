@@ -3,7 +3,16 @@
  * Harmond entry point — with signal handling and proper error propagation
  */
 
-import { createDaemon } from '../dist/src/index.js';
+// Load ./.env from the working directory before the daemon module is
+// imported (some module-level constants read process.env at load time).
+// Already-exported variables take precedence; a missing file is fine.
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env present
+}
+
+const { createDaemon } = await import('../dist/src/index.js');
 
 let daemon;
 try {

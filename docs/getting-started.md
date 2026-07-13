@@ -31,14 +31,16 @@ alias harmon="node apps/harmon-cli/bin/harmon.js"
 Do this before first start. Both values are enforced in production and warned about loudly everywhere else:
 
 ```bash
-cat >> .env << EOF
-HARMON_API_TOKEN=$(openssl rand -base64 32)
-HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)
-SPOTIFY_CLIENT_ID=your_client_id
-SPOTIFY_REDIRECT_URI=http://127.0.0.1:17373/v1/auth/spotify/callback
-EOF
+echo "HARMON_API_TOKEN=$(openssl rand -base64 32)" >> .env
+echo "HARMON_ENCRYPTION_SECRET=$(openssl rand -base64 32)" >> .env
+echo "SPOTIFY_CLIENT_ID=your_client_id" >> .env
+echo "SPOTIFY_REDIRECT_URI=http://127.0.0.1:17373/v1/auth/spotify/callback" >> .env
+
+# For the curl examples below (harmon/harmond read .env themselves):
 export HARMON_API_TOKEN=$(grep '^HARMON_API_TOKEN' .env | cut -d= -f2)
 ```
+
+The daemon, CLI, and MCP server all load `./.env` from the directory they start in; variables already exported in your shell take precedence.
 
 - `HARMON_API_TOKEN` — Bearer auth for every `/v1` endpoint. Without it, any local process can control the daemon.
 - `HARMON_ENCRYPTION_SECRET` — AES-256-GCM key; without it, OAuth tokens are stored unencrypted.
