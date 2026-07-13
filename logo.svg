@@ -1,53 +1,43 @@
 <svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- I am the main Harmon mark: two people connected by one shared musical bridge. -->
-  <rect width="200" height="200" rx="40" fill="#F3E7D4"/>
+  <!--
+    Harmon mark: two listeners joined by one shared beamed note — the beam is
+    the bridge. Same paper-and-ink identity as before, simplified to strong
+    silhouettes with a single warm accent so it survives favicon sizes.
+  -->
+  <defs>
+    <radialGradient id="harmon-paper" cx="50%" cy="36%" r="80%">
+      <stop offset="0%" stop-color="#F8EFE0"/>
+      <stop offset="100%" stop-color="#EEDFC5"/>
+    </radialGradient>
+  </defs>
 
-  <g stroke="#171513" stroke-width="3.3" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M26 151C40 140 53 136 70 137"/>
-    <path d="M129 137C146 136 160 140 174 151"/>
-    <path d="M48 159H152" opacity="0.34"/>
+  <rect width="200" height="200" rx="40" fill="url(#harmon-paper)"/>
 
-    <path d="M81 122C89 113 95 107 100 100C105 107 112 113 120 122"/>
-    <path d="M74 118C82 109 90 104 100 104C110 104 118 109 126 118"/>
-
-    <path d="M99 56V31L134 20V69"/>
-    <circle cx="96" cy="59" r="5.8"/>
-    <circle cx="134" cy="69" r="5.8"/>
-
-    <path d="M70 76C72 63 82 54 95 54C104 54 112 58 118 65"/>
-    <path d="M130 76C127 62 117 54 105 54"/>
-
-    <path d="M63 116L80 110"/>
-    <path d="M137 116L121 110"/>
-    <path d="M61 117C56 127 56 137 60 147"/>
-    <path d="M139 117C144 127 144 137 140 147"/>
-    <path d="M66 151L69 136"/>
-    <path d="M133 136L130 151"/>
-
-    <path d="M44 64C50 57 60 56 67 61" opacity="0.55"/>
-    <path d="M132 61C139 56 149 57 155 64" opacity="0.55"/>
-    <path d="M34 123C40 118 49 118 55 123" opacity="0.55"/>
-    <path d="M145 123C151 118 160 118 166 123" opacity="0.55"/>
-    <path d="M84 18C91 13 109 13 116 18" opacity="0.42"/>
-    <path d="M27 81L39 78"/>
-    <path d="M161 78L173 81"/>
+  <!-- Shared beamed note: the bridge between the two listeners -->
+  <g fill="#C8502A">
+    <path d="M89 50L131 42V31L89 39Z"/>
+    <rect x="89" y="45" width="5" height="56" rx="2.5"/>
+    <rect x="126" y="37" width="5" height="56" rx="2.5"/>
+    <ellipse cx="84" cy="101" rx="9.5" ry="7" transform="rotate(-18 84 101)"/>
+    <ellipse cx="121" cy="93" rx="9.5" ry="7" transform="rotate(-18 121 93)"/>
   </g>
 
-  <g fill="#171513">
-    <circle cx="73" cy="84" r="11"/>
-    <circle cx="127" cy="84" r="11"/>
-    <path d="M58 112C63 102 83 102 88 112V125H58V112Z"/>
-    <path d="M112 112C117 102 137 102 142 112V125H112V112Z"/>
+  <!-- Listeners: ink silhouettes, heads tilted toward the shared note -->
+  <g fill="#1A1714">
+    <circle cx="55" cy="127" r="12.5"/>
+    <path d="M35 172C35 151 45 142 55 142C65 142 75 151 75 172Z"/>
+    <circle cx="145" cy="127" r="12.5"/>
+    <path d="M125 172C125 151 135 142 145 142C155 142 165 151 165 172Z"/>
   </g>
 
-  <g stroke="#171513" stroke-width="2.55" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M68 72C71 65 77 61 84 61C89 61 94 63 98 67"/>
-    <path d="M102 67C106 63 111 61 116 61C123 61 129 65 132 72"/>
-    <path d="M68 92C72 95 77 95 81 92"/>
-    <path d="M119 92C123 95 128 95 132 92"/>
-    <path d="M70 107L74 96L84 100"/>
-    <path d="M130 107L126 96L116 100"/>
-    <path d="M75 83H76"/>
-    <path d="M124 83H125"/>
+  <!-- Sound arcs: one pair per side, quiet -->
+  <g stroke="#1A1714" stroke-width="3.4" stroke-linecap="round">
+    <path d="M27 106C33 97 43 93 52 96" opacity="0.5"/>
+    <path d="M34 116C38 111 44 109 49 110" opacity="0.32"/>
+    <path d="M173 106C167 97 157 93 148 96" opacity="0.5"/>
+    <path d="M166 116C162 111 156 109 151 110" opacity="0.32"/>
   </g>
+
+  <!-- Shared ground -->
+  <path d="M42 178C72 170 128 170 158 178" stroke="#1A1714" stroke-width="3.4" stroke-linecap="round" opacity="0.3"/>
 </svg>
