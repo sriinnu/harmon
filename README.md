@@ -206,4 +206,6 @@ Conventions: tests live next to sources (`*.test.ts`), provider HTTP is mocked a
 
 ## License
 
-[AGPL-3.0-only](LICENSE). Provider trademarks belong to their owners; this project is unaffiliated with Spotify, Apple, or Google.
+[AGPL-3.0-only](LICENSE) for the apps and provider packages, with one exception: [`@sriinnu/harmon-protocol`](packages/harmon-protocol/LICENSE) is **Apache-2.0** so other tools can adopt the Command/Event/SessionPolicy contract without copyleft obligations.
+
+Provider trademarks belong to their owners; this project is unaffiliated with Spotify, Apple, or Google.

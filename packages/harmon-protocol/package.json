@@ -2,7 +2,7 @@
   "name": "@sriinnu/harmon-protocol",
   "version": "0.2.0",
   "description": "Command/Event/Policy types + Zod schemas for Harmon",
-  "license": "AGPL-3.0-only",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/sriinnu/harmon.git",
@@ -19,6 +19,7 @@
     "dist/",
     "README.md",
     "SKILL.md",
+    "LICENSE",
     "logo.svg"
   ],
   "exports": {
