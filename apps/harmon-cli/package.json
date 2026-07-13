@@ -45,7 +45,7 @@
   },
   "dependencies": {
     "commander": "^14.0.2",
-    "@libsql/client": "^0.16.0"
+    "@libsql/client": "^0.17.0"
   },
   "devDependencies": {
     "@sriinnu/harmon-protocol": "workspace:*",

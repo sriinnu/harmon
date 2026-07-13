@@ -22,9 +22,9 @@
  */
 
 import { spawn } from 'node:child_process';
-import { unlink, mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 
 // ============================================================================
@@ -350,7 +350,8 @@ export async function listen(options = {}) {
       '  Fedora: sudo dnf install chromaprint-tools ffmpeg'
     );
   } finally {
-    // Cleanup temp WAV file
-    unlink(wavPath).catch(() => {});
+    // Remove the whole mkdtemp directory, not just the WAV inside it —
+    // otherwise every `harmon listen` leaks an empty temp dir.
+    rm(dirname(wavPath), { recursive: true, force: true }).catch(() => {});
   }
 }

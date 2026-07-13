@@ -35,6 +35,18 @@ export function classifyError(error: unknown): ApiError {
     return new UpstreamServiceError(message, upstreamStatusCode);
   }
 
+  // Typed provider errors that no longer carry an "API error: <status>"
+  // prefix: rate limits, quota exhaustion, and the retired cookie flow.
+  if (/rate limited; retry after \d+s/i.test(message)) {
+    return new UpstreamServiceError(message, 429);
+  }
+  if (message.includes('daily quota exceeded')) {
+    return new UpstreamServiceError(message, 429);
+  }
+  if (message.includes('cookie-based auth is no longer supported')) {
+    return new ProviderUnavailableError(message);
+  }
+
   if (
     message.includes('configuration missing') ||
     message.includes('not configured')

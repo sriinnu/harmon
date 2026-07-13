@@ -116,6 +116,9 @@ export interface DaemonContext {
   /** Normalize a route handler error into an HTTP response. */
   handleRouteError(res: Response, error: unknown, asText?: boolean): void;
 
+  /** Apply a MusicKit user token to the live Apple client (activates library endpoints). */
+  applyAppleUserToken(token: string): void;
+
   /** Resolve a provider's read-only MusicProvider (works even without local playback). */
   getReadProvider(provider: MusicProviderName): MusicProvider;
 

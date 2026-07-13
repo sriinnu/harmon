@@ -107,13 +107,13 @@ export function registerSessionRoutes(app: Application, ctx: DaemonContext): voi
   // ── SSE events ────────────────────────────────────────────────────────
   app.get('/v1/events', (req: Request, res: Response) => {
     try {
+      if (!ctx.enableSSE) {
+        throw new ApiError(404, 'SSE is disabled for this daemon instance.', 'SSE_DISABLED');
+      }
+
       if (ctx.sseClients.size >= MAX_SSE_CLIENTS) {
         res.status(503).json({ success: false, error: 'Too many SSE connections' });
         return;
-      }
-
-      if (!ctx.enableSSE) {
-        throw new ApiError(404, 'SSE is disabled for this daemon instance.', 'SSE_DISABLED');
       }
 
       res.setHeader('Content-Type', 'text/event-stream');

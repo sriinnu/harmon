@@ -148,7 +148,16 @@ export function registerSmartRoutes(app: Application, ctx: DaemonContext): void 
     try {
       const query = parseBodyString(req.body?.query);
       const uri = parseBodyString(req.body?.uri);
-      const preferredProvider = parseBodyString(req.body?.provider) as ProviderName | undefined;
+      const rawProvider = parseBodyString(req.body?.provider);
+
+      if (rawProvider && !VALID_PROVIDERS.includes(rawProvider as ProviderName)) {
+        res.status(400).json({
+          success: false,
+          error: `Unknown provider "${rawProvider}". Valid providers: ${VALID_PROVIDERS.join(', ')}`,
+        });
+        return;
+      }
+      const preferredProvider = rawProvider as ProviderName | undefined;
 
       if (!query && !uri) {
         res.status(400).json({ success: false, error: 'Provide a query or uri' });
@@ -158,7 +167,8 @@ export function registerSmartRoutes(app: Application, ctx: DaemonContext): void 
       // If URI provided with a known provider prefix, route directly
       if (uri) {
         const provider = detectProviderFromUri(uri) ?? preferredProvider ?? 'spotify';
-        const playResult = await playOnProvider(ctx, provider, { uri });
+        const target = provider === 'spotify' ? normalizeSpotifyTarget(uri) : uri;
+        const playResult = await playOnProvider(ctx, provider, { uri: target });
         res.json(playResult);
         return;
       }
@@ -166,7 +176,7 @@ export function registerSmartRoutes(app: Application, ctx: DaemonContext): void 
       // Search for the track across providers
       const providers = preferredProvider
         ? [preferredProvider]
-        : getConnectedProviders(ctx);
+        : await getConnectedProviders(ctx);
 
       if (providers.length === 0) {
         res.status(503).json({
@@ -215,13 +225,42 @@ export function registerSmartRoutes(app: Application, ctx: DaemonContext): void 
 
 // ── Helper functions ──────────────────────────────────────────────────────────
 
-function getConnectedProviders(ctx: DaemonContext): ProviderName[] {
+const VALID_PROVIDERS: ProviderName[] = ['spotify', 'apple', 'youtube'];
+
+async function getConnectedProviders(ctx: DaemonContext): Promise<ProviderName[]> {
   const connected: ProviderName[] = [];
-  // Spotify runtime is always initialized
-  if (ctx.spotifyRuntime) connected.push('spotify');
+  // The Spotify runtime object always exists, so consult live auth status —
+  // otherwise a fresh install reports "no results" instead of "not
+  // authenticated" and the auth-hint branch below never fires.
+  const spotifyStatus = await ctx.getSpotifyProviderStatus();
+  if (spotifyStatus.connected) connected.push('spotify');
   if (ctx.appleRuntime) connected.push('apple');
   if (ctx.youtubeRuntime) connected.push('youtube');
   return connected;
+}
+
+/**
+ * Convert open.spotify.com share links (including /intl-xx/ locales) to
+ * spotify: URIs — the Web API rejects raw URLs in play requests.
+ */
+function normalizeSpotifyTarget(value: string): string {
+  if (!/^https?:\/\//.test(value)) {
+    return value;
+  }
+  try {
+    const parsed = new URL(value);
+    if (!parsed.hostname.endsWith('spotify.com')) {
+      return value;
+    }
+    const parts = parsed.pathname.split('/').filter(Boolean)
+      .filter((part, index) => !(index === 0 && part.startsWith('intl-')));
+    if (parts.length >= 2) {
+      return `spotify:${parts[0]}:${parts[1]}`;
+    }
+  } catch {
+    return value;
+  }
+  return value;
 }
 
 function getAuthHints(ctx: DaemonContext): Array<{ provider: string; action: string; endpoint: string }> {
@@ -250,32 +289,30 @@ async function searchProviders(
   limit: number,
   errors: Array<{ provider: string; error: string }> = [],
 ): Promise<Array<{ provider: ProviderName; track: TrackInfo }>> {
-  const results: Array<{ provider: ProviderName; track: TrackInfo }> = [];
-
-  const promises = providers.map(async (provider) => {
+  // Collect into positional slots so "best match" follows the stable
+  // provider preference order, not whichever API answered fastest.
+  const slots = await Promise.all(providers.map(async (provider) => {
     try {
       const readProvider = ctx.getReadProvider(provider);
       const tracks = await readProvider.search(query, limit);
-      if (tracks.length > 0) {
-        results.push({ provider, track: tracks[0] });
-      }
+      return tracks.length > 0 ? { provider, track: tracks[0] } : null;
     } catch (error) {
       errors.push({
         provider,
         error: error instanceof Error ? error.message : String(error),
       });
+      return null;
     }
-  });
+  }));
 
-  await Promise.all(promises);
-  return results;
+  return slots.filter((slot): slot is { provider: ProviderName; track: TrackInfo } => slot !== null);
 }
 
 async function playOnProvider(
   ctx: DaemonContext,
   provider: ProviderName,
   options: { uri?: string; trackId?: string },
-): Promise<{ success: boolean; provider: string; needsAuth?: boolean; authUrl?: string; authEndpoint?: string }> {
+): Promise<{ success: boolean; provider: string; error?: string; needsAuth?: boolean; authUrl?: string; authEndpoint?: string }> {
   const runtime = ctx.getRuntime(provider);
 
   if (!runtime) {
@@ -286,6 +323,17 @@ async function playOnProvider(
       provider,
       needsAuth: true,
       ...authHint,
+    };
+  }
+
+  // A found track without a playable URI must not degrade into a bare
+  // play() — that resumes whatever was already loaded and reports the
+  // wrong track as playing.
+  if (!options.uri && options.trackId) {
+    return {
+      success: false,
+      provider,
+      error: `Track ${options.trackId} was found on ${provider} but has no playable URI.`,
     };
   }
 

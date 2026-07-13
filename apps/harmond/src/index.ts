@@ -111,6 +111,13 @@ const DEFAULT_DEV_CORS_ORIGINS = ['http://127.0.0.1:4173', 'http://localhost:417
 const SSE_HEARTBEAT_MS = 30000;
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const TRACK_POLL_INTERVAL_MS = 5000;
+const EVENT_LOG_RETENTION_DAYS = readRetentionDays('HARMON_EVENT_LOG_RETENTION_DAYS', 30);
+const TRACK_HISTORY_RETENTION_DAYS = readRetentionDays('HARMON_HISTORY_RETENTION_DAYS', 365);
+
+function readRetentionDays(envVar: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[envVar] ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 const DAEMON_VERSION = getDaemonVersion();
 
 interface DaemonConfig {
@@ -165,7 +172,9 @@ export class Harmond implements DaemonContext {
   readonly appleRemoteBridge?: AppleRemoteBridge;
   readonly appleRemoteToken?: string;
   readonly appleCatalogEnabled: boolean;
-  readonly appleLibraryEnabled: boolean;
+  // Mutable: flips to true when a MusicKit user token arrives at runtime
+  // via /v1/auth/apple/set-user-token (readonly through DaemonContext).
+  appleLibraryEnabled: boolean;
   readonly appleLocalPlaybackEnabled = process.platform === 'darwin';
 
   readonly youtubeMusicClient?: YouTubeMusicClient;
@@ -193,6 +202,7 @@ export class Harmond implements DaemonContext {
   private openSockets: Set<Socket> = new Set();
   private server: ReturnType<express.Application['listen']> | null = null;
   private sseHeartbeat: ReturnType<typeof setInterval> | null = null;
+  private eventLogPruneInterval: ReturnType<typeof setInterval> | null = null;
   private trackPollInterval: ReturnType<typeof setInterval> | null = null;
   private lastTrackId: string | null = null;
   private isPolling = false;
@@ -243,6 +253,25 @@ export class Harmond implements DaemonContext {
       this.logger.info('Credential encryption enabled');
     } else {
       this.logger.warn('Credential encryption disabled — development only');
+      // The log line above is easy to miss; make the plaintext-token risk
+      // unmissable on the console for the default (NODE_ENV-less) install.
+      if (process.env.NODE_ENV !== 'test') {
+        console.error(
+          '\n[harmond] WARNING: HARMON_ENCRYPTION_SECRET is not set.\n' +
+          '[harmond] OAuth tokens will be stored UNENCRYPTED in the SQLite database.\n' +
+          '[harmond] Set HARMON_ENCRYPTION_SECRET (32+ random characters) to encrypt credentials at rest.\n',
+        );
+      }
+    }
+
+    if (!this.apiToken && process.env.NODE_ENV !== 'test') {
+      // Symmetric to the encryption warning: "localhost-first" quietly means
+      // "any local process is trusted" — say so out loud.
+      console.error(
+        '\n[harmond] WARNING: HARMON_API_TOKEN is not set.\n' +
+        '[harmond] Every /v1 endpoint (playback, library, auth, cookie import) is open to any local process.\n' +
+        '[harmond] Set HARMON_API_TOKEN to require Bearer auth, especially on shared machines.\n',
+      );
     }
 
     // ── Spotify provider init ──────────────────────────────────────────
@@ -329,10 +358,18 @@ export class Harmond implements DaemonContext {
     this.youtubeAccessToken = process.env.YOUTUBE_MUSIC_ACCESS_TOKEN || process.env.GOOGLE_ACCESS_TOKEN;
     this.youtubeApiKey = process.env.YOUTUBE_MUSIC_API_KEY || process.env.YT_API_KEY;
     this.youtubeBrowserSupport = getBrowserLaunchSupport();
-    if (this.youtubeAccessToken || this.youtubeApiKey) {
+    const youtubeOAuthConfigured = Boolean(process.env.YOUTUBE_MUSIC_CLIENT_ID);
+    if (this.youtubeAccessToken || this.youtubeApiKey || youtubeOAuthConfigured) {
       this.youtubeMusicClient = createYouTubeMusicClient({
-        accessToken: this.youtubeAccessToken,
+        // A static token pins the client to a value that expires in ~1h, so
+        // when OAuth is configured the auth manager (constructed below, auto-
+        // refreshing) supplies tokens instead, falling back to the static
+        // env token until the user completes the OAuth login.
+        accessToken: youtubeOAuthConfigured ? undefined : this.youtubeAccessToken,
         apiKey: this.youtubeApiKey,
+        getAccessToken: youtubeOAuthConfigured
+          ? async () => (await this.youtubeAuth?.getAccessToken() ?? null) ?? this.youtubeAccessToken ?? null
+          : undefined,
       });
       if (this.youtubeBrowserSupport.available) {
         this.youtubeRuntime = {
@@ -353,7 +390,15 @@ export class Harmond implements DaemonContext {
 
     // ── YouTube auth ──────────────────────────────────────────────────
     const youtubeClientId = process.env.YOUTUBE_MUSIC_CLIENT_ID;
-    const youtubeRedirectUri = process.env.YOUTUBE_MUSIC_REDIRECT_URI || 'http://127.0.0.1:17373/v1/auth/youtube/callback';
+    // Derive the default callback from the actual port (a hardcoded 17373
+    // silently breaks OAuth when HARMON_PORT is customized). The host must
+    // stay a loopback address: wildcard binds like 0.0.0.0/:: are not valid
+    // browser-reachable OAuth redirect targets.
+    const loopbackCallbackHost = ['127.0.0.1', 'localhost', '::1'].includes(this.host)
+      ? this.host
+      : '127.0.0.1';
+    const youtubeRedirectUri = process.env.YOUTUBE_MUSIC_REDIRECT_URI
+      || `http://${loopbackCallbackHost}:${this.port}/v1/auth/youtube/callback`;
     if (youtubeClientId) {
       const youtubeTokenStore = createYouTubeTokenStore(this.store, this.encryptor, this);
       this.youtubeAuth = createYouTubeAuth({
@@ -478,8 +523,12 @@ export class Harmond implements DaemonContext {
     const deadClients: Response[] = [];
 
     for (const client of this.sseClients) {
-      try { client.write(message); }
-      catch { deadClients.push(client); }
+      // A falsy write() return means the socket buffer is saturated: treat
+      // the client as dead instead of queueing unbounded data (same policy
+      // as the heartbeat).
+      try {
+        if (!client.write(message)) deadClients.push(client);
+      } catch { deadClients.push(client); }
     }
 
     for (const client of deadClients) {
@@ -502,7 +551,15 @@ export class Harmond implements DaemonContext {
   /** Return the currently active provider name, or null. */
   getActiveProvider(): MusicProviderName | null {
     if (this.activeProvider) {
-      return this.activeProvider;
+      // Re-check live engine state: a session that ended without going
+      // through stopSession() must not leave a stale cache that blocks
+      // every future startSession() with "Session already active".
+      const engine = this.engines.get(this.activeProvider);
+      if (engine?.getState()) {
+        return this.activeProvider;
+      }
+      this.activeProvider = null;
+      this.stopTrackPolling();
     }
 
     for (const [provider, engine] of this.engines.entries()) {
@@ -527,6 +584,18 @@ export class Harmond implements DaemonContext {
     return provider ? this.getRuntime(provider) : null;
   }
 
+  /**
+   * Apply a MusicKit user token to the live Apple Music client so library
+   * endpoints activate immediately (and after restart) instead of only on
+   * the next process launch with APPLE_MUSIC_USER_TOKEN set.
+   */
+  applyAppleUserToken(token: string): void {
+    if (this.appleMusicClient?.setUserToken) {
+      this.appleMusicClient.setUserToken(token);
+      this.appleLibraryEnabled = true;
+    }
+  }
+
   /** Get a provider's full runtime (provider + playback), or null. */
   getRuntime(provider: MusicProviderName): ProviderRuntime | null {
     if (provider === 'spotify') {
@@ -535,7 +604,12 @@ export class Harmond implements DaemonContext {
     if (provider === 'apple') {
       return this.appleRuntime ?? null;
     }
-    return this.youtubeRuntime ?? null;
+    if (provider === 'youtube') {
+      return this.youtubeRuntime ?? null;
+    }
+    // Unvalidated strings from route casts must not fall through to a
+    // provider they never named.
+    return null;
   }
 
   /**
@@ -795,8 +869,9 @@ export class Harmond implements DaemonContext {
         const track = await playback.getNowPlaying();
         if (track && track.id !== this.lastTrackId) {
           this.lastTrackId = track.id;
+          // recordPlay emits track.started through the engine event pipeline,
+          // which already broadcasts to SSE — no second broadcast here.
           await this.getActiveEngine()?.recordPlay(track);
-          this.broadcastEvent('track.started', { track });
         }
       } catch { /* polling failure is non-fatal */ }
       finally {
@@ -864,13 +939,34 @@ export class Harmond implements DaemonContext {
     await this.store.migrate();
 
     // Enable WAL mode for concurrent read/write
-    try {
-      await (this.store as any).client?.execute('PRAGMA journal_mode=WAL');
-    } catch { /* WAL not supported in memory mode */ }
+    await this.store.enableWal();
+
+    // Keep event_log bounded: prune at startup, then daily.
+    const pruneEventLog = async () => {
+      try {
+        const deleted = await this.store.pruneEventLog(EVENT_LOG_RETENTION_DAYS, TRACK_HISTORY_RETENTION_DAYS);
+        if (deleted > 0) {
+          this.logger.info({ deleted }, 'Pruned old event_log rows');
+        }
+      } catch (error) {
+        this.logger.warn({ error: error instanceof Error ? error.message : String(error) }, 'event_log prune failed');
+      }
+    };
+    await pruneEventLog();
+    this.eventLogPruneInterval = setInterval(() => { void pruneEventLog(); }, 24 * 60 * 60 * 1000);
+    this.eventLogPruneInterval.unref?.();
 
     await this.spotifyAuth.loadTokens();
     await this.youtubeAuth?.loadTokens();
     await this.appleAuth?.loadTokens();
+
+    // A user token stored via /v1/auth/apple/set-user-token must survive
+    // restarts: apply it to the live client, or library endpoints stay dead
+    // even though auth reports success.
+    const storedAppleUserToken = this.appleAuth?.getUserToken();
+    if (storedAppleUserToken) {
+      this.applyAppleUserToken(storedAppleUserToken);
+    }
 
     // Start SSE heartbeat
     this.setupSSE();
@@ -922,6 +1018,10 @@ export class Harmond implements DaemonContext {
     if (this.sseHeartbeat) {
       clearInterval(this.sseHeartbeat);
       this.sseHeartbeat = null;
+    }
+    if (this.eventLogPruneInterval) {
+      clearInterval(this.eventLogPruneInterval);
+      this.eventLogPruneInterval = null;
     }
 
     // Stop server with timeout

@@ -12,8 +12,10 @@ import type { Application, Request, Response } from 'express';
 import type { DaemonContext } from '../daemon-context.js';
 import { ValidationError } from '../errors.js';
 
-/** Maximum audio payload size: 2MB (base64-encoded ~30s of 16kHz mono WAV) */
-const MAX_AUDIO_SIZE = 2 * 1024 * 1024;
+/** Maximum raw audio size: 2 MB (~30s of 16kHz mono WAV). */
+const MAX_AUDIO_BYTES = 2 * 1024 * 1024;
+/** Base64 inflates by 4/3, so compare the encoded length against this. */
+const MAX_AUDIO_BASE64_LENGTH = Math.ceil(MAX_AUDIO_BYTES * 4 / 3);
 
 /**
  * Rate limiting: this route inherits the global 120 req/min rate limit
@@ -26,8 +28,8 @@ export function registerRecognizeRoutes(app: Application, ctx: DaemonContext): v
       if (typeof audioBase64 !== 'string' || audioBase64.length === 0) {
         throw new ValidationError('Missing audio field (base64-encoded WAV)');
       }
-      if (audioBase64.length > MAX_AUDIO_SIZE) {
-        throw new ValidationError(`Audio data exceeds ${MAX_AUDIO_SIZE} bytes`);
+      if (audioBase64.length > MAX_AUDIO_BASE64_LENGTH) {
+        throw new ValidationError(`Audio data exceeds ${MAX_AUDIO_BYTES} bytes (raw)`);
       }
 
       const apiToken = process.env.AUDD_API_TOKEN;

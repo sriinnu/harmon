@@ -7,18 +7,27 @@ export function Search() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResultItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const search = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
     setBusy(true);
+    setError(null);
     try {
       const data = await client.search(provider, query.trim());
-      // Normalize — Spotify wraps in tracks.items, others return array
-      const items: SearchResultItem[] = data?.tracks?.items || data?.songs || data?.results || (Array.isArray(data) ? data : []);
+      // Normalize — spotify returns { tracks: TrackInfo[] }, apple/youtube return { songs: [...] }
+      const items: SearchResultItem[] = Array.isArray(data?.tracks)
+        ? data.tracks
+        : Array.isArray(data?.songs)
+          ? data.songs
+          : Array.isArray(data)
+            ? data
+            : [];
       setResults(items.slice(0, 20));
-    } catch {
+    } catch (err: unknown) {
       setResults([]);
+      setError(err instanceof Error ? err.message : 'Search failed');
     } finally {
       setBusy(false);
     }
@@ -31,6 +40,7 @@ export function Search() {
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search tracks..." style={{ flex: 1 }} />
         <button type="submit" disabled={busy}>{busy ? '...' : 'Search'}</button>
       </form>
+      {error && <p className="status-err" style={{ marginBottom: '0.5em', fontSize: '0.85em' }}>{error}</p>}
       {results.length > 0 && (
         <div className="grid">
           {results.map((item, i) => (

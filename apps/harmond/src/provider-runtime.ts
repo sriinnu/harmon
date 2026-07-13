@@ -273,8 +273,11 @@ class AppleMusicPlaybackController implements RuntimePlaybackController {
    * tracks can still be played via AppleScript.
    */
   private async resolvePlayableUrl(track: TrackInfo): Promise<string> {
-    if (track.uri?.startsWith('http://') || track.uri?.startsWith('https://')) {
-      return track.uri;
+    // Only hand Apple Music URLs to `open location` — this path drives the
+    // desktop Music app, so arbitrary http(s) targets are not acceptable.
+    const appleUrl = normalizeAppleMusicUrl(track.uri);
+    if (appleUrl) {
+      return appleUrl;
     }
 
     if (track.name && track.artist) {
@@ -440,15 +443,52 @@ function createMinimalTrack(provider: MusicProviderName, uriOrId: string): Track
   };
 }
 
+function normalizeAppleMusicUrl(value: string | undefined): string | null {
+  if (!value || !/^https?:\/\//.test(value)) {
+    return null;
+  }
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'music.apple.com' || host.endsWith('.music.apple.com') || host === 'itunes.apple.com') {
+      parsed.protocol = 'https:';
+      return parsed.toString();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function normalizeYouTubePlaybackUrl(value: string): string | null {
   if (!value) {
     return null;
   }
-  if (value.startsWith('https://music.youtube.com/') || value.startsWith('https://www.youtube.com/')) {
-    return value;
-  }
   if (value.startsWith('youtube:video:')) {
     return `https://music.youtube.com/watch?v=${value.split(':').pop()}`;
+  }
+  // Accept every real-world YouTube link shape (youtu.be shares, mobile,
+  // plain http) and normalize to a canonical https URL on an allowed host.
+  if (/^https?:\/\//.test(value)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return null;
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'youtu.be') {
+      const id = parsed.pathname.split('/').filter(Boolean)[0];
+      return id ? `https://music.youtube.com/watch?v=${id}` : null;
+    }
+    if (host === 'music.youtube.com' || host === 'www.youtube.com' || host === 'youtube.com' || host === 'm.youtube.com') {
+      parsed.protocol = 'https:';
+      if (host === 'youtube.com' || host === 'm.youtube.com') {
+        parsed.hostname = 'www.youtube.com';
+      }
+      return parsed.toString();
+    }
+    return null;
   }
   if (/^[a-zA-Z0-9_-]{6,}$/.test(value)) {
     return `https://music.youtube.com/watch?v=${value}`;

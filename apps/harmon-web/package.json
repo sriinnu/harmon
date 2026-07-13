@@ -11,8 +11,8 @@
     "preview": "vite preview",
     "start": "vite preview --port 4173",
     "lint": "tsc --noEmit",
-    "test": "vitest --root ../.. run apps/harmon-web/src/**/*.test.{ts,tsx}",
-    "test:run": "vitest --root ../.. run apps/harmon-web/src/**/*.test.{ts,tsx}"
+    "test": "vitest --root ../.. run apps/harmon-web",
+    "test:run": "vitest --root ../.. run apps/harmon-web"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",

@@ -116,6 +116,19 @@ export function errorHandler(logger: Logger) {
       return;
     }
 
+    // Handle oversized bodies from express.json/body-parser as a clean 413
+    // instead of a generic 500.
+    if ((err as { status?: number; type?: string }).status === 413
+      || (err as { type?: string }).type === 'entity.too.large') {
+      logger.warn({ path: req.path }, 'Request body too large');
+      res.status(413).json({
+        success: false,
+        error: 'Request body too large',
+        code: 'PAYLOAD_TOO_LARGE',
+      });
+      return;
+    }
+
     // Handle malformed JSON bodies from express.json/body-parser.
     if (err instanceof SyntaxError && 'body' in err && (err as { status?: number }).status === 400) {
       logger.warn({ error: err.message, path: req.path }, 'Invalid JSON body');

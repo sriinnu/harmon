@@ -26,6 +26,12 @@ import type { ProviderStatusDetails } from './daemon-context.js';
 export interface SessionPolicyDeps {
   appleLibraryEnabled: boolean;
   youtubeAccessToken?: string | undefined;
+  youtubeAuth?: { getAuthMode(): 'none' | 'oauth' | 'api-key' } | undefined;
+}
+
+/** True when YouTube has user-level auth (static token or completed OAuth). */
+function hasYouTubeUserAuth(deps: SessionPolicyDeps): boolean {
+  return Boolean(deps.youtubeAccessToken) || deps.youtubeAuth?.getAuthMode() === 'oauth';
 }
 
 /** Dependencies for session-provider probing. */
@@ -99,9 +105,9 @@ export function validateSessionPolicyForProvider(
     return;
   }
 
-  if (sources.likedTracks && !deps.youtubeAccessToken) {
+  if (sources.likedTracks && !hasYouTubeUserAuth(deps)) {
     throw new ProviderUnavailableError(
-      'YouTube Music likedTracks require YOUTUBE_MUSIC_ACCESS_TOKEN.',
+      'YouTube Music likedTracks require OAuth login (POST /v1/auth/youtube/login) or YOUTUBE_MUSIC_ACCESS_TOKEN.',
     );
   }
 }
@@ -171,7 +177,7 @@ export function defaultSourcesForProvider(
 
   if (provider === 'youtube') {
     return {
-      likedTracks: Boolean(deps.youtubeAccessToken),
+      likedTracks: hasYouTubeUserAuth(deps),
       searchQueries: [modeQuery],
     };
   }
@@ -254,9 +260,10 @@ export async function probeSessionProvider(
     throw new ValidationError(`No supported session sources were configured for ${provider}.`);
   }
 
-  for (const probe of probes) {
-    await probe;
-  }
+  // All probes are already in flight; awaiting them together means a second
+  // failure can't become an unhandled rejection (which kills the process)
+  // while the first one is being thrown.
+  await Promise.all(probes);
 }
 
 /**
