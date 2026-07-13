@@ -48,6 +48,9 @@ importers:
       '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../../packages/harmon-protocol
+      '@sriinnu/harmond':
+        specifier: workspace:*
+        version: link:../harmond
       '@types/node':
         specifier: ^25.0.8
         version: 25.0.9
