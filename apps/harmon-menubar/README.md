@@ -3,8 +3,11 @@
 Native macOS menubar cockpit for the harmon daemon. SwiftUI `MenuBarExtra`, no Electron, no Dock icon.
 
 ```bash
-pnpm menubar          # from the repo root (swift run, release build)
+pnpm menubar          # run from the repo (release build, foreground)
+pnpm menubar:install  # build → bundle → /Applications/Harmon Menubar.app (icon, ad-hoc signed, launches)
 ```
+
+The installed app is a proper `LSUIElement` bundle (no Dock icon). Add it to *System Settings → Login Items* to start at login. Override the target directory with `HARMON_MENUBAR_INSTALL_DIR`.
 
 ## What it does
 
