@@ -2,25 +2,50 @@
 
 This guide covers configuring Apple Music for Harmon and using the API endpoints.
 
-### Prerequisites
+### Prerequisites — read before starting
 
-- Apple Developer account (for Apple Music API access)
-- Apple Music API developer token (JWT)
-- Optional: Apple Music user token (for library endpoints)
+- **Apple Developer Program membership ($99/year)** — required for the MusicKit key. There is no free tier for the Apple Music API.
+- **Apple Music subscription** on your Apple ID — required for playback and library.
+- macOS with the Music app for local playback.
+
+Honest guidance: if you don't already pay for both, skip Apple Music — Spotify and YouTube Music cover playback without the membership fee.
+
+### Getting the key material (recommended path: auto-JWT)
+
+At [developer.apple.com/account](https://developer.apple.com/account) → Certificates, Identifiers & Profiles:
+
+1. **Identifiers → + → Media IDs** (⚠️ not App IDs — it's a separate radio option). The identifier **must start with `media.`**, e.g. `media.com.you.harmon`.
+2. **Keys → + →** name it, check **MusicKit**, associate the Media ID → Register → **download the `.p8`** — ⚠️ shown exactly once.
+3. Note the **Key ID** (10 chars, on the key page) and your **Team ID** (10 chars, under Membership details — a *different* 10-char code; easy to mix up).
 
 ### Environment Variables
 
-Set these before starting `harmond`:
+Recommended: key material with auto-generated, auto-refreshing JWTs. The private key is multi-line, so store it in the macOS Keychain ([secrets.md](secrets.md)):
+
+```bash
+ security add-generic-password -s harmon -a APPLE_MUSIC_PRIVATE_KEY -w "$(cat ~/Downloads/AuthKey_<KEYID>.p8)" -U
+echo "APPLE_MUSIC_TEAM_ID=<team id>" >> .env
+echo "APPLE_MUSIC_KEY_ID=<key id>" >> .env
+```
+
+The daemon mints the developer JWT itself at startup and regenerates it before expiry — no token pasting, nothing else to maintain.
+
+> Note: reading a multi-line Keychain value back manually prints **hex** (`security -w` quirk). harmon decodes this automatically; for manual use pipe through `xxd -r -p`.
+
+Alternative: a pre-generated static token (expires in ≤6 months, manual renewal):
 
 ```
 APPLE_MUSIC_DEVELOPER_TOKEN=your_developer_token
-APPLE_MUSIC_USER_TOKEN=your_user_token
+APPLE_MUSIC_USER_TOKEN=your_user_token       # optional, library endpoints
 APPLE_MUSIC_STOREFRONT=us
 ```
 
 Notes:
-- The developer token is a JWT signed with your Apple Music private key.
-- The user token is obtained via MusicKit JS in a browser client.
+- The user token (library access) is obtained via MusicKit JS in a browser: run `pnpm auth:apple`, or with the key in the Keychain:
+  ```bash
+  APPLE_MUSIC_PRIVATE_KEY="$(security find-generic-password -s harmon -a APPLE_MUSIC_PRIVATE_KEY -w | xxd -r -p)" pnpm auth:apple
+  ```
+- Restart the daemon after any credential change — configuration is read at startup.
 
 ### Start the Daemon
 

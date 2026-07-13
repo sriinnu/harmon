@@ -47,6 +47,7 @@ apps/
   harmon-cli/        CLI (bin/harmon.js) + typed HTTP client library (src/)
   harmon-web/        Vite/React control surface
   harmon-companion/  Swift iOS remote-playback companion
+  harmon-menubar/    Swift macOS menubar cockpit (Liquid Glass, SSE-live)
 packages/
   harmon-protocol/   Zod schemas: Command/Event envelopes, SessionPolicy
   harmon-core/       Session engine: ranking, arcs, queue refill, history
@@ -188,6 +189,7 @@ Conventions: tests live next to sources (`*.test.ts`), provider HTTP is mocked a
 ## Security model
 
 - Loopback-first: the daemon refuses non-loopback binds without an API token.
+- **Secrets belong in the macOS Keychain**, not files: every entry point falls back to a Keychain lookup (service `harmon`, account = variable name) for secret-shaped variables that aren't in env/`.env`. Store them with `security add-generic-password -s harmon -a <VAR_NAME> -w '<value>' -U`; keep only non-secrets (client IDs, redirect URIs) in `.env`. Full guide incl. migrating `HARMON_ENCRYPTION_SECRET` safely: [docs/secrets.md](docs/secrets.md).
 - Credentials: AES-256-GCM envelope (fresh salt+IV per record) in SQLite and in the auth-CLI files under `~/.chitragupta/…` when `HARMON_ENCRYPTION_SECRET` is set; files are `0600`.
 - Timing-safe token comparison; single-use CSRF-validated OAuth state; parameterized SQL throughout; AppleScript/URL targets allowlisted per provider.
 - Logger redacts token-shaped fields as a safety net.

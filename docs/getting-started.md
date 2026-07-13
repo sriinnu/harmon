@@ -37,10 +37,10 @@ echo "SPOTIFY_CLIENT_ID=your_client_id" >> .env
 echo "SPOTIFY_REDIRECT_URI=http://127.0.0.1:17373/v1/auth/spotify/callback" >> .env
 
 # For the curl examples below (harmon/harmond read .env themselves):
-export HARMON_API_TOKEN=$(grep '^HARMON_API_TOKEN' .env | cut -d= -f2)
+export HARMON_API_TOKEN=$(grep '^HARMON_API_TOKEN' .env | cut -d= -f2-)
 ```
 
-The daemon, CLI, and MCP server all load `./.env` from the directory they start in; variables already exported in your shell take precedence.
+The daemon, CLI, and MCP server all load `./.env` from the directory they start in; variables already exported in your shell take precedence. On macOS, secrets can live in the **Keychain** instead of `.env` — see [secrets.md](secrets.md).
 
 - `HARMON_API_TOKEN` — Bearer auth for every `/v1` endpoint. Without it, any local process can control the daemon.
 - `HARMON_ENCRYPTION_SECRET` — AES-256-GCM key; without it, OAuth tokens are stored unencrypted.
@@ -76,26 +76,17 @@ harmon auth status
 
 ### YouTube Music
 
+Needs a one-time Google Cloud OAuth client — **follow [youtube-music.md](youtube-music.md)**, it encodes every gotcha (Web application type, exact redirect URI, the Test-users requirement, the show-once client secret). Then:
+
 ```bash
-# Search only:
-export YT_API_KEY=your_key
-# Full library/playlists — OAuth:
-export YOUTUBE_MUSIC_CLIENT_ID=your_client_id
 harmon auth youtube login        # opens Google consent
 ```
 
 ### Apple Music
 
-```bash
-export APPLE_MUSIC_DEVELOPER_TOKEN=your_jwt          # catalog access
-# or auto-regenerating JWT: APPLE_MUSIC_TEAM_ID + KEY_ID + PRIVATE_KEY
-# Library access additionally needs a MusicKit user token:
-curl -s -X POST -H "Authorization: Bearer $HARMON_API_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"token":"<musickit-user-token>"}' \
-  http://127.0.0.1:17373/v1/auth/apple/set-user-token
-```
+Requires an Apple Developer Program membership ($99/yr) + Apple Music subscription — **follow [apple-music.md](apple-music.md)** (Media ID with the `media.` prefix, MusicKit key, Keychain storage for the `.p8`). The daemon auto-mints and auto-refreshes the developer JWT from key material; library access additionally needs the MusicKit user token via `pnpm auth:apple`.
 
-Per-provider deep dives: [spotify.md](spotify.md), [apple-music.md](apple-music.md).
+Per-provider deep dives: [spotify.md](spotify.md), [apple-music.md](apple-music.md), [youtube-music.md](youtube-music.md).
 
 ## 5. Test the CLI
 
@@ -133,7 +124,29 @@ harmon listen --play                      # hear it, identify it, play it
 pnpm start:web                            # http://127.0.0.1:4173
 ```
 
-Walk the onboarding wizard: daemon URL + API token → connection should go live **without a page reload**. Then try search on each provider tab and a smart-play. Now-playing refreshes within ~5s.
+Walk the onboarding wizard: daemon URL + API token → connection should go live **without a page reload**. To paste the token quickly: `grep '^HARMON_API_TOKEN' .env | cut -d= -f2- | pbcopy`. Once a working connection exists, the app treats the daemon as the source of truth — already-connected providers show "Connected ✓" and the wizard never re-asks. Then try search on each provider tab and a smart-play (with the Auto/provider selector). When connected, the connection/token panels collapse into a "● Connected" bar — expand them via **Settings** (per-provider Disconnect, plus "Reset web app" which clears only this browser).
+
+### Browser player — no Spotify app needed (Premium)
+
+The **"Browser player"** card (below Now Playing, shown when Spotify is connected) turns the tab into a real Spotify Connect device via the Web Playback SDK:
+
+1. Click **Enable** → wait for **"● ready as \"Harmon Player\""** — the tab is now registered as a device.
+2. Click **Play here** once to make it active.
+3. Quit the Spotify app everywhere — playback now streams **from the browser tab**, and the daemon prefers "Harmon Player" automatically when picking devices.
+
+Notes: requires Spotify **Premium**; accounts authorized before the `streaming` scope existed must reconnect once (`harmon auth spotify logout && harmon auth spotify login`); the device exists only while the tab is open — pin it.
+
+### Spotify device model (why "no active device" happens)
+
+Spotify's API is a remote control: something must *be* a player — the desktop app, your phone, or the Browser player above. If nothing is open, harmon now activates any available device automatically and, failing that, returns a clear "open Spotify on any device" error. Target a specific device with `harmon device list` / `harmon device use <id>` (MCP: `list_devices` / `use_device`).
+
+## 6b. The macOS menubar app
+
+```bash
+pnpm menubar          # SwiftUI MenuBarExtra; macOS 14+
+```
+
+A note icon appears in the menu bar (green while a track plays, house icon when the daemon is down). The panel gives you: live now-playing with album art, transport + Spotify volume, a "Play anything…" box with an **Auto/Spotify/Apple/YouTube target picker**, session start/nudge/stop, per-provider **Connect** buttons (opens the OAuth browser flow and flips green on approval), and daemon **start/stop**. It adopts `HARMON_API_TOKEN` from the repo's `.env` automatically; endpoint/token/repo-path are editable under ⚙️.
 
 ## 7. Wire up an AI assistant (MCP)
 
@@ -173,6 +186,8 @@ Open `http://127.0.0.1:17373/player/youtube`, paste your API token when prompted
 | `harmon smart-play "<song>"` | music plays; response names the provider |
 | `harmon search track x --limit abc` | clean usage error, not a stack trace |
 | Web onboarding | connects without reload; search works on all provider tabs |
+| Browser player | Enable → "ready as Harmon Player"; plays with all Spotify apps closed |
+| Menubar | icon turns green while playing; Connect buttons complete OAuth |
 | MCP `/healthz` | `{"ok":true}`; startup names hidden write tools if unauthenticated |
 | Assistant "what's playing?" | answers without being told the provider |
 
