@@ -121,18 +121,56 @@ export function getMusicToolSpecs(): MusicToolSpec[] {
     },
     {
       annotations: { openWorldHint: false, readOnlyHint: true, title: 'Get Now Playing' },
-      description: 'Get the current track for a specific provider runtime.',
+      description: 'Get the currently playing track. Omit provider to check the active session first, then every provider — the right default for "what\'s playing?".',
       handler: async (args, daemon) => {
-        const { provider } = args as { provider: 'spotify' | 'apple' | 'youtube' };
-        return jsonResult({
-          provider,
-          track: await daemon.getNowPlaying(provider),
-        });
+        const { provider } = args as { provider?: 'spotify' | 'apple' | 'youtube' };
+        if (provider) {
+          return jsonResult({
+            provider,
+            track: await daemon.getNowPlaying(provider),
+          });
+        }
+
+        // Active session wins: its current track carries provider context.
+        try {
+          const status = await daemon.getStatus();
+          const sessionTrack = status.session?.isActive ? status.session.currentTrack : null;
+          if (sessionTrack) {
+            return jsonResult({
+              provider: status.session?.provider ?? null,
+              source: 'session',
+              track: sessionTrack,
+            });
+          }
+        } catch {
+          // Fall through to the provider fan-out below.
+        }
+
+        const providers: Array<'spotify' | 'apple' | 'youtube'> = ['spotify', 'apple', 'youtube'];
+        const tracks = await Promise.all(providers.map(async (name) => {
+          try {
+            return await daemon.getNowPlaying(name);
+          } catch {
+            return null;
+          }
+        }));
+        const index = tracks.findIndex((track) => track !== null);
+        if (index === -1) {
+          return jsonResult({ provider: null, track: null });
+        }
+        return jsonResult({ provider: providers[index], track: tracks[index] });
       },
       name: 'get_now_playing',
       schema: z.object({
-        provider: PROVIDER,
+        provider: PROVIDER.optional().describe('Omit to auto-detect across the session and all providers'),
       }),
+      write: false,
+    },
+    {
+      annotations: { openWorldHint: false, readOnlyHint: true, title: 'List Devices' },
+      description: 'List available Spotify playback devices. Use when playback fails with "no active device", then activate one with use_device.',
+      handler: async (_args, daemon) => jsonResult(await daemon.listDevices()),
+      name: 'list_devices',
       write: false,
     },
     {
@@ -299,6 +337,133 @@ export function getMusicToolSpecs(): MusicToolSpec[] {
       name: 'pause_music',
       schema: z.object({
         provider: PROVIDER,
+      }),
+      write: true,
+    },
+    {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Resume Music',
+      },
+      description: 'Resume paused playback on a provider. Not supported for YouTube browser-handoff.',
+      handler: async (args, daemon) => {
+        const { provider } = args as { provider: 'spotify' | 'apple' };
+        return jsonResult(await daemon.resumeMusic(provider));
+      },
+      name: 'resume_music',
+      schema: z.object({
+        provider: z.enum(['spotify', 'apple']),
+      }),
+      write: true,
+    },
+    {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Set Volume',
+      },
+      description: 'Set Spotify playback volume (0-100). Spotify only — Apple and YouTube playback have no daemon volume control.',
+      handler: async (args, daemon) => {
+        const { volumePercent } = args as { volumePercent: number };
+        return jsonResult(await daemon.setVolume(volumePercent));
+      },
+      name: 'set_volume',
+      schema: z.object({
+        volumePercent: z.number().int().min(0).max(100),
+      }),
+      write: true,
+    },
+    {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Seek',
+      },
+      description: 'Seek to a position (milliseconds) in the current Spotify track. Spotify only.',
+      handler: async (args, daemon) => {
+        const { positionMs } = args as { positionMs: number };
+        return jsonResult(await daemon.seek(positionMs));
+      },
+      name: 'seek',
+      schema: z.object({
+        positionMs: z.number().int().min(0),
+      }),
+      write: true,
+    },
+    {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Set Shuffle',
+      },
+      description: 'Turn Spotify shuffle on or off. Spotify only.',
+      handler: async (args, daemon) => {
+        const { state } = args as { state: boolean };
+        return jsonResult(await daemon.setShuffle(state));
+      },
+      name: 'set_shuffle',
+      schema: z.object({
+        state: z.boolean(),
+      }),
+      write: true,
+    },
+    {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Set Repeat',
+      },
+      description: 'Set Spotify repeat mode: off, track (repeat one), or context (repeat album/playlist). Spotify only.',
+      handler: async (args, daemon) => {
+        const { state } = args as { state: 'off' | 'track' | 'context' };
+        return jsonResult(await daemon.setRepeat(state));
+      },
+      name: 'set_repeat',
+      schema: z.object({
+        state: z.enum(['off', 'track', 'context']),
+      }),
+      write: true,
+    },
+    {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Add To Queue',
+      },
+      description: 'Add a track to the playback queue without interrupting the current track. Spotify (spotify:track:... URI) or YouTube (video URL/ID).',
+      handler: async (args, daemon) => {
+        const { provider, uri } = args as { provider: 'spotify' | 'youtube'; uri: string };
+        return jsonResult(await daemon.addToQueue(provider, uri));
+      },
+      name: 'add_to_queue',
+      schema: z.object({
+        provider: z.enum(['spotify', 'youtube']),
+        uri: z.string().min(1),
+      }),
+      write: true,
+    },
+    {
+      annotations: {
+        destructiveHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+        title: 'Use Device',
+      },
+      description: 'Transfer Spotify playback to a device (get IDs from list_devices). Fixes "no active device" errors.',
+      handler: async (args, daemon) => {
+        const { deviceId } = args as { deviceId: string };
+        return jsonResult(await daemon.useDevice(deviceId));
+      },
+      name: 'use_device',
+      schema: z.object({
+        deviceId: z.string().min(1),
       }),
       write: true,
     },

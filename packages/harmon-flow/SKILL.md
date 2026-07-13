@@ -26,8 +26,8 @@ This package is what an AI assistant talks to when it wants to play music. Both 
 
 | Mode | Start | Endpoint |
 |------|-------|----------|
-| stdio (default) | `node ./dist/mcp/cli.js` or `pnpm start:mcp` (repo root) | stdin/stdout |
-| Streamable HTTP | `node ./dist/mcp/cli.js --transport http` or `pnpm start:mcp:http` (repo root) | `http://127.0.0.1:17400/mcp` (health: `/healthz`) |
+| stdio (default) | `harmon-mcp` (installed bin), `node ./dist/mcp/cli.js`, or `pnpm start:mcp` (repo root) | stdin/stdout |
+| Streamable HTTP | `harmon-mcp --transport http` or `pnpm start:mcp:http` (repo root) | `http://127.0.0.1:17400/mcp` (health: `/healthz`) |
 
 CLI flags: `--transport stdio|http`, `--host`, `--port`, `--path`, `--flow-dir`. Env equivalents: `HARMON_MCP_TRANSPORT`, `HARMON_MCP_HOST`, `HARMON_MCP_PORT`, `HARMON_MCP_PATH`, `HARMON_FLOW_DIR`.
 
@@ -57,7 +57,8 @@ Read tools — always visible:
 | `get_library_tracks` | `provider`, `limit` (1-25) | Saved/liked tracks. |
 | `list_playlists` | `provider`, `limit` (1-25) | User playlists. |
 | `get_playlist_tracks` | `provider`, `playlistId`, `limit` (1-50) | Tracks in a playlist. |
-| `get_now_playing` | `provider` | Current track for that provider runtime. |
+| `get_now_playing` | `provider?` | Current track. Omit `provider` (the right default for "what's playing?"): checks the active session first, then scans all providers and returns the first hit with its provider. |
+| `list_devices` | — | Available Spotify playback devices. Use when playback fails with "no active device", then `use_device`. |
 
 Write tools (playback, sessions, auth, recognition):
 
@@ -66,8 +67,15 @@ Write tools (playback, sessions, auth, recognition):
 | `smart_play` | `query?`, `uri?`, `provider?` | The "just play it" tool. Searches connected providers, plays first match. Returns `needsAuth` + an auth URL/hint when the requested provider needs login. Needs `query` or `uri`. |
 | `play_music` | `provider`, `target?` (URI/URL), `query?`, `kind` (track\|song) | Play on a specific provider. `target` accepts `spotify:track:...`, Apple Music URL, or YouTube URL; a bare `query` is resolved via search first. Apple REQUIRES a direct URL — the tool refuses query-only Apple playback. |
 | `pause_music` | `provider` | Pause. YouTube browser-handoff mode does not support pause (tool errors). |
+| `resume_music` | `provider` (spotify\|apple) | Resume paused playback. Not available for YouTube browser-handoff. |
 | `next_track` | `provider` | Skip forward. |
 | `previous_track` | `provider` | Skip back. |
+| `add_to_queue` | `provider` (spotify\|youtube), `uri` | Queue a track without interrupting the current one. |
+| `set_volume` | `volumePercent` (0-100) | Spotify only. |
+| `seek` | `positionMs` | Seek within the current Spotify track. Spotify only. |
+| `set_shuffle` | `state` (boolean) | Spotify only. |
+| `set_repeat` | `state` (off\|track\|context) | Spotify only. `context` repeats the album/playlist. |
+| `use_device` | `deviceId` (from `list_devices`) | Transfer Spotify playback to a device — fixes "no active device". |
 | `start_session` | `policy` (SessionPolicy from @sriinnu/harmon-protocol) | Start a policy-driven session (mode, hard constraints, soft weights incl. `targetEnergy`, sources, queue). |
 | `nudge_session` | `direction` (calmer\|sharper), `amount?` (0-1), `reason?` | Shift the active session's energy target. |
 | `stop_session` | — | Stop the active session. |

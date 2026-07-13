@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * CLI entrypoint for stdio and remote MCP server modes.
  */

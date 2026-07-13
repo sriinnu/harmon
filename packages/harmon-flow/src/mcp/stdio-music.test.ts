@@ -42,6 +42,32 @@ describe('HarmonFlowMCPServer music tools (stdio surface)', () => {
     await close();
   });
 
+  it('answers "what is playing?" without a provider by scanning session then providers', async () => {
+    const probed: string[] = [];
+    const daemonClient = createFakeDaemonClient({
+      async getStatus() {
+        return { isRunning: true, providers: {}, session: null, spotifyConnected: false, version: '0.0.0-test' } as never;
+      },
+      async getNowPlaying(provider) {
+        probed.push(provider);
+        return provider === 'youtube'
+          ? { artist: 'Artist', durationMs: 1000, id: 'yt-1', name: 'Track', provider: 'youtube' } as never
+          : null;
+      },
+    });
+    const { client, close } = await connect(daemonClient, tempDirs);
+
+    const result = await client.callTool({ arguments: {}, name: 'get_now_playing' });
+    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0]!.text) as {
+      provider: string; track: { id: string };
+    };
+    expect(parsed.provider).toBe('youtube');
+    expect(parsed.track.id).toBe('yt-1');
+    expect(probed).toEqual(['spotify', 'apple', 'youtube']);
+
+    await close();
+  });
+
   it('plays music through the daemon client with validated arguments', async () => {
     const smartPlayCalls: Array<Record<string, unknown>> = [];
     const daemonClient = createFakeDaemonClient({
