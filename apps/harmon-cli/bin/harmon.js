@@ -3,6 +3,14 @@
  * Harmon CLI entry point
  */
 
+// Pick up ./.env (HARMON_API_TOKEN, HARMON_ENDPOINT, ...) when run from a
+// project directory; exported variables take precedence, missing file is fine.
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env present
+}
+
 import { Command, InvalidArgumentError } from 'commander';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
