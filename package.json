@@ -43,7 +43,8 @@
     "verify:pack": "node --experimental-strip-types ./scripts/verify-packages.ts",
     "publish:all": "pnpm --filter @sriinnu/harmon publish --no-git-checks",
     "publish:dry": "pnpm --filter @sriinnu/harmon publish --dry-run --no-git-checks",
-    "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml}\""
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml}\"",
+    "menubar": "swift run --package-path apps/harmon-menubar -c release HarmonMenubar"
   },
   "devDependencies": {
     "@types/node": "^25.0.9",

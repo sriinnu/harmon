@@ -79,7 +79,7 @@ import {
   type CredentialLoadFlags,
 } from './credential-stores.js';
 import { createYouTubeAuth, type YouTubeAuth } from './youtube-auth.js';
-import { createAppleAuth, type AppleAuth } from './apple-auth.js';
+import { createAppleAuth, mintAppleDeveloperToken, type AppleAuth } from './apple-auth.js';
 import {
   validateSessionPolicyForProvider,
   normalizeSessionPolicy,
@@ -127,6 +127,8 @@ interface DaemonConfig {
   enableSSE?: boolean;
   apiToken?: string;
   corsOrigins?: string[];
+  /** Override for POST /v1/daemon/stop (tests inject a spy; default exits the process). */
+  onShutdownRequest?: () => void;
 }
 
 function parsePort(value?: string): number | undefined {
@@ -208,7 +210,7 @@ export class Harmond implements DaemonContext {
   private isPolling = false;
   private sessionStartInFlight = false;
 
-  constructor(config: DaemonConfig = {}) {
+  constructor(private readonly config: DaemonConfig = {}) {
     const envPort = parsePort(process.env.HARMON_PORT);
     const envHost = process.env.HARMON_BIND_ADDRESS;
     const envDbPath = process.env.HARMON_DB_PATH;
@@ -296,7 +298,28 @@ export class Harmond implements DaemonContext {
     this.registerRuntime(this.spotifyRuntime);
 
     // ── Apple Music provider init ──────────────────────────────────────
-    const appleDeveloperToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
+    let appleDeveloperToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
+    // Auto-JWT: with MusicKit key material and no static token, mint the
+    // developer token here so the client (and thus the whole Apple provider)
+    // exists — otherwise TEAM_ID/KEY_ID/PRIVATE_KEY setups stay 'missing'.
+    if (!appleDeveloperToken
+      && process.env.APPLE_MUSIC_TEAM_ID
+      && process.env.APPLE_MUSIC_KEY_ID
+      && process.env.APPLE_MUSIC_PRIVATE_KEY) {
+      try {
+        appleDeveloperToken = mintAppleDeveloperToken(
+          process.env.APPLE_MUSIC_TEAM_ID,
+          process.env.APPLE_MUSIC_KEY_ID,
+          process.env.APPLE_MUSIC_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        );
+        this.logger.info('Apple Music developer token minted from key material');
+      } catch (error) {
+        this.logger.warn(
+          { error: error instanceof Error ? error.message : String(error) },
+          'Apple Music developer token generation failed',
+        );
+      }
+    }
     const appleUserToken = process.env.APPLE_MUSIC_USER_TOKEN;
     this.appleRemoteToken = process.env.APPLE_MUSIC_REMOTE_TOKEN;
     const appleRemotePlaybackEnabled =
@@ -582,6 +605,25 @@ export class Harmond implements DaemonContext {
   getActiveRuntime(): ProviderRuntime | null {
     const provider = this.getActiveProvider();
     return provider ? this.getRuntime(provider) : null;
+  }
+
+  /**
+   * Gracefully shut the daemon down on request (POST /v1/daemon/stop).
+   * The response is flushed first; then the normal stop path runs.
+   */
+  requestShutdown(): void {
+    if (this.config.onShutdownRequest) {
+      this.config.onShutdownRequest();
+      return;
+    }
+    this.logger.info('Shutdown requested via API');
+    setTimeout(() => {
+      void this.stop()
+        .catch((error) => {
+          this.logger.error({ error: error instanceof Error ? error.message : String(error) }, 'Shutdown error');
+        })
+        .finally(() => process.exit(0));
+    }, 150);
   }
 
   /**

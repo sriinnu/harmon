@@ -119,6 +119,9 @@ export interface DaemonContext {
   /** Apply a MusicKit user token to the live Apple client (activates library endpoints). */
   applyAppleUserToken(token: string): void;
 
+  /** Request a graceful daemon shutdown (used by POST /v1/daemon/stop). */
+  requestShutdown(): void;
+
   /** Resolve a provider's read-only MusicProvider (works even without local playback). */
   getReadProvider(provider: MusicProviderName): MusicProvider;
 

@@ -88,11 +88,17 @@ export function applyMiddleware(
 
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 5,
+    max: 10,
     message: { success: false, error: 'Too many authentication attempts' },
-    // Keep the OAuth callbacks outside the auth attempt budget so a
-    // valid browser redirect is not stranded behind earlier retries.
-    skip: (req) => req.path === '/spotify/callback' || req.path === '/youtube/callback',
+    // Exempt the harmless flows: OAuth callbacks (browser redirects,
+    // state-protected) and login-URL/logout requests — fetching a login URL
+    // is not brute-forceable, and budgeting it like one locks users out of
+    // their own auth for 15 minutes after a few retries.
+    skip: (req) =>
+      req.path === '/spotify/callback' ||
+      req.path === '/youtube/callback' ||
+      req.path.endsWith('/login') ||
+      req.path.endsWith('/logout'),
   });
 
   const commandLimiter = rateLimit({

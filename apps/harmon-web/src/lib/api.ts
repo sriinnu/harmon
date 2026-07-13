@@ -113,6 +113,9 @@ export class HarmonClient {
   // Auth
   async spotifyLogin(): Promise<{ url: string }> { return this.post('/v1/auth/spotify/login'); }
   async spotifyLogout(): Promise<void> { return this.post('/v1/auth/spotify/logout'); }
+  /** Spotify access token for the Web Playback SDK (browser-as-device). */
+  async getSpotifyPlaybackToken(): Promise<{ accessToken: string }> { return this.request('/v1/spotify/playback-token'); }
+  async useDevice(deviceId: string): Promise<void> { return this.post('/v1/device/use', { deviceId }); }
   async youtubeLogin(): Promise<{ url: string }> { return this.post('/v1/auth/youtube/login'); }
   async youtubeLogout(): Promise<void> { return this.post('/v1/auth/youtube/logout'); }
   async appleSetToken(token: string): Promise<void> { return this.post('/v1/auth/apple/set-user-token', { token }); }

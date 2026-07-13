@@ -196,30 +196,7 @@ class AppleAuthImpl implements AppleAuth {
   }
 
   private generateDeveloperToken(): string {
-    try {
-      const header = Buffer.from(
-        JSON.stringify({ alg: 'ES256', kid: this.keyId }),
-      ).toString('base64url');
-      const now = Math.floor(Date.now() / 1000);
-      const payload = Buffer.from(
-        JSON.stringify({ iss: this.teamId, iat: now, exp: now + this.tokenTtlSeconds }),
-      ).toString('base64url');
-
-      const signingInput = `${header}.${payload}`;
-      const signer = createSign('SHA256');
-      signer.update(signingInput);
-      signer.end();
-      const signature = signer.sign(
-        { key: createPrivateKey(this.privateKey!), dsaEncoding: 'ieee-p1363' },
-      );
-
-      return `${signingInput}.${signature.toString('base64url')}`;
-    } catch (error) {
-      throw new Error(
-        `Failed to generate Apple Music developer token: ${error instanceof Error ? error.message : String(error)}. ` +
-        'Verify APPLE_MUSIC_PRIVATE_KEY is a valid ES256 PEM key.',
-      );
-    }
+    return mintAppleDeveloperToken(this.teamId!, this.keyId!, this.privateKey!, this.tokenTtlSeconds);
   }
 
   private async regenerateAndPersist(): Promise<void> {
@@ -254,4 +231,41 @@ class AppleAuthImpl implements AppleAuth {
 
 export function createAppleAuth(config: AppleAuthConfig): AppleAuth {
   return new AppleAuthImpl(config);
+}
+
+/**
+ * Mint an Apple Music developer JWT (ES256) from MusicKit key material.
+ * Pure and synchronous so the daemon constructor can build the Apple client
+ * without a static APPLE_MUSIC_DEVELOPER_TOKEN.
+ */
+export function mintAppleDeveloperToken(
+  teamId: string,
+  keyId: string,
+  privateKey: string,
+  ttlSeconds = 60 * 60 * 24 * 180,
+): string {
+  try {
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'ES256', kid: keyId }),
+    ).toString('base64url');
+    const now = Math.floor(Date.now() / 1000);
+    const payload = Buffer.from(
+      JSON.stringify({ iss: teamId, iat: now, exp: now + ttlSeconds }),
+    ).toString('base64url');
+
+    const signingInput = `${header}.${payload}`;
+    const signer = createSign('SHA256');
+    signer.update(signingInput);
+    signer.end();
+    const signature = signer.sign(
+      { key: createPrivateKey(privateKey), dsaEncoding: 'ieee-p1363' },
+    );
+
+    return `${signingInput}.${signature.toString('base64url')}`;
+  } catch (error) {
+    throw new Error(
+      `Failed to generate Apple Music developer token: ${error instanceof Error ? error.message : String(error)}. ` +
+      'Verify APPLE_MUSIC_PRIVATE_KEY is a valid ES256 PEM key.',
+    );
+  }
 }

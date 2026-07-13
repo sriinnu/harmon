@@ -109,6 +109,23 @@ export function registerSpotifyRoutes(app: Application, ctx: DaemonContext): voi
     }
   });
 
+  // Playback token for the Web Playback SDK: lets an authenticated web
+  // client register the browser as a Spotify Connect device ("Harmon
+  // Player"). Bearer-gated like every /v1 route; returns the user's own
+  // current access token.
+  app.get('/v1/spotify/playback-token', async (_req: Request, res: Response) => {
+    try {
+      const accessToken = await ctx.spotifyAuth.getAccessToken();
+      if (!accessToken) {
+        res.status(503).json({ success: false, error: 'Spotify is not connected. Log in first.', code: 'PROVIDER_UNAVAILABLE' });
+        return;
+      }
+      res.json({ accessToken });
+    } catch (error) {
+      ctx.handleRouteError(res, error);
+    }
+  });
+
   // Now playing
   app.get('/v1/spotify/now-playing', async (_req: Request, res: Response) => {
     try {

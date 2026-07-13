@@ -11,7 +11,20 @@
  *   npx @sriinnu/harmon harmond # Via npx
  */
 
-import { createDaemon } from '../../../apps/harmond/src/index.ts';
+// Load ./.env before the daemon module is imported (module-level constants
+// read process.env at load time); exported variables take precedence.
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env present
+}
+
+// Secrets still missing after env + .env fall back to the macOS Keychain
+// (service "harmon", account = variable name).
+const { loadKeychainSecrets } = await import('./keychain-env.js');
+loadKeychainSecrets();
+
+const { createDaemon } = await import('../../../apps/harmond/src/index.ts');
 
 let daemon;
 try {

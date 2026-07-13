@@ -107,3 +107,26 @@ describe('harmon CLI runtime helpers', () => {
     });
   });
 });
+
+describe('onboarding validators', () => {
+  it('accepts a valid spotify client id and rejects near-misses', async () => {
+    const { validateSpotifyClientId } = await import('./runtime.js');
+    expect(validateSpotifyClientId('0123456789abcdef0123456789abcdef').ok).toBe(true);
+    expect(validateSpotifyClientId('0123456789abcdef').ok).toBe(false);
+    expect(validateSpotifyClientId('').ok).toBe(false);
+  });
+
+  it('validates google client ids by suffix', async () => {
+    const { validateGoogleClientId } = await import('./runtime.js');
+    expect(validateGoogleClientId('123-abc.apps.googleusercontent.com').ok).toBe(true);
+    expect(validateGoogleClientId('123-abc.example.com').ok).toBe(false);
+  });
+
+  it('catches truncated google client secrets — the real-world failure', async () => {
+    const { validateGoogleClientSecret } = await import('./runtime.js');
+    expect(validateGoogleClientSecret('GOCSPX-' + 'x'.repeat(28)).ok).toBe(true);
+    // one char short: the truncated-paste case that produces invalid_client
+    expect(validateGoogleClientSecret('GOCSPX-' + 'x'.repeat(27)).ok).toBe(false);
+    expect(validateGoogleClientSecret('BADPREFIX-' + 'x'.repeat(25)).ok).toBe(false);
+  });
+});

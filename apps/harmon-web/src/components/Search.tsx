@@ -76,11 +76,16 @@ function TrackCard({ track, provider, client }: { track: SearchResultItem; provi
   const imageUrl = albumObj?.images?.[0]?.url || track.imageUrl || track.artwork?.url || '';
   const uri = track.uri || track.url || '';
 
+  const [error, setError] = useState<string | null>(null);
+
   const play = async () => {
+    setError(null);
     try {
+      // For youtube the daemon performs browser-handoff (opens the watch URL
+      // in the user's default browser) — nothing extra needed client-side.
       await client.play(provider, { uri });
-    } catch {
-      /* ignore */
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Playback failed');
     }
   };
 
@@ -90,6 +95,7 @@ function TrackCard({ track, provider, client }: { track: SearchResultItem; provi
       <div style={{ flex: 1, minWidth: 0 }}>
         <p style={{ fontWeight: 600, fontSize: '0.9em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</p>
         <p style={{ fontSize: '0.8em', color: 'var(--muted)' }}>{artist}{album ? ` · ${album}` : ''}</p>
+        {error && <p className="status-err" style={{ fontSize: '0.75em', marginTop: '0.2em' }}>{error}</p>}
       </div>
       <button onClick={play} style={{ fontSize: '0.8em', padding: '0.3em 0.6em', alignSelf: 'center' }}>Play</button>
     </article>
