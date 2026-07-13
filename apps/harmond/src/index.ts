@@ -325,7 +325,10 @@ export class Harmond implements DaemonContext {
     const appleRemotePlaybackEnabled =
       typeof this.appleRemoteToken === 'string' &&
       this.appleRemoteToken.length > 0;
-    if (appleRemotePlaybackEnabled) {
+    // The remote bridge serves both the iOS companion (dedicated token) and
+    // the web MusicKit player (main API token, accept-either auth), so it
+    // exists whenever Apple Music is configured at all.
+    if (appleRemotePlaybackEnabled || appleDeveloperToken) {
       this.appleRemoteBridge = createAppleRemoteBridge();
     }
     this.appleCatalogEnabled = Boolean(appleDeveloperToken);
@@ -353,7 +356,7 @@ export class Harmond implements DaemonContext {
         ? createAppleMusicPlaybackController(this.appleMusicClient)
         : undefined;
     const appleRemotePlayback =
-      appleRemotePlaybackEnabled && this.appleRemoteBridge
+      this.appleRemoteBridge
         ? createAppleRemotePlaybackController({
             bridge: this.appleRemoteBridge,
             client: this.appleMusicClient,

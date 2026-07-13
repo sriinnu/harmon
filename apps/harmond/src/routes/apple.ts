@@ -249,6 +249,25 @@ export function registerAppleRoutes(app: Application, ctx: DaemonContext): void 
   });
 
   // ── Apple Remote (companion bridge) ────────────────────────────────
+  // Developer token for MusicKit JS: lets an authenticated web client run
+  // the in-browser Apple Music player. Bearer-gated like every /v1 route.
+  app.get('/v1/apple/developer-token', async (_req: Request, res: Response) => {
+    try {
+      if (!ctx.appleAuth) {
+        res.status(503).json({ success: false, error: 'Apple Music auth not configured', code: 'PROVIDER_UNAVAILABLE' });
+        return;
+      }
+      const developerToken = await ctx.appleAuth.getDeveloperToken();
+      if (!developerToken) {
+        res.status(503).json({ success: false, error: 'No Apple Music developer token available.', code: 'PROVIDER_UNAVAILABLE' });
+        return;
+      }
+      res.json({ developerToken });
+    } catch (error) {
+      ctx.handleRouteError(res, error);
+    }
+  });
+
   app.get('/v1/apple/remote/status', async (_req: Request, res: Response) => {
     try {
       res.json(ctx.getAppleRemoteBridge().getStatus());
