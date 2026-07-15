@@ -65,7 +65,29 @@ else
   echo "▸ Icon skipped (SVG render unavailable) — using the system default"
 fi
 
-echo "▸ Signing (ad-hoc)…"
-codesign --force --deep -s - "$APP_BUNDLE" > /dev/null 2>&1 || echo "  (codesign unavailable — unsigned bundle)"
+# Signing: Developer ID + notarization when credentials are provided
+# (CI release builds); ad-hoc otherwise (local dev — fine on this machine,
+# Gatekeeper-blocked on others).
+if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+  echo "▸ Signing ($CODESIGN_IDENTITY)…"
+  codesign --force --deep --options runtime --timestamp -s "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+  if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
+    echo "▸ Notarizing (this takes a few minutes)…"
+    NOTARIZE_ZIP="$(mktemp -d)/Harmon.zip"
+    ditto -c -k --keepParent "$APP_BUNDLE" "$NOTARIZE_ZIP"
+    xcrun notarytool submit "$NOTARIZE_ZIP" \
+      --apple-id "$APPLE_ID" \
+      --team-id "$APPLE_TEAM_ID" \
+      --password "$APPLE_APP_PASSWORD" \
+      --wait
+    xcrun stapler staple "$APP_BUNDLE"
+    echo "▸ Notarized and stapled"
+  else
+    echo "▸ Notarization skipped (set APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD)"
+  fi
+else
+  echo "▸ Signing (ad-hoc)…"
+  codesign --force --deep -s - "$APP_BUNDLE" > /dev/null 2>&1 || echo "  (codesign unavailable — unsigned bundle)"
+fi
 
 echo "✓ Built: $APP_BUNDLE"

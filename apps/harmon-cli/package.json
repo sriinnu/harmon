@@ -1,6 +1,6 @@
 {
   "name": "@sriinnu/harmon",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Harmon \u2014 CLI + daemon for policy-driven music sessions across Spotify, Apple Music, and YouTube Music",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -52,6 +52,7 @@
     "@types/node": "^25.0.8",
     "esbuild": "^0.27.4",
     "typescript": "^5.9.3",
-    "@sriinnu/harmond": "workspace:*"
+    "@sriinnu/harmond": "workspace:*",
+    "@sriinnu/harmon-web": "workspace:*"
   }
 }

@@ -58,6 +58,22 @@ jobs:
       - name: Test
         run: cd apps/harmon-companion && swift test --disable-sandbox
 
+  verify-menubar:
+    name: Swift Menubar
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app || sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build
+        run: cd apps/harmon-menubar && swift build
+
+      - name: Test
+        run: cd apps/harmon-menubar && swift test
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest

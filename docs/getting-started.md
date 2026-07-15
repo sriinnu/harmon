@@ -120,9 +120,14 @@ harmon listen --play                      # hear it, identify it, play it
 
 ## 6. Test the web player
 
-```bash
-pnpm start:web                            # http://127.0.0.1:4173
+The daemon serves the web player itself — no separate server:
+
 ```
+http://127.0.0.1:17373/app
+```
+
+(For web development with hot reload, `pnpm start:web` still serves a
+standalone copy at http://127.0.0.1:4173.)
 
 Walk the onboarding wizard: daemon URL + API token → connection should go live **without a page reload**. To paste the token quickly: `grep '^HARMON_API_TOKEN' .env | cut -d= -f2- | pbcopy`. Once a working connection exists, the app treats the daemon as the source of truth — already-connected providers show "Connected ✓" and the wizard never re-asks. Then try search on each provider tab and a smart-play (with the Auto/provider selector). When connected, the connection/token panels collapse into a "● Connected" bar — expand them via **Settings** (per-provider Disconnect, plus "Reset web app" which clears only this browser).
 
