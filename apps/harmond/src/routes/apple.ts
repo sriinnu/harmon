@@ -211,6 +211,7 @@ export function registerAppleRoutes(app: Application, ctx: DaemonContext): void 
       const url = parseBodyString(req.body?.url);
       await ctx.assertProviderReady('apple', 'starting Apple Music playback');
       const playback = ctx.getPlaybackRuntime('apple').playback;
+      await ctx.pauseOtherProviders('apple');
       await playback.play(url ? { uri: url } : undefined);
       res.json({ success: true });
     } catch (error) {
@@ -263,6 +264,27 @@ export function registerAppleRoutes(app: Application, ctx: DaemonContext): void 
         return;
       }
       res.json({ developerToken });
+    } catch (error) {
+      ctx.handleRouteError(res, error);
+    }
+  });
+
+  // Seek within the current track. Remote players (browser/iOS) only — the
+  // local AppleScript path has no reliable position control.
+  app.post('/v1/apple/seek', async (req: Request, res: Response) => {
+    try {
+      const positionMs = Number(req.body?.positionMs);
+      if (!Number.isFinite(positionMs) || positionMs < 0) {
+        res.status(400).json({ success: false, error: 'positionMs must be a non-negative number' });
+        return;
+      }
+      const bridge = ctx.getAppleRemoteBridge();
+      if (!bridge.isConnected()) {
+        res.status(501).json({ success: false, error: 'Seek needs a connected Apple remote player (browser tab or iOS companion).' });
+        return;
+      }
+      bridge.queueCommand({ type: 'seek', positionMs: Math.round(positionMs) });
+      res.json({ success: true });
     } catch (error) {
       ctx.handleRouteError(res, error);
     }

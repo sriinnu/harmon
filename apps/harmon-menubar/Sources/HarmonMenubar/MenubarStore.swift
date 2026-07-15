@@ -11,11 +11,30 @@ final class MenubarStore {
     var daemonUp = false
     var providers: [String: ProviderStatus] = [:]
     var session: SessionInfo?
-    var nowPlaying: TrackInfo?
+    var nowPlaying: TrackInfo? {
+        didSet {
+            if oldValue?.id != nowPlaying?.id { isPausedOptimistic = false }
+            // Anchor for the progress wire: position data ages between polls,
+            // so the UI extrapolates from when it arrived.
+            if oldValue?.positionMs != nowPlaying?.positionMs || oldValue?.id != nowPlaying?.id {
+                nowPlayingReceivedAt = Date()
+            }
+        }
+    }
+    /// When the current nowPlaying (and its positionMs) was fetched.
+    var nowPlayingReceivedAt = Date()
+    /// Providers don't report play/pause state uniformly, so track the last
+    /// transport tap — it drives the play⇄pause toggle everywhere. Resets on
+    /// track change.
+    var isPausedOptimistic = false
     var activeProvider: String?
     var lastError: String?
     /// Provider with an OAuth round-trip in flight ("waiting for browser").
     var connecting: String?
+    /// Daemon lifecycle change in flight — drives the power button's spinner.
+    var daemonTransition: DaemonTransition?
+
+    enum DaemonTransition { case starting, stopping }
     /// User-chosen playback target for smart-play and transport; nil = Auto.
     var preferredProvider: String? {
         didSet { UserDefaults.standard.set(preferredProvider, forKey: "harmon.preferredProvider") }
@@ -33,6 +52,11 @@ final class MenubarStore {
     /// Repo checkout path used to launch harmond from the menubar.
     var repoPath: String {
         didSet { UserDefaults.standard.set(repoPath, forKey: "harmon.repoPath") }
+    }
+
+    /// Dynamic-Island-style now-playing HUD around the MacBook notch.
+    var notchIslandEnabled: Bool {
+        didSet { UserDefaults.standard.set(notchIslandEnabled, forKey: "harmon.notchIsland") }
     }
 
     private var pollTask: Task<Void, Never>?
@@ -54,6 +78,7 @@ final class MenubarStore {
             ?? (cwdLooksLikeRepo ? cwd : "")
 
         preferredProvider = defaults.string(forKey: "harmon.preferredProvider")
+        notchIslandEnabled = defaults.object(forKey: "harmon.notchIsland") as? Bool ?? true
 
         adoptTokenFromEnvFile()
     }
@@ -211,11 +236,13 @@ final class MenubarStore {
 
     func play() {
         guard let provider = transportProvider else { return }
+        isPausedOptimistic = false
         perform { try await $0.play(provider: provider) }
     }
 
     func pause() {
         guard let provider = transportProvider, provider != "youtube" else { return }
+        isPausedOptimistic = true
         perform { try await $0.pause(provider: provider) }
     }
 
@@ -231,6 +258,17 @@ final class MenubarStore {
 
     func setVolume(_ percent: Int) {
         perform { try await $0.setVolume(percent) }
+    }
+
+    /// Scrub within the current track (apple remote / spotify only).
+    func seek(toMs positionMs: Double) {
+        guard let provider = transportProvider, provider != "youtube" else { return }
+        // Optimistic: move the wire immediately; the next poll confirms.
+        if var track = nowPlaying {
+            track.positionMs = positionMs
+            nowPlaying = track
+        }
+        perform { try await $0.seek(provider: provider, positionMs: Int(positionMs)) }
     }
 
     func smartPlay(_ query: String) {
@@ -270,18 +308,25 @@ final class MenubarStore {
         }
     }
 
-    /// Ask the daemon to shut down gracefully via its own API.
+    /// Ask the daemon to shut down gracefully via its own API. Shutdown
+    /// drains sockets for a few seconds, so poll until it's actually gone —
+    /// otherwise the panel keeps saying "running" and the click looks dead.
     func stopDaemon() {
         let client = client
+        daemonTransition = .stopping
         Task {
             do {
                 try await client.stopDaemon()
                 lastError = nil
-                try? await Task.sleep(for: .seconds(1))
-                await refresh()
+                for _ in 0 ..< 10 {
+                    try? await Task.sleep(for: .seconds(1))
+                    await refresh()
+                    if !daemonUp { break }
+                }
             } catch {
                 lastError = error.localizedDescription
             }
+            daemonTransition = nil
         }
     }
 
@@ -299,28 +344,72 @@ final class MenubarStore {
             return
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["node", entry]
-        process.currentDirectoryURL = URL(fileURLWithPath: repo)
-        let log = FileHandle(forWritingAtPath: "/tmp/harmond-menubar.log")
-            ?? { FileManager.default.createFile(atPath: "/tmp/harmond-menubar.log", contents: nil)
-                 return FileHandle(forWritingAtPath: "/tmp/harmond-menubar.log")! }()
-        process.standardOutput = log
-        process.standardError = log
-        do {
-            try process.run()
-            lastError = nil
-            Task {
+        daemonTransition = .starting
+        Task {
+            guard let node = await Self.nodePath() else {
+                lastError = "Couldn't find node — install Node.js (brew install node) or add it to your login shell's PATH."
+                daemonTransition = nil
+                return
+            }
+
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: node)
+            process.arguments = [entry]
+            process.currentDirectoryURL = URL(fileURLWithPath: repo)
+            if let log = Self.openLog("/tmp/harmond-menubar.log") {
+                process.standardOutput = log
+                process.standardError = log
+            }
+            do {
+                try process.run()
+                lastError = nil
                 for _ in 0 ..< 10 {
                     try? await Task.sleep(for: .seconds(1))
                     await refresh()
                     if daemonUp { break }
                 }
+            } catch {
+                lastError = "Failed to launch daemon: \(error.localizedDescription)"
             }
-        } catch {
-            lastError = "Failed to launch daemon: \(error.localizedDescription)"
+            daemonTransition = nil
         }
+    }
+
+    /// Where's node? A Finder-launched app gets a bare PATH (no homebrew, no
+    /// nvm), so `/usr/bin/env node` fails from /Applications. Check the usual
+    /// suspects first, then ask a login shell — it has the user's real PATH.
+    private static var cachedNodePath: String?
+
+    private static func nodePath() async -> String? {
+        if let cached = cachedNodePath { return cached }
+        let resolved = await Task.detached(priority: .userInitiated) { () -> String? in
+            for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
+            where FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+            let shell = Process()
+            shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            shell.arguments = ["-lc", "command -v node"]
+            let pipe = Pipe()
+            shell.standardOutput = pipe
+            shell.standardError = FileHandle.nullDevice
+            guard (try? shell.run()) != nil else { return nil }
+            shell.waitUntilExit()
+            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return output.isEmpty ? nil : output
+        }.value
+        cachedNodePath = resolved
+        return resolved
+    }
+
+    private static func openLog(_ path: String) -> FileHandle? {
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            return handle
+        }
+        FileManager.default.createFile(atPath: path, contents: nil)
+        return FileHandle(forWritingAtPath: path)
     }
 
     func startSession(mode: String) {

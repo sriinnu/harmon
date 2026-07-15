@@ -337,6 +337,8 @@ async function playOnProvider(
     };
   }
 
+  // Switching providers must not leave the previous one playing underneath.
+  await ctx.pauseOtherProviders(provider);
   await runtime.playback.play(options.uri ? { uri: options.uri } : undefined);
   return { success: true, provider };
 }

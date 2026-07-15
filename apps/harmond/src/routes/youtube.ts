@@ -126,6 +126,7 @@ export function registerYouTubeRoutes(app: Application, ctx: DaemonContext): voi
     try {
       const uri = parseBodyString(req.body?.uri);
       const playback = ctx.getPlaybackRuntime('youtube').playback;
+      await ctx.pauseOtherProviders('youtube');
       await playback.play(uri ? { uri } : undefined);
       res.json({ success: true });
     } catch (error) {

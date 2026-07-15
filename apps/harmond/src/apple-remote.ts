@@ -18,7 +18,9 @@ export interface AppleRemoteCommand {
   createdAt: string;
   id: string;
   track?: TrackInfo;
-  type: 'next' | 'pause' | 'play' | 'previous';
+  type: 'next' | 'pause' | 'play' | 'previous' | 'seek';
+  /** Target position for seek commands. */
+  positionMs?: number;
   uri?: string;
 }
 
@@ -302,14 +304,20 @@ class AppleUnifiedPlaybackController implements RuntimePlaybackController {
   }
 
   private getPlaybackTarget(lock: boolean): RuntimePlaybackController {
-    if (this.activeTarget === 'remote' && this.remote && this.isRemoteConnected()) {
+    const remoteReady = this.isRemoteConnected();
+    if (this.activeTarget === 'remote' && this.remote && remoteReady) {
       return this.remote;
     }
-    if (this.activeTarget === 'local' && this.local) {
+    // A local lock must not outlive the reason for it: the lock exists so a
+    // session keeps talking to one surface, but a remote player registering
+    // IS the user saying "play here now". Without this re-check, one
+    // AppleScript fallback (e.g. while the browser tab was throttled or not
+    // yet enabled) pins every future play to Music.app forever.
+    if (this.activeTarget === 'local' && this.local && !remoteReady) {
       return this.local;
     }
 
-    const target = this.isRemoteConnected() && this.remote
+    const target = remoteReady && this.remote
       ? { controller: this.remote, name: 'remote' as const }
       : this.local
         ? { controller: this.local, name: 'local' as const }

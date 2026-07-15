@@ -222,6 +222,8 @@ export const TrackInfo = z.object({
   artistIds: z.array(z.string()).optional(),
   album: z.string(),
   durationMs: z.number(),
+  /** Playback position within the track, when the source reports it. */
+  positionMs: z.number().min(0).optional(),
   uri: z.string().optional(),
   provider: z.enum(['spotify', 'apple', 'youtube', 'local']).optional(),
   imageUrl: z.string().optional(),

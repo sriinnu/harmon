@@ -683,6 +683,28 @@ export class Harmond implements DaemonContext {
     });
   }
 
+  /**
+   * Best-effort: pause every other provider before starting playback on one,
+   * so switching providers never leaves two songs playing over each other.
+   * Failures are ignored — "nothing was playing" is the common case.
+   */
+  async pauseOtherProviders(except: MusicProviderName): Promise<void> {
+    const others: MusicProviderName[] = ['spotify', 'apple', 'youtube'];
+    await Promise.all(
+      others
+        .filter((name) => name !== except)
+        .map(async (name) => {
+          const runtime = this.getRuntime(name);
+          if (!runtime?.playback.supportsPause) return;
+          try {
+            await runtime.playback.pause();
+          } catch {
+            // Not playing, not authenticated, no device — all fine.
+          }
+        }),
+    );
+  }
+
   /** Get a provider's runtime, throwing ProviderUnavailableError if missing. */
   getPlaybackRuntime(provider: MusicProviderName): ProviderRuntime {
     const runtime = this.getRuntime(provider);

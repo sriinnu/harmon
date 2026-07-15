@@ -131,6 +131,9 @@ export interface DaemonContext {
   /** Get a provider's runtime, throwing ProviderUnavailableError if missing. */
   getPlaybackRuntime(provider: MusicProviderName): ProviderRuntime;
 
+  /** Best-effort pause of every provider except the one about to play. */
+  pauseOtherProviders(except: MusicProviderName): Promise<void>;
+
   /** Return the active session engine, or null. */
   getActiveEngine(): SessionEngine | null;
 

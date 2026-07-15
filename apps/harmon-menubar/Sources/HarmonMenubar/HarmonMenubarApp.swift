@@ -3,11 +3,27 @@ import SwiftUI
 
 @main
 struct HarmonMenubarApp: App {
-    @State private var store = MenubarStore()
+    @State private var store: MenubarStore
+    /// Keeps the notch-island panel alive for the app's lifetime.
+    private let island: NotchIslandController
 
     init() {
+        // Singleton: a second copy (installer race, double launch) would mean
+        // two menubar icons and two notch islands. First one wins.
+        if let bundleID = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+               .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            exit(0)
+        }
+
         // Menubar-only: no Dock icon, no main window.
         NSApplication.shared.setActivationPolicy(.accessory)
+        let store = MenubarStore()
+        _store = State(initialValue: store)
+        island = NotchIslandController(store: store)
+        // Poll from launch, not first panel-open — the island and the bar
+        // icon both need live data before the user ever clicks the icon.
+        store.start()
     }
 
     var body: some Scene {

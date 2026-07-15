@@ -79,11 +79,18 @@ export function applyMiddleware(
   // Rate limiting — more generous for a music daemon
   const globalLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
-    max: 120,            // 120/min = 2/sec average
+    max: 300,            // several live surfaces (web, menubar, MCP) poll at once
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, error: 'Too many requests' },
-    skip: (req) => req.path === '/health' || req.path === '/v1/events',
+    // /v1/apple/remote/* is the device-bridge protocol: a registered player
+    // polls commands every ~2s and reports state — that's infrastructure
+    // traffic like /v1/events, not a client to throttle. Starving it makes
+    // playback silently fall back to opening Music.app.
+    skip: (req) =>
+      req.path === '/health' ||
+      req.path === '/v1/events' ||
+      req.path.startsWith('/v1/apple/remote/'),
   });
 
   const authLimiter = rateLimit({

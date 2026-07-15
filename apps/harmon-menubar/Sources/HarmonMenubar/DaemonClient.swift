@@ -89,6 +89,10 @@ struct DaemonClient: Sendable {
         _ = try await request("/v1/spotify/volume", method: "POST", body: ["volumePercent": percent])
     }
 
+    func seek(provider: String, positionMs: Int) async throws {
+        _ = try await request("/v1/\(provider)/seek", method: "POST", body: ["positionMs": positionMs])
+    }
+
     func smartPlay(query: String, provider: String? = nil) async throws {
         var body: [String: Any] = ["query": query]
         if let provider {
