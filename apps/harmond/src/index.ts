@@ -325,7 +325,10 @@ export class Harmond implements DaemonContext {
     const appleRemotePlaybackEnabled =
       typeof this.appleRemoteToken === 'string' &&
       this.appleRemoteToken.length > 0;
-    if (appleRemotePlaybackEnabled) {
+    // The remote bridge serves both the iOS companion (dedicated token) and
+    // the web MusicKit player (main API token, accept-either auth), so it
+    // exists whenever Apple Music is configured at all.
+    if (appleRemotePlaybackEnabled || appleDeveloperToken) {
       this.appleRemoteBridge = createAppleRemoteBridge();
     }
     this.appleCatalogEnabled = Boolean(appleDeveloperToken);
@@ -353,7 +356,7 @@ export class Harmond implements DaemonContext {
         ? createAppleMusicPlaybackController(this.appleMusicClient)
         : undefined;
     const appleRemotePlayback =
-      appleRemotePlaybackEnabled && this.appleRemoteBridge
+      this.appleRemoteBridge
         ? createAppleRemotePlaybackController({
             bridge: this.appleRemoteBridge,
             client: this.appleMusicClient,
@@ -678,6 +681,28 @@ export class Harmond implements DaemonContext {
       recentPlaysMode: 'local',
       store: this.store,
     });
+  }
+
+  /**
+   * Best-effort: pause every other provider before starting playback on one,
+   * so switching providers never leaves two songs playing over each other.
+   * Failures are ignored — "nothing was playing" is the common case.
+   */
+  async pauseOtherProviders(except: MusicProviderName): Promise<void> {
+    const others: MusicProviderName[] = ['spotify', 'apple', 'youtube'];
+    await Promise.all(
+      others
+        .filter((name) => name !== except)
+        .map(async (name) => {
+          const runtime = this.getRuntime(name);
+          if (!runtime?.playback.supportsPause) return;
+          try {
+            await runtime.playback.pause();
+          } catch {
+            // Not playing, not authenticated, no device — all fine.
+          }
+        }),
+    );
   }
 
   /** Get a provider's runtime, throwing ProviderUnavailableError if missing. */

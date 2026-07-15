@@ -144,7 +144,7 @@ Spotify's API is a remote control: something must *be* a player — the desktop 
 
 ```bash
 pnpm menubar          # run from the repo; or install it properly:
-pnpm menubar:install  # → /Applications/Harmon Menubar.app (icon, signed, add to Login Items)
+pnpm menubar:install  # → /Applications/Harmon.app (icon, signed, add to Login Items)
 ```
 
 A note icon appears in the menu bar (green while a track plays, house icon when the daemon is down). The panel gives you: live now-playing with album art, transport + Spotify volume, a "Play anything…" box with an **Auto/Spotify/Apple/YouTube target picker**, session start/nudge/stop, per-provider **Connect** buttons (opens the OAuth browser flow and flips green on approval), and daemon **start/stop**. It adopts `HARMON_API_TOKEN` from the repo's `.env` automatically; endpoint/token/repo-path are editable under ⚙️.

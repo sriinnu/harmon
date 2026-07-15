@@ -21,6 +21,8 @@ struct TrackInfo: Decodable, Equatable {
     var album: String?
     var provider: String?
     var imageUrl: String?
+    var durationMs: Double?
+    var positionMs: Double?
 }
 
 struct SessionInfo: Decodable {

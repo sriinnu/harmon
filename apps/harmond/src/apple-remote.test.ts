@@ -24,6 +24,29 @@ describe('apple-remote', () => {
     expect(remoteCalls).toEqual(['queue:apple:song:local-first']);
   });
 
+  it('hands playback back to a remote player that registers after a local fallback', async () => {
+    const localCalls: string[] = [];
+    const remoteCalls: string[] = [];
+    const bridge = createAppleRemoteBridge();
+    const playback = createAppleUnifiedPlaybackController({
+      bridge,
+      local: createStubPlaybackController(localCalls),
+      remote: createStubPlaybackController(remoteCalls),
+    });
+
+    // No remote yet: play falls back to AppleScript and locks 'local'.
+    await playback.play();
+    expect(localCalls).toEqual(['play']);
+
+    // The browser player registers — the next play must go remote, not stay
+    // pinned to Music.app.
+    bridge.registerCompanion({ deviceId: 'web-1', name: 'Harmon Web Player', platform: 'web' });
+    await playback.play();
+
+    expect(remoteCalls).toEqual(['play']);
+    expect(localCalls).toEqual(['play']);
+  });
+
   it('returns daemon-managed state until the iOS companion reports verified playback', async () => {
     const bridge = createAppleRemoteBridge();
     const playback = createAppleRemotePlaybackController({

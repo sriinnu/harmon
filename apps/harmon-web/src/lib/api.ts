@@ -116,6 +116,21 @@ export class HarmonClient {
   /** Spotify access token for the Web Playback SDK (browser-as-device). */
   async getSpotifyPlaybackToken(): Promise<{ accessToken: string }> { return this.request('/v1/spotify/playback-token'); }
   async useDevice(deviceId: string): Promise<void> { return this.post('/v1/device/use', { deviceId }); }
+
+  // Apple MusicKit web player (speaks the remote-companion bridge protocol)
+  async getAppleDeveloperToken(): Promise<{ developerToken: string }> { return this.request('/v1/apple/developer-token'); }
+  async appleRemoteConnect(deviceId: string, name: string): Promise<any> {
+    return this.post('/v1/apple/remote/connect', { deviceId, name, platform: 'web' });
+  }
+  async appleRemoteCommands(deviceId: string): Promise<{ commands: Array<{ id: string; type: 'next' | 'pause' | 'play' | 'previous' | 'seek'; uri?: string; positionMs?: number }> }> {
+    return this.request(`/v1/apple/remote/commands?deviceId=${encodeURIComponent(deviceId)}`);
+  }
+  async appleRemoteAck(deviceId: string, commandId: string): Promise<void> {
+    return this.post(`/v1/apple/remote/commands/${encodeURIComponent(commandId)}/ack`, { deviceId });
+  }
+  async appleRemoteState(update: { deviceId: string; playbackState?: 'paused' | 'playing' | 'stopped'; currentTrack?: unknown; ackCommandId?: string }): Promise<void> {
+    return this.post('/v1/apple/remote/state', update);
+  }
   async youtubeLogin(): Promise<{ url: string }> { return this.post('/v1/auth/youtube/login'); }
   async youtubeLogout(): Promise<void> { return this.post('/v1/auth/youtube/logout'); }
   async appleSetToken(token: string): Promise<void> { return this.post('/v1/auth/apple/set-user-token', { token }); }

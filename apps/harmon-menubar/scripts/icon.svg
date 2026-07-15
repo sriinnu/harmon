@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2c33"/>
+      <stop offset="1" stop-color="#131316"/>
+    </linearGradient>
+    <linearGradient id="note" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e26a3c"/>
+      <stop offset="1" stop-color="#c8502a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- squircle body -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+
+  <!-- notch motif: tiny island hanging from the top edge, ears and all -->
+  <path d="M 402 100
+           L 622 100
+           Q 606 102 600 116
+           Q 590 140 512 140
+           Q 434 140 424 116
+           Q 418 102 402 100 Z"
+        fill="#000000" opacity="0.6"/>
+
+  <!-- beamed eighth notes -->
+  <g fill="url(#note)">
+    <path d="M 436 316 L 700 280 L 700 352 L 436 388 Z"/>
+    <rect x="436" y="330" width="34" height="344"/>
+    <rect x="666" y="294" width="34" height="344"/>
+    <ellipse cx="408" cy="678" rx="78" ry="57" transform="rotate(-18 408 678)"/>
+    <ellipse cx="638" cy="642" rx="78" ry="57" transform="rotate(-18 638 642)"/>
+  </g>
+</svg>

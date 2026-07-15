@@ -10,6 +10,7 @@ import { SessionPanel } from './components/SessionPanel';
 import { NowPlaying } from './components/NowPlaying';
 import { Search } from './components/Search';
 import { SpotifyWebPlayer } from './components/SpotifyWebPlayer';
+import { AppleWebPlayer } from './components/AppleWebPlayer';
 
 export function App() {
   return (
@@ -79,6 +80,7 @@ function AppShell() {
         )}
         <NowPlaying />
         <SpotifyWebPlayer />
+        <AppleWebPlayer />
         <SmartPlay />
         <SessionPanel />
         <Search />

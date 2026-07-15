@@ -140,6 +140,7 @@ export function registerSpotifyRoutes(app: Application, ctx: DaemonContext): voi
     try {
       const uri = parseBodyString(req.body?.uri);
       const contextUri = parseBodyString(req.body?.contextUri);
+      await ctx.pauseOtherProviders('spotify');
       await ctx.spotifyClient.play({ uri, contextUri });
       res.json({ success: true });
     } catch (error) {

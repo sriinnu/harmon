@@ -45,6 +45,7 @@
     "publish:dry": "pnpm --filter @sriinnu/harmon publish --dry-run --no-git-checks",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml}\"",
     "menubar": "swift run --package-path apps/harmon-menubar -c release HarmonMenubar",
+    "menubar:build": "bash apps/harmon-menubar/scripts/build-app.sh",
     "menubar:install": "bash apps/harmon-menubar/scripts/install-app.sh"
   },
   "devDependencies": {

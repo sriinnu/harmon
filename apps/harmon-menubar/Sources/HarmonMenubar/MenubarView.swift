@@ -37,11 +37,51 @@ struct MenubarView: View {
             footer
         }
         .padding(14)
-        .frame(width: 316)
+        .padding(.horizontal, 12)
+        .frame(width: 340)
+        // Notch effect: the system window is cleared (PanelWindowChrome) and
+        // the Liquid Glass body is clipped to the notch silhouette — hanging
+        // off the menubar with ears, heavy curves at the bottom.
+        .background(panelBackground)
+        .compositingGroup()
+        .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 22)
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear {
+                        // The window exists a beat after the content appears.
+                        let size = proxy.size
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            Self.fitPanelWindow(to: size)
+                        }
+                    }
+                    .onChange(of: proxy.size) { _, newSize in
+                        // Content shrank/grew (daemon toggled, settings…) —
+                        // resize the window or it keeps the stale big box.
+                        Self.fitPanelWindow(to: newSize)
+                    }
+            }
+        )
         .tint(Theme.accent)
         .animation(.smooth(duration: 0.3), value: store.nowPlaying)
         .animation(.smooth(duration: 0.3), value: store.daemonUp)
         .animation(.smooth(duration: 0.25), value: showSettings)
+    }
+
+    private var panelShape: NotchShape {
+        NotchShape(topRadius: 12, bottomRadius: 30)
+    }
+
+    @ViewBuilder
+    private var panelBackground: some View {
+        if #available(macOS 26.0, *) {
+            Color.clear.glassEffect(.regular, in: panelShape)
+        } else {
+            panelShape.fill(.regularMaterial)
+                .overlay(panelShape.stroke(.separator.opacity(0.5)))
+        }
     }
 
     // MARK: Sections
@@ -61,16 +101,25 @@ struct MenubarView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Spacer()
-            if store.daemonUp {
+            if store.daemonTransition != nil {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help(store.daemonTransition == .stopping ? "Stopping the daemon…" : "Starting the daemon…")
+            } else {
                 Button {
-                    store.stopDaemon()
+                    if store.daemonUp {
+                        store.stopDaemon()
+                    } else {
+                        store.startDaemon()
+                    }
                 } label: {
                     Image(systemName: "power")
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(store.daemonUp ? AnyShapeStyle(Theme.ok) : AnyShapeStyle(.secondary))
+                        .shadow(color: store.daemonUp ? Theme.ok.opacity(0.6) : .clear, radius: 3)
                 }
                 .buttonStyle(.plain)
-                .help("Stop the daemon")
+                .help(store.daemonUp ? "Stop the daemon" : "Start the daemon")
             }
             Button {
                 showSettings.toggle()
@@ -124,6 +173,8 @@ struct MenubarView: View {
                         }
                     }
                     .font(.caption2.weight(.medium))
+                    ProgressWire(store: store)
+                        .padding(.top, 3)
                 } else {
                     Text("Nothing playing")
                         .font(.system(.headline, design: .rounded))
@@ -141,29 +192,43 @@ struct MenubarView: View {
     }
 
     private var transportRow: some View {
-        HStack(spacing: 14) {
-            transportButton("backward.fill") { store.previous() }
-            transportButton("play.fill") { store.play() }
-            transportButton("pause.fill") { store.pause() }
-                .disabled(store.transportProvider == "youtube")
-                .help(store.transportProvider == "youtube" ? "YouTube browser-handoff cannot pause" : "Pause")
-            transportButton("forward.fill") { store.next() }
-            Spacer()
-            if store.transportProvider == "spotify" {
-                HStack(spacing: 4) {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Slider(value: $volume, in: 0 ... 100) { editing in
-                        if !editing { store.setVolume(Int(volume)) }
-                    }
-                    .frame(width: 70)
-                    .controlSize(.mini)
+        ZStack {
+            // Transport cluster dead-center; the volume slider floats on the
+            // trailing edge without pushing the buttons around.
+            HStack(spacing: 14) {
+                transportButton("backward.fill") { store.previous() }
+                transportButton(playPauseSymbol) {
+                    if playPauseSymbol == "play.fill" { store.play() } else { store.pause() }
                 }
-                .help("Spotify volume")
+                .help(store.transportProvider == "youtube" ? "YouTube browser-handoff cannot pause" : "Play/Pause")
+                transportButton("forward.fill") { store.next() }
+            }
+            .frame(maxWidth: .infinity)
+            if store.transportProvider == "spotify" {
+                HStack {
+                    Spacer()
+                    HStack(spacing: 4) {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Slider(value: $volume, in: 0 ... 100) { editing in
+                            if !editing { store.setVolume(Int(volume)) }
+                        }
+                        .frame(width: 70)
+                        .controlSize(.mini)
+                    }
+                    .help("Spotify volume")
+                }
             }
         }
         .disabled(store.transportProvider == nil)
+    }
+
+    /// One toggle: play when idle/paused, pause while playing. YouTube's
+    /// browser handoff can't pause, so it stays a play button.
+    private var playPauseSymbol: String {
+        if store.transportProvider == "youtube" { return "play.fill" }
+        return (store.isPausedOptimistic || store.nowPlaying == nil) ? "play.fill" : "pause.fill"
     }
 
     private func transportButton(_ symbol: String, action: @escaping () -> Void) -> some View {
@@ -226,8 +291,8 @@ struct MenubarView: View {
             }
         } label: {
             Text(store.preferredProvider.map(providerShortLabel) ?? "Auto")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(store.preferredProvider == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.accent))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(store.preferredProvider == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -247,8 +312,14 @@ struct MenubarView: View {
                         Button(mode.capitalized) { store.startSession(mode: mode) }
                     }
                 } label: {
-                    Label("Start session", systemImage: "sparkles")
-                        .font(.caption.weight(.medium))
+                    Label {
+                        Text("Start session")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                    } icon: {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(Theme.accent)
+                    }
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -351,6 +422,13 @@ struct MenubarView: View {
             TextField("/path/to/harmon", text: $store.repoPath)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption)
+            Toggle(isOn: $store.notchIslandEnabled) {
+                Text("Notch island (hover the notch while playing)")
+                    .font(.caption)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .padding(.top, 2)
             pillButton("Apply", symbol: "checkmark", prominent: true) {
                 store.restart()
                 Task { await store.refresh() }
@@ -377,6 +455,10 @@ struct MenubarView: View {
             Spacer()
             Button {
                 NSApplication.shared.terminate(nil)
+                // terminate(nil) can be silently deferred for accessory apps
+                // (e.g. a child Process or an open sheet delays it) — never
+                // leave the user with a Quit that looks dead.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { exit(0) }
             } label: {
                 Text("Quit")
                     .font(.caption)
@@ -387,6 +469,43 @@ struct MenubarView: View {
     }
 
     // MARK: Helpers
+
+    /// Make the MenuBarExtra window invisible so only the notch body (and its
+    /// shadow) shows. The window is found by scanning the app's windows — an
+    /// NSViewRepresentable background never gets makeNSView called inside the
+    /// macOS 26 MenuBarExtra panel, so window access via view.window is a
+    /// dead end.
+    /// Fit the MenuBarExtra window to the content and keep it flush against
+    /// the menubar so the notch ears flow out of the bar's bottom edge.
+    /// Without this the window keeps its largest-ever size (SwiftUI doesn't
+    /// shrink it when content changes), leaving a dead glass box around a
+    /// small card.
+    ///
+    /// Note on the faint outer box around the notch: macOS 26 renders the
+    /// panel's Liquid Glass in a separate companion window
+    /// (_NSGlassTrackingWindow) — hiding it or clearing the panel window
+    /// takes the whole glass pipeline down with it (body, cards, dimming),
+    /// so the box stays. Revisit when the OS exposes real chrome control.
+    private static func fitPanelWindow(to contentSize: CGSize) {
+        guard contentSize.width > 0, contentSize.height > 0 else { return }
+        for window in NSApplication.shared.windows {
+            let kind = String(describing: type(of: window))
+            guard kind.contains("MenuBarExtraWindow") else { continue }
+            guard let screen = window.screen ?? NSScreen.main else { continue }
+            let top = screen.visibleFrame.maxY
+            let target = NSRect(
+                x: window.frame.midX - contentSize.width / 2,
+                y: top - contentSize.height,
+                width: contentSize.width,
+                height: contentSize.height
+            )
+            if abs(window.frame.origin.y - target.origin.y) > 0.5
+                || abs(window.frame.height - target.height) > 0.5
+                || abs(window.frame.width - target.width) > 0.5 {
+                window.setFrame(target, display: true, animate: false)
+            }
+        }
+    }
 
     private func submitQuery() {
         store.smartPlay(query)

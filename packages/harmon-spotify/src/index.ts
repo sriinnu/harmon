@@ -787,7 +787,11 @@ class SpotifyClientImpl implements SpotifyClient {
     if (!data || !data.item || data.item.type !== 'track') {
       return null;
     }
-    return mapTrack(data.item);
+    const track = mapTrack(data.item);
+    if (typeof data.progress_ms === 'number') {
+      track.positionMs = data.progress_ms;
+    }
+    return track;
   }
 
   async addToQueue(trackUri: string): Promise<void> {
@@ -1286,6 +1290,7 @@ interface SpotifyDevicesResponse {
 
 interface SpotifyNowPlayingResponse {
   item?: SpotifyTrack;
+  progress_ms?: number | null;
 }
 
 interface SpotifyTrack {
