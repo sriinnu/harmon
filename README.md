@@ -10,6 +10,20 @@ Everything runs on your machine: the daemon binds to loopback by default, creden
 - Full HTTP API reference: [apps/harmond/SKILL.md](apps/harmond/SKILL.md)
 - Full MCP tool reference: [packages/harmon-flow/SKILL.md](packages/harmon-flow/SKILL.md)
 
+## Install
+
+```bash
+npm i -g @sriinnu/harmon     # harmon (CLI) + harmond (daemon) + harmon-mcp (MCP server)
+harmon init                  # guided setup: provider keys, secrets, first login
+harmond                      # daemon on 127.0.0.1:17373 — web player at /app
+```
+
+The web player is served by the daemon itself at `http://127.0.0.1:17373/app`.
+macOS users also get the menubar app + notch island: grab `Harmon.app.zip`
+from the [latest release](https://github.com/sriinnu/harmon/releases), or in
+a repo checkout run `pnpm menubar:install`. You bring your own provider API
+keys (free) — `harmon init` walks through each one.
+
 ## System shape
 
 ```

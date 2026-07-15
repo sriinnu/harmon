@@ -12,7 +12,7 @@
  */
 
 import { build, type Plugin } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -122,7 +122,17 @@ async function bundle() {
     },
   });
 
-  console.log(`Bundled @sriinnu/harmon v${pkg.version} (CLI + daemon)`);
+  // 4. Ship the web player: copy harmon-web's build into dist/web so the
+  //    bundled daemon can serve it at /app (see harmond/src/web-app.ts).
+  const webDist = path.resolve(pkgRoot, '../harmon-web/dist');
+  if (existsSync(path.join(webDist, 'index.html'))) {
+    cpSync(webDist, path.join(pkgRoot, 'dist/web'), { recursive: true });
+    console.log('Copied web player into dist/web');
+  } else {
+    console.warn('harmon-web dist not found — package will ship without /app UI');
+  }
+
+  console.log(`Bundled @sriinnu/harmon v${pkg.version} (CLI + daemon + web)`);
 }
 
 bundle().catch((err: unknown) => {

@@ -1,17 +1,36 @@
 name: Release
 
+# Publishing flow:
+#   1. Bump versions, commit, push to main
+#   2. Create a GitHub Release with a v* tag (e.g. v0.4.0)
+#   3. This workflow publishes npm (with provenance), pushes the Docker
+#      image, and attaches a Harmon.app zip to the release.
+#
+# Required secrets:
+#   NPM_TOKEN            — npm automation token (publish @sriinnu/harmon)
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN — Docker Hub push
+# Optional (macOS signing — without them the app ships ad-hoc signed, which
+# needs a right-click-Open or `xattr -dr com.apple.quarantine` on install):
+#   MACOS_CERT_P12       — base64-encoded Developer ID Application .p12
+#   MACOS_CERT_PASSWORD  — password for the .p12
+#   CODESIGN_IDENTITY    — "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD — notarytool credentials
+
 on:
   release:
     types: [published]
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
   id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   publish-npm:
-    name: Publish to npm
+    name: Publish to npm (with provenance)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -28,12 +47,54 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
       - run: pnpm exec vitest run
       - run: pnpm build
       - run: pnpm verify:pack
-      - run: pnpm --filter @sriinnu/harmon --filter @sriinnu/harmond publish --no-git-checks
+      # Only @sriinnu/harmon is public; it bundles the daemon, CLI, MCP
+      # server, and the web player (dist/web).
+      - run: pnpm --filter @sriinnu/harmon publish --no-git-checks --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-app:
+    name: Build & attach Harmon.app
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import Developer ID certificate
+        if: ${{ secrets.MACOS_CERT_P12 != '' }}
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN=build.keychain
+          security create-keychain -p ci-temp "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p ci-temp "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN"
+          echo "$MACOS_CERT_P12" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci-temp "$KEYCHAIN"
+          rm /tmp/cert.p12
+
+      - name: Build (and notarize when credentials exist)
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash apps/harmon-menubar/scripts/build-app.sh
+
+      - name: Zip
+        run: ditto -c -k --keepParent "apps/harmon-menubar/dist/Harmon.app" Harmon.app.zip
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" Harmon.app.zip --clobber
 
   publish-docker:
     name: Publish Docker image

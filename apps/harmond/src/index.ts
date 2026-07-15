@@ -99,6 +99,7 @@ import { registerYouTubeRoutes } from './routes/youtube.js';
 import { registerSmartRoutes } from './routes/smart.js';
 import { registerRecognizeRoutes } from './routes/recognize.js';
 import { registerPlayerRoutes } from './routes/player.js';
+import { resolveWebAppDist } from './web-app.js';
 
 // -- Shared types ------------------------------------------------------------
 import type { DaemonContext, ProviderStatusDetails } from './daemon-context.js';
@@ -497,6 +498,15 @@ export class Harmond implements DaemonContext {
 
     // Player pages — no auth required (browser-facing UI)
     registerPlayerRoutes(this.app, this);
+
+    // Web player app — the daemon serves its own UI at /app, so no separate
+    // static server is needed. Static assets only; API calls still hit the
+    // bearer-gated /v1 surface.
+    const webDist = resolveWebAppDist();
+    if (webDist) {
+      this.app.use('/app', express.static(webDist));
+      this.logger.info({ webDist }, 'Web player available at /app');
+    }
 
     // Auth middleware for all /v1 routes
     this.app.use('/v1', createAuthMiddleware(this.apiToken, this.appleRemoteToken));
