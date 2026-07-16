@@ -45,7 +45,7 @@ export interface HarmonDaemonAppClient {
   nextTrack(provider: MusicProviderName): Promise<{ success: boolean }>;
   previousTrack(provider: MusicProviderName): Promise<{ success: boolean }>;
   setVolume(volumePercent: number): Promise<{ success: boolean }>;
-  seek(positionMs: number): Promise<{ success: boolean }>;
+  seek(positionMs: number, provider?: 'spotify' | 'apple'): Promise<{ success: boolean }>;
   setShuffle(state: boolean): Promise<{ success: boolean }>;
   setRepeat(state: 'off' | 'track' | 'context'): Promise<{ success: boolean }>;
   addToQueue(provider: 'spotify' | 'youtube', uri: string): Promise<{ success: boolean }>;
@@ -304,8 +304,11 @@ export function createDaemonAppClient(config: DaemonClientConfig = {}): HarmonDa
     async setVolume(volumePercent) {
       return requestJson('/v1/spotify/volume', { body: { volumePercent }, method: 'POST' });
     },
-    async seek(positionMs) {
-      return requestJson('/v1/spotify/seek', { body: { positionMs }, method: 'POST' });
+    async seek(positionMs, provider = 'spotify') {
+      // YouTube's browser handoff has no seek surface; Apple seeks via the
+      // remote bridge (browser/iOS player must be connected).
+      const path = provider === 'apple' ? '/v1/apple/seek' : '/v1/spotify/seek';
+      return requestJson(path, { body: { positionMs }, method: 'POST' });
     },
     async setShuffle(state) {
       return requestJson('/v1/spotify/shuffle', { body: { state }, method: 'POST' });

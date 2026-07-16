@@ -80,6 +80,14 @@ Typing `-w '<secret>'` puts the secret in your shell history. Either prefix the 
 history -d $((HISTCMD-1))
 ```
 
+## Encryption at rest
+
+`HARMON_ENCRYPTION_SECRET` (32+ chars; `openssl rand -base64 32`) encrypts every stored provider credential with **AES-256-GCM** (scrypt key derivation, `@sriinnu/harmon-crypto`): Spotify/YouTube OAuth tokens and Apple tokens in the SQLite `settings` table, plus the per-provider auth files under `~/.chitragupta/harmon/provider-packs/`. Journal, session, and event rows are local unencrypted SQLite data.
+
+**Production enforces it.** With `NODE_ENV=production`, daemon construction throws `HARMON_ENCRYPTION_SECRET is required in production.` before accepting any traffic (the same validator requires `HARMON_API_TOKEN` in production or on non-loopback binds, and rejects `HARMON_CORS_ORIGINS=*`). In development the daemon starts but prints an unmissable plaintext-storage warning. Log lines to confirm: `Credential encryption enabled` vs `Credential encryption disabled — development only`.
+
+Ciphertext format (v2): `keyFingerprint:salt:iv:authTag:encrypted`, all hex — the fingerprint detects key mismatches on decrypt; legacy v1 (`salt:iv:authTag:encrypted`) still decrypts. If the secret's *value* changes, existing credentials no longer decrypt: the daemon reports a clear key-mismatch error and you re-authenticate each provider. Legacy plaintext provider-pack files keep loading and are transparently re-encrypted on the next write.
+
 ## The safety nets underneath
 
 Even if a secret does end up in `.env`, the file is gitignored and a pre-commit secret scanner guards the repo. The daemon warns loudly at startup when `HARMON_API_TOKEN` or `HARMON_ENCRYPTION_SECRET` is missing entirely, refuses non-loopback binds without a token, and the logger redacts token-shaped fields. Defense in depth — the Keychain is the top layer, not the only one.

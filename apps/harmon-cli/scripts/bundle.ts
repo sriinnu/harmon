@@ -122,17 +122,45 @@ async function bundle() {
     },
   });
 
-  // 4. Ship the web player: copy harmon-web's build into dist/web so the
+  // 4. Bundle the MCP server binary (bin/harmon-mcp.js → dist/bin/harmon-mcp.js)
+  await build({
+    entryPoints: ['bin/harmon-mcp.js'],
+    outfile: 'dist/bin/harmon-mcp.js',
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'esm',
+    external: [
+      '@libsql/client',
+      '@libsql/*',
+      'libsql',
+    ],
+    plugins: [cliPlugin],
+    sourcemap: false,
+    banner: {
+      js: [
+        '#!/usr/bin/env node',
+        'import { createRequire } from "node:module";',
+        'const require = createRequire(import.meta.url);',
+      ].join('\n'),
+    },
+  });
+
+  // 5. Ship the web player: copy harmon-web's build into dist/web so the
   //    bundled daemon can serve it at /app (see harmond/src/web-app.ts).
   const webDist = path.resolve(pkgRoot, '../harmon-web/dist');
   if (existsSync(path.join(webDist, 'index.html'))) {
     cpSync(webDist, path.join(pkgRoot, 'dist/web'), { recursive: true });
     console.log('Copied web player into dist/web');
+  } else if (process.env.CI) {
+    // A release build silently missing the advertised /app UI is worse than
+    // a failed build.
+    throw new Error('harmon-web dist not found — refusing to bundle without the /app UI in CI');
   } else {
     console.warn('harmon-web dist not found — package will ship without /app UI');
   }
 
-  console.log(`Bundled @sriinnu/harmon v${pkg.version} (CLI + daemon + web)`);
+  console.log(`Bundled @sriinnu/harmon v${pkg.version} (CLI + daemon + MCP + web)`);
 }
 
 bundle().catch((err: unknown) => {

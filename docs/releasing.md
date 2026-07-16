@@ -9,7 +9,7 @@ and CI does the rest.
 | --- | --- | --- |
 | `@sriinnu/harmon` (CLI + daemon + MCP server + web UI) | npm, with provenance | `publish-npm` |
 | `Harmon.app` (menubar app, signed + notarized when secrets exist) | GitHub Release asset | `publish-app` |
-| `sriinnu/harmond` image | Docker Hub | `publish-docker` |
+| `sriinnu/harmond` image (headless — no `/app` UI baked in yet) | Docker Hub | `publish-docker` |
 | Homebrew cask | `sriinnu/homebrew-harmon` tap (manual bump from `packaging/homebrew/harmon.rb`) | — |
 
 ## Cutting a release

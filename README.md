@@ -207,7 +207,7 @@ Conventions: tests live next to sources (`*.test.ts`), provider HTTP is mocked a
 - Credentials: AES-256-GCM envelope (fresh salt+IV per record) in SQLite and in the auth-CLI files under `~/.chitragupta/…` when `HARMON_ENCRYPTION_SECRET` is set; files are `0600`.
 - Timing-safe token comparison; single-use CSRF-validated OAuth state; parameterized SQL throughout; AppleScript/URL targets allowlisted per provider.
 - Logger redacts token-shaped fields as a safety net.
-- Details and hardening notes: `ENCRYPTION_ENFORCEMENT.md`, `ENCRYPTION_QUICK_START.md`.
+- Details and hardening notes: [docs/secrets.md](docs/secrets.md).
 
 ## Troubleshooting
 

@@ -10,13 +10,15 @@ tags:
   - terminal
   - client
 provider: harmon
-version: 0.3.0
+version: 0.4.0
 ---
 
 # Harmon CLI
 
 ## What this does
 harmon-cli is a stateless HTTP client library that maps harmond endpoints to typed async methods, plus the `harmon` binary that wraps it with argument parsing. It handles request timeouts (AbortController), Bearer auth headers, and JSON serialization.
+
+The published npm package (`@sriinnu/harmon`) also ships the daemon (`harmond`, which serves the web player UI at `http://127.0.0.1:17373/app`) and the MCP server (`harmon-mcp`) — see `apps/harmond/SKILL.md` for the HTTP contract and `packages/harmon-flow/SKILL.md` for the MCP tool table.
 
 ## Key exports
 - `createCLI({ endpoint, token?, timeoutMs? })` — returns the client

@@ -36,6 +36,9 @@
     "./graph": {
       "types": "./dist/graph/index.d.ts",
       "import": "./dist/graph/index.js"
+    },
+    "./mcp-cli": {
+      "import": "./dist/mcp/cli.js"
     }
   },
   "scripts": {

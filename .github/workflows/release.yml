@@ -61,11 +61,14 @@ jobs:
     name: Build & attach Harmon.app
     runs-on: macos-latest
     timeout-minutes: 30
+    # secrets context is not allowed in step-level `if:` — evaluate it here.
+    env:
+      HAS_SIGNING_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Import Developer ID certificate
-        if: ${{ secrets.MACOS_CERT_P12 != '' }}
+        if: env.HAS_SIGNING_CERT == 'true'
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -114,7 +117,7 @@ jobs:
 
       - name: Extract version from release tag
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
