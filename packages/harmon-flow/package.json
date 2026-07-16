@@ -53,7 +53,7 @@
     "test:run": "vitest --root ../.. run packages/harmon-flow/src"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.2",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@sriinnu/harmon-protocol": "workspace:*",
     "gray-matter": "^4.0.3",
     "d3-dag": "^1.1.0",
