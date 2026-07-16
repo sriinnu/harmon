@@ -12,12 +12,14 @@ tags:
   - api
   - sse
 provider: harmon
-version: 0.2.1
+version: 0.4.0
 ---
 
 # Harmond — HTTP API reference
 
-Base URL: `http://127.0.0.1:17373`. All `/v1` routes require `Authorization: Bearer $HARMON_API_TOKEN` when the token is set (it always is in production). `/health` and `/player/*` pages are unauthenticated. `/v1/events` additionally accepts `?token=` (EventSource cannot send headers). `/v1/apple/remote/*` accepts the `APPLE_MUSIC_REMOTE_TOKEN` OR the main API token. The Spotify OAuth callback is exempt from auth.
+Base URL: `http://127.0.0.1:17373`. All `/v1` routes require `Authorization: Bearer $HARMON_API_TOKEN` when the token is set (it always is in production). `/health`, `/player/*` pages, and the `/app` web player UI are unauthenticated static surfaces. `/v1/events` additionally accepts `?token=` (EventSource cannot send headers). `/v1/apple/remote/*` accepts the `APPLE_MUSIC_REMOTE_TOKEN` OR the main API token. The Spotify OAuth callback is exempt from auth.
+
+Playback arbitration: any successful play (`/v1/{provider}/play` or `/v1/smart/play`) first issues a best-effort pause to every other provider — one song plays at a time, latest request wins. Now-playing responses include `positionMs` (playback position) when the source reports it, alongside `durationMs`.
 
 ## Core
 
@@ -104,7 +106,9 @@ Also: `GET /v1/devices` (Spotify devices), `POST /v1/device/use` `{deviceId}`, `
 | `GET /now-playing` | — | active Apple runtime |
 | `POST /play` | `{url}` | **URL required for targeted playback** — no query-based play |
 | `POST /pause` / `/next` / `/prev` | `{}` | |
-| `/remote/*` (status, connect, commands, ack, state) | | iOS companion bridge; accepts remote token or API token |
+| `POST /seek` | `{positionMs}` | needs a connected remote player (browser tab or iOS companion); 501 when none connected, 503 when Apple is unconfigured |
+| `GET /developer-token` | — | MusicKit developer JWT for the in-browser Apple player |
+| `/remote/*` (status, connect, commands, ack, state) | | device bridge for the iOS companion AND the web MusicKit player; command types: `play` `pause` `next` `previous` `seek` (with `positionMs`); accepts remote token or API token; exempt from rate limiting |
 
 ```
 → POST /v1/apple/play  {"url":"https://music.apple.com/us/album/weightless/1440843092?i=1440843097"}

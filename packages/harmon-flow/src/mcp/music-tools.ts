@@ -383,14 +383,15 @@ export function getMusicToolSpecs(): MusicToolSpec[] {
         readOnlyHint: false,
         title: 'Seek',
       },
-      description: 'Seek to a position (milliseconds) in the current Spotify track. Spotify only.',
+      description: 'Seek to a position (milliseconds) in the current track. Spotify, or Apple when a remote player (browser tab / iOS companion) is connected. YouTube cannot seek.',
       handler: async (args, daemon) => {
-        const { positionMs } = args as { positionMs: number };
-        return jsonResult(await daemon.seek(positionMs));
+        const { positionMs, provider } = args as { positionMs: number; provider?: 'spotify' | 'apple' };
+        return jsonResult(await daemon.seek(positionMs, provider));
       },
       name: 'seek',
       schema: z.object({
         positionMs: z.number().int().min(0),
+        provider: z.enum(['spotify', 'apple']).optional().describe('Defaults to spotify'),
       }),
       write: true,
     },

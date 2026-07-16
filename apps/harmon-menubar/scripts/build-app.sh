@@ -12,6 +12,8 @@ APP_NAME="Harmon"
 DIST_DIR="$PACKAGE_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 VERSION="$(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo 0.1.0)"
+# CFBundleShortVersionString wants dotted numerics — strip the tag's v prefix.
+VERSION="${VERSION#v}"
 
 echo "▸ Building release binary…"
 swift build --package-path "$PACKAGE_DIR" -c release > /dev/null

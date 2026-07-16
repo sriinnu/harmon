@@ -15,7 +15,7 @@ tags:
   - youtube-music
   - journal
 provider: harmon
-version: 0.2.0
+version: 0.4.0
 ---
 
 # Harmon Flow — the MCP surface for LLMs
@@ -72,7 +72,7 @@ Write tools (playback, sessions, auth, recognition):
 | `previous_track` | `provider` | Skip back. |
 | `add_to_queue` | `provider` (spotify\|youtube), `uri` | Queue a track without interrupting the current one. |
 | `set_volume` | `volumePercent` (0-100) | Spotify only. |
-| `seek` | `positionMs` | Seek within the current Spotify track. Spotify only. |
+| `seek` | `positionMs`, `provider?` | Seek within the current track. Spotify (default) or Apple (needs a connected remote player — browser tab or iOS companion). YouTube cannot seek. |
 | `set_shuffle` | `state` (boolean) | Spotify only. |
 | `set_repeat` | `state` (off\|track\|context) | Spotify only. `context` repeats the album/playlist. |
 | `use_device` | `deviceId` (from `list_devices`) | Transfer Spotify playback to a device — fixes "no active device". |

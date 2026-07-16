@@ -10,7 +10,6 @@ apps/harmon-web
 apps/harmon-cli
 apps/harmon-companion
 tools
-brand
 docs
 *.md
 !README.md

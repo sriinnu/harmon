@@ -221,4 +221,4 @@ harmon --json <cmd>                       # structured output for scripts
 - Full HTTP API: [apps/harmond/SKILL.md](../apps/harmond/SKILL.md)
 - MCP tool schemas: [packages/harmon-flow/SKILL.md](../packages/harmon-flow/SKILL.md)
 - Session policy schema: [packages/harmon-protocol/SKILL.md](../packages/harmon-protocol/SKILL.md)
-- Encryption details: [ENCRYPTION_QUICK_START.md](../ENCRYPTION_QUICK_START.md)
+- Encryption details: [docs/secrets.md](secrets.md) ("Encryption at rest")
