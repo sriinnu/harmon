@@ -57,7 +57,7 @@
     "supertest": "^7.2.2",
     "turbo": "^2.9.14",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.0"
   },
   "packageManager": "pnpm@10.28.1",
   "pnpm": {
