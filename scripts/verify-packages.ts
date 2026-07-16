@@ -234,21 +234,16 @@ function assertNoCompiledTestArtifacts(tarballFiles: Set<string>, packageDir: st
  * workspace after the namespace migration.
  */
 function assertNoLegacyBranding(): void {
+  // git grep instead of rg: available everywhere (incl. CI runners) and
+  // scoped to tracked files, which excludes node_modules/dist/coverage.
   try {
-    const output = execFileSync('rg', [
-      '-n',
+    const output = execFileSync('git', [
+      'grep',
+      '-nE',
       '@athena/|athena/harmon',
-      '--glob',
-      '!node_modules/**',
-      '--glob',
-      '!dist/**',
-      '--glob',
-      '!coverage/**',
-      '--glob',
-      '!pnpm-lock.yaml',
-      '--glob',
-      '!scripts/verify-packages.ts',
-      '.',
+      '--',
+      ':!pnpm-lock.yaml',
+      ':!scripts/verify-packages.ts',
     ], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
@@ -260,6 +255,7 @@ function assertNoLegacyBranding(): void {
     }
     return;
   } catch (error) {
+    // git grep exits 1 when nothing matches — that is the success case.
     const exitCode = (error as NodeJS.ErrnoException & { status?: number }).status;
     if (exitCode === 1) {
       return;
