@@ -152,7 +152,7 @@ Complete reference with request/response examples lives in [apps/harmond/SKILL.m
 | Auth | `POST /v1/auth/spotify/login`, `/v1/auth/youtube/login`, `/v1/auth/apple/set-user-token`, logouts |
 | Recognition | `POST /v1/recognize` (base64 WAV ≤ 2 MB raw; needs `AUDD_API_TOKEN`) |
 
-All `/v1` routes require `Authorization: Bearer $HARMON_API_TOKEN` when the token is set (OAuth callbacks exempt). Errors are uniformly `{"success": false, "error": "...", "code": "..."}`. Rate limits: 120/min global, 30/min commands, 5/15min auth.
+All `/v1` routes require `Authorization: Bearer $HARMON_API_TOKEN` when the token is set (OAuth callbacks exempt). Errors are uniformly `{"success": false, "error": "...", "code": "..."}`. Rate limits: 300/min global (`/health`, `/v1/events`, and the `/v1/apple/remote/*` device bridge are exempt), 30/min commands, 10/15min auth (login/logout/callback paths exempt).
 
 Session policies are the heart of the engine — the full schema is in [packages/harmon-protocol/SKILL.md](packages/harmon-protocol/SKILL.md). Short version:
 
