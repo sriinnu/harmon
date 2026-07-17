@@ -21,11 +21,12 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: publish access on @sriinnu/harmon
+      - name: publish access on @sriinnu/harmon (hard assertion)
         run: |
-          npm access list packages 2>/dev/null | grep -i harmon || true
-          STATUS=$(npm access get status @sriinnu/harmon 2>&1 || true)
-          echo "$STATUS"
-          echo "Token can see the package; read-write listing above is the publish-rights answer."
+          npm access list packages
+          # Granular tokens list their grants: read-write = can publish.
+          # This grep FAILS the run when the token lacks publish rights.
+          npm access list packages 2>/dev/null | grep -qE '@sriinnu/harmon:\s*read-write'
+          echo "Token has read-write on @sriinnu/harmon — releases will publish."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

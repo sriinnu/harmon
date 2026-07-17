@@ -8,21 +8,19 @@ name: Release
 #
 # Required secrets:
 #   NPM_TOKEN            — npm automation token (publish @sriinnu/harmon)
+# Optional (each channel skips cleanly when its secrets are absent):
 #   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN — Docker Hub push
-# Optional (macOS signing — without them the app ships ad-hoc signed, which
-# needs a right-click-Open or `xattr -dr com.apple.quarantine` on install):
-#   MACOS_CERT_P12       — base64-encoded Developer ID Application .p12
-#   MACOS_CERT_PASSWORD  — password for the .p12
-#   CODESIGN_IDENTITY    — "Developer ID Application: Name (TEAMID)"
-#   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD — notarytool credentials
+#   CODESIGN_IDENTITY + MACOS_CERT_P12 + MACOS_CERT_PASSWORD — app signing
+#   Notarization (preferred): ASC_API_KEY_P8 + ASC_KEY_ID + ASC_ISSUER_ID
+#   Notarization (fallback): APPLE_ID + APPLE_TEAM_ID + APPLE_APP_PASSWORD
+# Without signing secrets the app ships ad-hoc signed (right-click-Open).
 
 on:
   release:
     types: [published]
 
-permissions:
-  contents: write
-  id-token: write
+# Per-job permissions below; nothing workflow-wide.
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -33,6 +31,9 @@ jobs:
     name: Publish to npm (with provenance)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write   # npm provenance (Sigstore OIDC)
     steps:
       - uses: actions/checkout@v4
 
@@ -53,8 +54,11 @@ jobs:
       - run: pnpm verify:pack
       # Fail fast with a readable auth diagnosis — npm reports scoped-package
       # permission problems as 404 on publish, which hides the real cause.
+      # whoami hard-fails the job on a dead token; the access probe is advisory.
       - name: Verify npm auth
-        run: npm whoami && npm access get status @sriinnu/harmon || echo "::warning::npm token authenticated but may lack publish access to @sriinnu/harmon"
+        run: |
+          npm whoami
+          npm access list packages 2>/dev/null | grep -i harmon || echo "::warning::token authenticated but publish access to @sriinnu/harmon not confirmed"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       # Only @sriinnu/harmon is public; it bundles the daemon, CLI, MCP
@@ -67,6 +71,8 @@ jobs:
     name: Build & attach Harmon.app
     runs-on: macos-latest
     timeout-minutes: 30
+    permissions:
+      contents: write   # gh release upload
     # secrets context is not allowed in step-level `if:` — evaluate it here.
     env:
       HAS_SIGNING_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
@@ -79,6 +85,7 @@ jobs:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: |
+          trap 'rm -f /tmp/cert.p12' EXIT
           KEYCHAIN=build.keychain
           security create-keychain -p ci-temp "$KEYCHAIN"
           security default-keychain -s "$KEYCHAIN"
@@ -114,6 +121,8 @@ jobs:
     name: Publish Docker image
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     # Skip cleanly when Docker Hub credentials aren't configured — a red
     # release run for an optional channel helps nobody. (secrets context is
     # not allowed in job-level if, so gate each step via job env.)

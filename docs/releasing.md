@@ -14,8 +14,12 @@ and CI does the rest.
 
 ## Cutting a release
 
-1. Bump versions: root `package.json` and `apps/harmon-cli/package.json`
-   (the only public package). Keep them in lockstep.
+1. Bump versions in lockstep: root `package.json`,
+   `apps/harmon-cli/package.json` (the only public package), the
+   `version:` frontmatter in `apps/harmon-cli/SKILL.md` /
+   `apps/harmond/SKILL.md` / `packages/harmon-flow/SKILL.md` (SKILL.md
+   ships inside the npm tarball), and `version` in
+   `packaging/homebrew/harmon.rb` (the tap template).
 2. Commit, PR, merge to `main`.
 3. `gh release create v0.4.0 --generate-notes` (tag must match the version).
 4. Watch the `Release` workflow. When it finishes:

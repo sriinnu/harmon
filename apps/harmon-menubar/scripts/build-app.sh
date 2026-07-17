@@ -84,6 +84,8 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
     if [ -z "$KEY_FILE" ] && [ -n "${ASC_API_KEY_P8:-}" ]; then
       KEY_FILE="$(mktemp -d)/AuthKey_${ASC_KEY_ID}.p8"
       printf '%s' "$ASC_API_KEY_P8" > "$KEY_FILE"
+      # Key material must not outlive the build when passed by contents.
+      trap 'rm -f "'"$KEY_FILE"'"' EXIT
     fi
     if [ -n "$KEY_FILE" ]; then
       NOTARY_ARGS=(--key "$KEY_FILE" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
