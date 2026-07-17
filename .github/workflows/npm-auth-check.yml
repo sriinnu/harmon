@@ -39,11 +39,14 @@ jobs:
 
       - name: canary publish + unpublish (authorization)
         run: |
-          CANARY="0.0.0-authcheck.${GITHUB_RUN_ID}"
-          cd apps/harmon-cli
-          npm version "$CANARY" --no-git-tag-version
-          pnpm publish --no-git-checks --access public --tag authcheck --ignore-scripts
+          export CANARY="0.0.0-authcheck.${GITHUB_RUN_ID}"
+          # npm version chokes on pnpm's workspace:* protocol — write directly.
+          node -e "const fs=require('fs');const f='apps/harmon-cli/package.json';const p=JSON.parse(fs.readFileSync(f,'utf8'));p.version=process.env.CANARY;fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+          pnpm --filter @sriinnu/harmon publish --no-git-checks --access public --tag authcheck --ignore-scripts
           echo "Publish rights CONFIRMED (published $CANARY)"
+          # npm cleanup commands run outside the workspace so npm never
+          # parses workspace:* manifests.
+          cd "$RUNNER_TEMP"
           npm unpublish "@sriinnu/harmon@$CANARY" --force
           npm dist-tag rm @sriinnu/harmon authcheck || true
           echo "Canary cleaned up — registry back to pristine"
