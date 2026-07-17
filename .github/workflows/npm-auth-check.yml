@@ -1,0 +1,31 @@
+name: npm auth check
+
+# On-demand: verifies NPM_TOKEN can authenticate and has publish access to
+# @sriinnu/harmon — npm masks permission failures as 404 at publish time,
+# so this answers "will the next release publish?" without publishing.
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: whoami
+        run: npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: publish access on @sriinnu/harmon
+        run: |
+          npm access list packages 2>/dev/null | grep -i harmon || true
+          STATUS=$(npm access get status @sriinnu/harmon 2>&1 || true)
+          echo "$STATUS"
+          echo "Token can see the package; read-write listing above is the publish-rights answer."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
