@@ -73,19 +73,35 @@ fi
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
   echo "▸ Signing ($CODESIGN_IDENTITY)…"
   codesign --force --deep --options runtime --timestamp -s "$CODESIGN_IDENTITY" "$APP_BUNDLE"
-  if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
+
+  # Notarization auth, preferred route first:
+  #   1. App Store Connect API key — ASC_KEY_ID + ASC_ISSUER_ID + the key as
+  #      either ASC_API_KEY_PATH (file) or ASC_API_KEY_P8 (contents, CI secret)
+  #   2. Apple ID + app-specific password (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_PASSWORD)
+  NOTARY_ARGS=()
+  if [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER_ID:-}" ]; then
+    KEY_FILE="${ASC_API_KEY_PATH:-}"
+    if [ -z "$KEY_FILE" ] && [ -n "${ASC_API_KEY_P8:-}" ]; then
+      KEY_FILE="$(mktemp -d)/AuthKey_${ASC_KEY_ID}.p8"
+      printf '%s' "$ASC_API_KEY_P8" > "$KEY_FILE"
+    fi
+    if [ -n "$KEY_FILE" ]; then
+      NOTARY_ARGS=(--key "$KEY_FILE" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
+    fi
+  fi
+  if [ ${#NOTARY_ARGS[@]} -eq 0 ] && [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
+    NOTARY_ARGS=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD")
+  fi
+
+  if [ ${#NOTARY_ARGS[@]} -gt 0 ]; then
     echo "▸ Notarizing (this takes a few minutes)…"
     NOTARIZE_ZIP="$(mktemp -d)/Harmon.zip"
     ditto -c -k --keepParent "$APP_BUNDLE" "$NOTARIZE_ZIP"
-    xcrun notarytool submit "$NOTARIZE_ZIP" \
-      --apple-id "$APPLE_ID" \
-      --team-id "$APPLE_TEAM_ID" \
-      --password "$APPLE_APP_PASSWORD" \
-      --wait
+    xcrun notarytool submit "$NOTARIZE_ZIP" "${NOTARY_ARGS[@]}" --wait
     xcrun stapler staple "$APP_BUNDLE"
     echo "▸ Notarized and stapled"
   else
-    echo "▸ Notarization skipped (set APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD)"
+    echo "▸ Notarization skipped (set ASC_KEY_ID/ASC_ISSUER_ID + key, or APPLE_ID/APPLE_TEAM_ID/APPLE_APP_PASSWORD)"
   fi
 else
   echo "▸ Signing (ad-hoc)…"

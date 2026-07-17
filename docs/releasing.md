@@ -35,9 +35,12 @@ and CI does the rest.
   - `MACOS_CERT_P12` — the Developer ID certificate exported as .p12,
     base64-encoded (`base64 -i cert.p12 | pbcopy`)
   - `MACOS_CERT_PASSWORD` — password chosen at export
-  - `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_PASSWORD` — notarytool
-    credentials (`APPLE_APP_PASSWORD` is an app-specific password from
-    appleid.apple.com)
+  - Notarization, preferred route — App Store Connect API key (create at
+    appstoreconnect.apple.com → Users and Access → Integrations →
+    App Store Connect API, role Developer):
+    `ASC_API_KEY_P8` (the .p8 contents), `ASC_KEY_ID`, `ASC_ISSUER_ID`
+  - Notarization fallback: `APPLE_ID` / `APPLE_TEAM_ID` /
+    `APPLE_APP_PASSWORD` (app-specific password from account.apple.com)
 
 Creating the Developer ID certificate (once): Xcode → Settings → Accounts →
 Manage Certificates → + → Developer ID Application, then export it from
