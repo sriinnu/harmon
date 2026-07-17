@@ -1,32 +1,51 @@
 name: npm auth check
 
-# On-demand: verifies NPM_TOKEN can authenticate and has publish access to
-# @sriinnu/harmon — npm masks permission failures as 404 at publish time,
-# so this answers "will the next release publish?" without publishing.
+# On-demand proof that NPM_TOKEN can publish @sriinnu/harmon.
+#
+# Read APIs cannot prove write rights: granular tokens 403 on the org
+# listing endpoint regardless of their package grants, and npm masks
+# permission failures as 404 only at publish time. The only honest probe is
+# a real publish — so this publishes a canary version under a throwaway
+# dist-tag and immediately unpublishes it.
 on:
   workflow_dispatch:
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          cache: pnpm
 
-      - name: whoami
+      - name: whoami (authentication)
         run: npm whoami
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: publish access on @sriinnu/harmon (hard assertion)
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: canary publish + unpublish (authorization)
         run: |
-          npm access list packages
-          # Granular tokens list their grants: read-write = can publish.
-          # This grep FAILS the run when the token lacks publish rights.
-          npm access list packages 2>/dev/null | grep -qE '@sriinnu/harmon:\s*read-write'
-          echo "Token has read-write on @sriinnu/harmon — releases will publish."
+          CANARY="0.0.0-authcheck.${GITHUB_RUN_ID}"
+          cd apps/harmon-cli
+          npm version "$CANARY" --no-git-tag-version
+          pnpm publish --no-git-checks --access public --tag authcheck --ignore-scripts
+          echo "Publish rights CONFIRMED (published $CANARY)"
+          npm unpublish "@sriinnu/harmon@$CANARY" --force
+          npm dist-tag rm @sriinnu/harmon authcheck || true
+          echo "Canary cleaned up — registry back to pristine"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
