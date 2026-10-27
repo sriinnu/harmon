@@ -198,7 +198,7 @@ importers:
     dependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.0
-        version: 1.32.0(zod@4.3.5)
+        version: 1.32.0(zod@4.6.6)
       '@sriinnu/harmon-protocol':
         specifier: workspace:*
         version: link:../harmon-protocol
@@ -215,8 +215,8 @@ importers:
         specifier: '>=13.0.1 <14'
         version: 13.0.2
       zod:
-        specifier: ^4.3.5
-        version: 4.3.5
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@types/node':
         specifier: ^25.0.8
@@ -247,8 +247,8 @@ importers:
   packages/harmon-protocol:
     dependencies:
       zod:
-        specifier: ^4.3.5
-        version: 4.3.5
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       typescript:
         specifier: ^5.9.3
@@ -1947,8 +1947,8 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
-  zod@4.3.5:
-    resolution: {integrity: sha512-k7Nwx6vuWx1IJ9Bjuf4Zt1PEllcwe7cls3VNzm4CQ1/hgtFUK2bRNG3rvnpPUhFjmqJKAKtjV576KnUkHocg/g==}
+  zod@4.6.6:
+    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
 
 snapshots:
 
@@ -2136,7 +2136,7 @@ snapshots:
   '@libsql/win32-x64-msvc@0.5.22':
     optional: true
 
-  '@modelcontextprotocol/sdk@1.32.0(zod@4.3.5)':
+  '@modelcontextprotocol/sdk@1.32.0(zod@4.6.6)':
     dependencies:
       '@hono/node-server': 1.19.17(hono@4.13.14)
       ajv: 8.20.0
@@ -2153,8 +2153,8 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.3.5
-      zod-to-json-schema: 3.25.2(zod@4.3.5)
+      zod: 4.6.6
+      zod-to-json-schema: 3.25.2(zod@4.6.6)
     transitivePeerDependencies:
       - supports-color
 
@@ -3465,8 +3465,8 @@ snapshots:
 
   ws@8.21.1: {}
 
-  zod-to-json-schema@3.25.2(zod@4.3.5):
+  zod-to-json-schema@3.25.2(zod@4.6.6):
     dependencies:
-      zod: 4.3.5
+      zod: 4.6.6
 
-  zod@4.3.5: {}
+  zod@4.6.6: {}
