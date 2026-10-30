@@ -7,7 +7,7 @@ and CI does the rest.
 
 | Artifact | Channel | Workflow job |
 | --- | --- | --- |
-| `@sriinnu/harmon` (CLI + daemon + MCP server + web UI) | npm, with provenance | `publish-npm` |
+| `@sriinnu/harmon` (CLI + daemon + MCP server + web UI) | npm, staged with provenance; live after maintainer 2FA approval | `publish-npm` |
 | `Harmon.app` (menubar app, signed + notarized when secrets exist) | GitHub Release asset | `publish-app` |
 | `sriinnu/harmond` image (headless — no `/app` UI baked in yet) | Docker Hub | `publish-docker` |
 | Homebrew cask | `sriinnu/homebrew-harmon` tap (manual bump from `packaging/homebrew/harmon.rb`) | — |
@@ -23,6 +23,8 @@ and CI does the rest.
 2. Commit, PR, merge to `main`.
 3. `gh release create v0.4.0 --generate-notes` (tag must match the version).
 4. Watch the `Release` workflow. When it finishes:
+   - approve the staged npm version with your 2FA key:
+     `npm stage list @sriinnu/harmon`, then `npm stage approve <id>`
    - `npm view @sriinnu/harmon version` shows the new version
    - the release page has `Harmon.app.zip`
 5. Homebrew: update `version` + `sha256` in the tap from
@@ -30,8 +32,10 @@ and CI does the rest.
 
 ## One-time setup (repo secrets)
 
-- `NPM_TOKEN` — npm automation token scoped to `@sriinnu/harmon`
-  (npmjs.com → Access Tokens → Granular, publish-only).
+- npm: no token. Trusted publishing, stage-only, set once with
+  `npm trust github @sriinnu/harmon --repo sriinnu/harmon --file release.yml
+  --env release --allow-stage-publish`. On the package's access page choose
+  "Require two-factor authentication and disallow tokens".
 - `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` — Docker Hub push.
 - macOS signing (optional; without these the app ships ad-hoc signed and
   users must right-click → Open on first launch):
